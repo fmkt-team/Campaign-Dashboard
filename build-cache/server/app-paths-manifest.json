@@ -1,0 +1,9 @@
+{
+  "/api/ga4-report/route": "app/api/ga4-report/route.js",
+  "/api/naver-keyword-trend/route": "app/api/naver-keyword-trend/route.js",
+  "/campaigns/[id]/timeline/page": "app/campaigns/[id]/timeline/page.js",
+  "/campaigns/[id]/awareness/page": "app/campaigns/[id]/awareness/page.js",
+  "/campaigns/[id]/interest/page": "app/campaigns/[id]/interest/page.js",
+  "/campaigns/[id]/conversion/page": "app/campaigns/[id]/conversion/page.js",
+  "/campaigns/[id]/sales/page": "app/campaigns/[id]/sales/page.js"
+}

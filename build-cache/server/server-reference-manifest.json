@@ -1,0 +1,14 @@
+{
+  "node": {
+    "1acd663259987e51b893b32461e015099358c715": {
+      "workers": {
+        "app/campaigns/[id]/awareness/page": "(action-browser)/./node_modules/next/dist/build/webpack/loaders/next-flight-action-entry-loader.js?actions=%5B%5B%22C%3A%5C%5CUsers%5C%5CJYP%5C%5CDocuments%5C%5CAI%20%EC%97%90%EC%9D%B4%EC%A0%84%ED%8A%B8%5C%5C%EC%BA%A0%ED%8E%98%EC%9D%B8%20%EC%9E%90%EB%8F%99%ED%99%94%5C%5Clib%5C%5Cgoogle-sheets.ts%22%2C%5B%22fetchSpreadsheetData%22%5D%5D%5D&encryptionKey=KN6hee1cLUoEn1V8pVFdm2K%2F8AoQ58DDO1I91smytrU%3D&__client_imported__=true!"
+      },
+      "layer": {
+        "app/campaigns/[id]/awareness/page": "action-browser"
+      }
+    }
+  },
+  "edge": {},
+  "encryptionKey": "KN6hee1cLUoEn1V8pVFdm2K/8AoQ58DDO1I91smytrU="
+}
