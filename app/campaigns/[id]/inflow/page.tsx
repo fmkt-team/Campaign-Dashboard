@@ -67,38 +67,38 @@ export default function InflowPage({ params }: { params: Promise<{ id: string }>
       <div>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h2 className="text-xl font-bold text-white">유입 통계 (GA 데이터 연동)</h2>
-            <p className="text-xs text-white/40 mt-1">
+            <h2 className="text-xl font-bold text-gray-900">유입 통계 (GA 데이터 연동)</h2>
+            <p className="text-xs text-gray-900/40 mt-1">
               특정 페이지나 캠페인의 요일/주차별 GA 데이터를 모니터링합니다.<br/>
-              빈 화면에서 <kbd className="bg-white/10 px-1.5 py-0.5 rounded text-white/80">Ctrl+V</kbd> 로 엑셀(주차명, 주시작일, 세션, 유저, 참여시간)을 붙여넣으세요.
+              빈 화면에서 <kbd className="bg-gray-100 px-1.5 py-0.5 rounded text-gray-900/80">Ctrl+V</kbd> 로 엑셀(주차명, 주시작일, 세션, 유저, 참여시간)을 붙여넣으세요.
             </p>
           </div>
         </div>
         
         <GlassCard className="p-0 overflow-hidden min-h-[150px]">
           {traffic.length === 0 ? (
-             <div className="flex items-center justify-center h-[150px] text-white/30 text-sm">
+             <div className="flex items-center justify-center h-[150px] text-gray-900/30 text-sm">
                구글 애널리틱스 리포트 시트를 복사한 뒤 이 화면에서 붙여넣기 기능으로 연동하세요.
              </div>
           ) : (
             <Table>
-              <TableHeader className="bg-white/5">
-                <TableRow className="border-white/10 hover:bg-transparent">
-                  <TableHead className="text-white/60">기간(Label)</TableHead>
-                  <TableHead className="text-white/60">측정 시작일</TableHead>
-                  <TableHead className="text-white/60 text-right">세션 수 (Sessions)</TableHead>
-                  <TableHead className="text-white/60 text-right">유저 수 (Users)</TableHead>
-                  <TableHead className="text-white/60 text-right">평균 참여 시간(초)</TableHead>
+              <TableHeader className="bg-gray-50">
+                <TableRow className="border-gray-100 hover:bg-transparent">
+                  <TableHead className="text-gray-900/60">기간(Label)</TableHead>
+                  <TableHead className="text-gray-900/60">측정 시작일</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">세션 수 (Sessions)</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">유저 수 (Users)</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">평균 참여 시간(초)</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {traffic.map(row => (
-                  <TableRow key={row._id} className="border-white/10 hover:bg-white/5 text-sm">
-                    <TableCell className="font-medium text-white">{row.weekLabel}</TableCell>
-                    <TableCell className="text-white/50">{row.weekStart}</TableCell>
-                    <TableCell className="text-right font-mono text-white/80">{row.sessions.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-white font-bold">{row.users.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-white/60">{row.avgEngagementSec}s</TableCell>
+                  <TableRow key={row._id} className="border-gray-100 hover:bg-gray-50 text-sm">
+                    <TableCell className="font-medium text-gray-900">{row.weekLabel}</TableCell>
+                    <TableCell className="text-gray-900/50">{row.weekStart}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900/80">{row.sessions.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900 font-bold">{row.users.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900/60">{row.avgEngagementSec}s</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -108,22 +108,22 @@ export default function InflowPage({ params }: { params: Promise<{ id: string }>
       </div>
 
       {pastedData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="bg-[#111] border border-white/20 rounded-2xl p-6 w-[600px] flex flex-col shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm">
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 w-[600px] flex flex-col shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-white font-bold">유입 데이터 감지됨 ({pastedData.length}건)</h3>
-              <button onClick={() => setPastedData(null)} className="text-white/40 hover:text-white"><X className="w-4 h-4" /></button>
+              <h3 className="text-gray-900 font-bold">유입 데이터 감지됨 ({pastedData.length}건)</h3>
+              <button onClick={() => setPastedData(null)} className="text-gray-900/40 hover:text-gray-900"><X className="w-4 h-4" /></button>
             </div>
-            <div className="overflow-y-auto max-h-[40vh] space-y-1 mb-6 border border-white/10 p-2 rounded-lg">
+            <div className="overflow-y-auto max-h-[40vh] space-y-1 mb-6 border border-gray-100 p-2 rounded-lg">
               {pastedData.slice(0, 5).map((row, i) => (
-                <div key={i} className="flex gap-2 text-xs text-white/50 whitespace-nowrap bg-white/5 rounded p-1.5 overflow-hidden">
+                <div key={i} className="flex gap-2 text-xs text-gray-900/50 whitespace-nowrap bg-gray-50 rounded p-1.5 overflow-hidden">
                   {row.map((col: string, j: number) => <span key={j} className="w-20 truncate">{col}</span>)}
                 </div>
               ))}
-              {pastedData.length > 5 && <div className="text-center text-xs text-white/30 pt-2">+ {pastedData.length - 5} rows</div>}
+              {pastedData.length > 5 && <div className="text-center text-xs text-gray-900/30 pt-2">+ {pastedData.length - 5} rows</div>}
             </div>
             <div className="flex gap-2 justify-end">
-              <Button variant="ghost" className="text-white/50" onClick={() => setPastedData(null)}>취소</Button>
+              <Button variant="ghost" className="text-gray-900/50" onClick={() => setPastedData(null)}>취소</Button>
               <Button className="bg-white text-black hover:bg-white/80" onClick={handleApplyPaste}>
                 <Check className="w-4 h-4 mr-2" /> 확인 및 업로드 적용
               </Button>

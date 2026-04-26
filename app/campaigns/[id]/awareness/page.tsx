@@ -95,6 +95,7 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
 
   const [filterMonth, setFilterMonth] = useState("all");
   const [filterPlatform, setFilterPlatform] = useState("all");
+  const [viewMode, setViewMode] = useState<ViewMode>("weekly");
 
   const [showConfig, setShowConfig] = useState<{ type: "digital" | "viral"; source: "sheet" | "excel" } | null>(null);
   const [sheetUrl, setSheetUrl] = useState("");
@@ -421,19 +422,19 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
     const isDetected = mapping[field] !== undefined;
     return (
       <div key={field} className={`flex flex-col gap-1 p-2 rounded border ${
-        !isDetected && required ? "border-amber-500/40 bg-amber-500/5" : "border-white/10 bg-white/5"
+        !isDetected && required ? "border-amber-500/40 bg-amber-500/5" : "border-gray-100 bg-gray-50"
       }`}>
         <div className="flex items-center gap-2">
-          <span className="text-white/80 text-xs font-medium">{label}</span>
+          <span className="text-gray-900/80 text-xs font-medium">{label}</span>
           {isDetected
             ? <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">✓ 자동 감지</span>
-            : <span className="text-[10px] bg-white/10 text-white/40 px-1.5 py-0.5 rounded">{required ? "⚠ 필수" : "선택"}</span>
+            : <span className="text-[10px] bg-gray-100 text-gray-900/40 px-1.5 py-0.5 rounded">{required ? "⚠ 필수" : "선택"}</span>
           }
         </div>
         <select
           value={mapping[field] ?? ""}
           onChange={e => setMapping({ ...mapping, [field]: e.target.value })}
-          className="w-full bg-[#1a1a1a] text-white border border-white/20 rounded p-1.5 text-xs outline-none"
+          className="w-full bg-white text-gray-900 border border-gray-200 rounded p-1.5 text-xs outline-none"
         >
           <option value="">-- 매핑 안 함 (공란) --</option>
           {Array.from({ length: numCols }).map((_, i) => (
@@ -471,13 +472,13 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
       {/* ── 매체 퍼포먼스 ── */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-white">매체 퍼포먼스 모니터링</h2>
+          <h2 className="text-xl font-bold text-gray-900">매체 퍼포먼스 모니터링</h2>
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="border-white/20 text-white/80 hover:bg-white/10"
+            <Button size="sm" variant="outline" className="border-gray-200 text-gray-900/80 hover:bg-gray-100"
               onClick={() => setShowConfig({ type: "digital", source: "excel" })}>
               <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
             </Button>
-            <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0F9D58]/80 text-white border-0"
+            <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0F9D58]/80 text-gray-900 border-0"
               onClick={() => setShowConfig({ type: "digital", source: "sheet" })}>
               <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
             </Button>
@@ -485,29 +486,29 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
         </div>
 
         {showConfig?.type === "digital" && (
-          <GlassCard className="p-4 mb-4 border-dashed bg-white/5 animate-in slide-in-from-top-2">
+          <GlassCard className="p-4 mb-4 border-dashed bg-gray-50 animate-in slide-in-from-top-2">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-white">매체 데이터 소스 연동</span>
-              <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-white/50" /></button>
+              <span className="text-sm font-semibold text-gray-900">매체 데이터 소스 연동</span>
+              <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-gray-900/50" /></button>
             </div>
             {showConfig.source === "sheet" ? (
               <div className="flex flex-col gap-2">
                 <div className="flex gap-2">
                   <Input value={sheetUrl} onChange={e => setSheetUrl(e.target.value)}
                     placeholder="스프레드시트 URL 복사/붙여넣기..."
-                    className="bg-white/5 border-white/10 text-xs text-white" />
+                    className="bg-gray-50 border-gray-100 text-xs text-gray-900" />
                   <Button size="sm" onClick={() => handleSheetSync("digital")} disabled={isSyncing}
                     className="bg-white text-black whitespace-nowrap">
                     {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : "AI 분석"}
                   </Button>
                 </div>
-                <p className="text-[10px] text-white/40">* URL 입력 → AI 자동 분석 → 매핑 없이 바로 저장됩니다.</p>
+                <p className="text-[10px] text-gray-900/40">* URL 입력 → AI 자동 분석 → 매핑 없이 바로 저장됩니다.</p>
               </div>
             ) : (
               <div className="flex items-center gap-4">
                 <input type="file" accept=".xlsx,.xls,.csv" ref={fileInputRef}
                   onChange={e => handleExcelUpload(e, "digital")}
-                  className="text-xs text-white/60 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-white/10 file:text-white" />
+                  className="text-xs text-gray-900/60 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-100 file:text-gray-900" />
               </div>
             )}
             {isSyncing && syncStatus && (
@@ -521,33 +522,33 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
 
         <GlassCard className="p-0 overflow-hidden min-h-[150px]">
           {groupedDigital.length === 0 ? (
-            <div className="flex items-center justify-center h-[150px] text-white/30 text-sm">
+            <div className="flex items-center justify-center h-[150px] text-gray-900/30 text-sm">
               구글 시트 또는 엑셀 파일을 연동하면 AI가 자동으로 분석합니다.
             </div>
           ) : (
             <Table>
-              <TableHeader className="bg-white/5">
-                <TableRow className="border-white/10 hover:bg-transparent">
-                  <TableHead className="text-white/60">기간 ({viewMode})</TableHead>
-                  <TableHead className="text-white/60">매체명</TableHead>
-                  <TableHead className="text-white/60 text-right">집행 비용</TableHead>
-                  <TableHead className="text-white/60 text-right">노출수</TableHead>
-                  <TableHead className="text-white/60 text-right">조회수</TableHead>
-                  <TableHead className="text-white/60 text-right">클릭수</TableHead>
-                  <TableHead className="text-white/60 text-right">CPV</TableHead>
-                  <TableHead className="text-white/60 text-right">CTR / VTR</TableHead>
+              <TableHeader className="bg-gray-50">
+                <TableRow className="border-gray-100 hover:bg-transparent">
+                  <TableHead className="text-gray-900/60">기간 ({viewMode})</TableHead>
+                  <TableHead className="text-gray-900/60">매체명</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">집행 비용</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">노출수</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">조회수</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">클릭수</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">CPV</TableHead>
+                  <TableHead className="text-gray-900/60 text-right">CTR / VTR</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {groupedDigital.map((row, i) => (
-                  <TableRow key={i} className="border-white/10 hover:bg-white/5 text-sm">
-                    <TableCell className="font-mono text-white/60">{row.dateLabel}</TableCell>
-                    <TableCell className="font-medium text-white">{row.medium}</TableCell>
-                    <TableCell className="text-right text-white/80">{row.spend.toLocaleString()}원</TableCell>
-                    <TableCell className="text-right text-white/80">{row.impressions.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-white">{row.views.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-white">{row.clicks.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-white/80">₩{row.cpv.toLocaleString()}</TableCell>
+                  <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
+                    <TableCell className="font-mono text-gray-900/60">{row.dateLabel}</TableCell>
+                    <TableCell className="font-medium text-gray-900">{row.medium}</TableCell>
+                    <TableCell className="text-right text-gray-900/80">{row.spend.toLocaleString()}원</TableCell>
+                    <TableCell className="text-right text-gray-900/80">{row.impressions.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900">{row.views.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900">{row.clicks.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900/80">₩{row.cpv.toLocaleString()}</TableCell>
                     <TableCell className="text-right font-bold text-indigo-400">{row.ctr}% / {row.vtr}%</TableCell>
                   </TableRow>
                 ))}
@@ -560,15 +561,15 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
       {/* ── 캠페인 연계 광고 영상 (유튜브 등) ── */}
       <div>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-white">캠페인 연계 광고 영상</h2>
+          <h2 className="text-xl font-bold text-gray-900">캠페인 연계 광고 영상</h2>
           <div className="flex gap-2 items-center">
             <Input 
               value={newYoutubeUrl} 
               onChange={e => setNewYoutubeUrl(e.target.value)} 
               placeholder="유튜브 영상 URL 입력..."
-              className="h-8 w-64 bg-white/5 border-white/10 text-xs text-white"
+              className="h-8 w-64 bg-gray-50 border-gray-100 text-xs text-gray-900"
             />
-            <Button size="sm" onClick={handleAddYoutube} disabled={isAddingYoutube} className="h-8 bg-blue-600 hover:bg-blue-500 text-white">
+            <Button size="sm" onClick={handleAddYoutube} disabled={isAddingYoutube} className="h-8 bg-blue-600 hover:bg-blue-500 text-gray-900">
               {isAddingYoutube ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />} 
               추가/수집
             </Button>
@@ -577,44 +578,44 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
         
         <GlassCard className="p-0 overflow-hidden mb-8">
           {youtubeVideos.length === 0 ? (
-            <div className="flex items-center justify-center p-8 text-white/30 text-sm">
+            <div className="flex items-center justify-center p-8 text-gray-900/30 text-sm">
               우측 상단에 연계될 유튜브 영상 링크를 입력하여 영상을 추가하세요.
             </div>
           ) : (
             <Table>
-              <TableHeader className="bg-white/5">
-                <TableRow className="border-white/10 hover:bg-transparent">
-                  <TableHead className="text-white/60">업로드</TableHead>
-                  <TableHead className="text-white/60">플랫폼</TableHead>
-                  <TableHead className="text-white/60">콘텐츠 제목</TableHead>
+              <TableHeader className="bg-gray-50">
+                <TableRow className="border-gray-100 hover:bg-transparent">
+                  <TableHead className="text-gray-900/60">업로드</TableHead>
+                  <TableHead className="text-gray-900/60">플랫폼</TableHead>
+                  <TableHead className="text-gray-900/60">콘텐츠 제목</TableHead>
                   <TableHead className="text-right text-indigo-400">
                     <div className="flex flex-col">
-                      <span className="text-white/60 text-xs font-normal">조회수</span>
+                      <span className="text-gray-900/60 text-xs font-normal">조회수</span>
                       <span className="font-bold text-sm">{ytTotalViews.toLocaleString()}</span>
                     </div>
                   </TableHead>
                   <TableHead className="text-right text-indigo-400">
                     <div className="flex flex-col">
-                      <span className="text-white/60 text-xs font-normal">반응 (좋아요 / 댓글)</span>
+                      <span className="text-gray-900/60 text-xs font-normal">반응 (좋아요 / 댓글)</span>
                       <span className="font-bold text-sm">👍 {ytTotalLikes.toLocaleString()} / 💬 {ytTotalComments.toLocaleString()}</span>
                     </div>
                   </TableHead>
-                  <TableHead className="text-white/60 text-center w-[100px]">관리</TableHead>
+                  <TableHead className="text-gray-900/60 text-center w-[100px]">관리</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {youtubeVideos.map((vid: any) => (
-                  <TableRow key={vid._id} className="border-white/10 hover:bg-white/5 text-sm h-[72px]">
-                    <TableCell className="font-mono text-white/60">{vid.uploadDate}</TableCell>
+                  <TableRow key={vid._id} className="border-gray-100 hover:bg-gray-50 text-sm h-[72px]">
+                    <TableCell className="font-mono text-gray-900/60">{vid.uploadDate}</TableCell>
                     <TableCell>
                       <span className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">YT</span>
                     </TableCell>
-                    <TableCell className="text-white/80 max-w-[200px]">
+                    <TableCell className="text-gray-900/80 max-w-[200px]">
                       <div className="flex items-center gap-3">
                         {vid.thumbnailUrl ? (
-                          <img src={`/api/proxy-image?url=${encodeURIComponent(vid.thumbnailUrl)}`} referrerPolicy="no-referrer" alt="thumbnail" className="w-14 h-14 object-cover rounded-md shadow-md border border-white/10 shrink-0" />
+                          <img src={`/api/proxy-image?url=${encodeURIComponent(vid.thumbnailUrl)}`} referrerPolicy="no-referrer" alt="thumbnail" className="w-14 h-14 object-cover rounded-md shadow-md border border-gray-100 shrink-0" />
                         ) : (
-                          <div className="w-14 h-14 bg-white/5 rounded-md flex items-center justify-center shrink-0 border border-white/10 text-white/20 text-[10px]">No Img</div>
+                          <div className="w-14 h-14 bg-gray-50 rounded-md flex items-center justify-center shrink-0 border border-gray-100 text-gray-900/20 text-[10px]">No Img</div>
                         )}
                         <div className="flex flex-col gap-1 overflow-hidden">
                           <div className="font-bold text-xs truncate max-w-[130px] leading-tight" title={vid.title}>{vid.title}</div>
@@ -622,8 +623,8 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="text-right font-mono text-white">{vid.views.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-white/60">👍 {vid.likes.toLocaleString()} / 💬 {vid.comments.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900">{vid.views.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-mono text-gray-900/60">👍 {vid.likes.toLocaleString()} / 💬 {vid.comments.toLocaleString()}</TableCell>
                     <TableCell className="text-center">
                       <button onClick={() => { if(confirm("삭제하시겠습니까?")) deleteYouTubeVideo({ videoId: vid._id })}} className="p-1 rounded hover:bg-red-500/20 text-red-500/70"><Trash className="w-4 h-4" /></button>
                     </TableCell>
@@ -639,14 +640,14 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
       <div>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
-            <h2 className="text-xl font-bold text-white">바이럴 컨텐츠 성과</h2>
+            <h2 className="text-xl font-bold text-gray-900">바이럴 컨텐츠 성과</h2>
             <div className="flex items-center gap-2">
-              <select className="bg-white/5 border border-white/10 text-white text-xs rounded p-1.5 outline-none" 
+              <select className="bg-gray-50 border border-gray-100 text-gray-900 text-xs rounded p-1.5 outline-none" 
                 value={filterMonth} onChange={e => setFilterMonth(e.target.value)}>
                 <option value="all">전체 월</option>
                 {viralMonths.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <select className="bg-white/5 border border-white/10 text-white text-xs rounded p-1.5 outline-none" 
+              <select className="bg-gray-50 border border-gray-100 text-gray-900 text-xs rounded p-1.5 outline-none" 
                 value={filterPlatform} onChange={e => setFilterPlatform(e.target.value)}>
                 <option value="all">전체 플랫폼</option>
                 {viralPlatforms.map(p => <option key={p} value={p}>{p}</option>)}
@@ -654,11 +655,11 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
             </div>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="border-white/20 text-white/80 hover:bg-white/10"
+            <Button size="sm" variant="outline" className="border-gray-200 text-gray-900/80 hover:bg-gray-100"
               onClick={() => setShowConfig({ type: "viral", source: "excel" })}>
               <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
             </Button>
-            <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0F9D58]/80 text-white border-0"
+            <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0F9D58]/80 text-gray-900 border-0"
               onClick={() => setShowConfig({ type: "viral", source: "sheet" })}>
               <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
             </Button>
@@ -666,29 +667,29 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
         </div>
 
         {showConfig?.type === "viral" && (
-          <GlassCard className="p-4 mb-4 border-dashed bg-white/5 animate-in slide-in-from-top-2">
+          <GlassCard className="p-4 mb-4 border-dashed bg-gray-50 animate-in slide-in-from-top-2">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-white">바이럴 데이터 소스 연동</span>
-              <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-white/50" /></button>
+              <span className="text-sm font-semibold text-gray-900">바이럴 데이터 소스 연동</span>
+              <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-gray-900/50" /></button>
             </div>
             {showConfig.source === "sheet" ? (
               <div className="flex flex-col gap-2">
                 <div className="flex gap-2">
                   <Input value={sheetUrl} onChange={e => setSheetUrl(e.target.value)}
                     placeholder="스프레드시트 URL 복사/붙여넣기..."
-                    className="bg-white/5 border-white/10 text-xs text-white" />
+                    className="bg-gray-50 border-gray-100 text-xs text-gray-900" />
                   <Button size="sm" onClick={() => handleSheetSync("viral")} disabled={isSyncing}
                     className="bg-white text-black whitespace-nowrap">
                     {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : "가져오기"}
                   </Button>
                 </div>
-                <p className="text-[10px] text-white/40">* AI가 컬럼을 자동 감지하고 매핑 미리보기를 생성합니다.</p>
+                <p className="text-[10px] text-gray-900/40">* AI가 컬럼을 자동 감지하고 매핑 미리보기를 생성합니다.</p>
               </div>
             ) : (
               <div className="flex items-center gap-4">
                 <input type="file" accept=".xlsx,.xls,.csv" ref={fileInputRef}
                   onChange={e => handleExcelUpload(e, "viral")}
-                  className="text-xs text-white/60 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-white/10 file:text-white" />
+                  className="text-xs text-gray-900/60 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-100 file:text-gray-900" />
               </div>
             )}
           </GlassCard>
@@ -696,55 +697,55 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
 
         <GlassCard className="p-0 overflow-hidden min-h-[150px]">
           {groupedViral.length === 0 ? (
-            <div className="flex items-center justify-center h-[150px] text-white/30 text-sm">
+            <div className="flex items-center justify-center h-[150px] text-gray-900/30 text-sm">
               데이터를 연동해 주세요.
             </div>
           ) : (
             <Table>
-              <TableHeader className="bg-white/5">
-                <TableRow className="border-white/10 hover:bg-transparent">
-                  <TableHead className="text-white/60">업로드 (daily)</TableHead>
-                  <TableHead className="text-white/60">플랫폼</TableHead>
-                  <TableHead className="text-white/60">크리에이터</TableHead>
-                  <TableHead className="text-white/60">콘텐츠 제목</TableHead>
+              <TableHeader className="bg-gray-50">
+                <TableRow className="border-gray-100 hover:bg-transparent">
+                  <TableHead className="text-gray-900/60">업로드 (daily)</TableHead>
+                  <TableHead className="text-gray-900/60">플랫폼</TableHead>
+                  <TableHead className="text-gray-900/60">크리에이터</TableHead>
+                  <TableHead className="text-gray-900/60">콘텐츠 제목</TableHead>
                   <TableHead className="text-right text-indigo-400">
                     <div className="flex flex-col">
-                      <span className="text-white/60 text-xs font-normal">조회수</span>
+                      <span className="text-gray-900/60 text-xs font-normal">조회수</span>
                       <span className="font-bold text-sm">{viralTotalViews.toLocaleString()}</span>
                     </div>
                   </TableHead>
                   <TableHead className="text-right text-indigo-400">
                     <div className="flex flex-col">
-                      <span className="text-white/60 text-xs font-normal">반응 (좋아요 / 댓글)</span>
+                      <span className="text-gray-900/60 text-xs font-normal">반응 (좋아요 / 댓글)</span>
                       <span className="font-bold text-sm">👍 {viralTotalLikes.toLocaleString()} / 💬 {viralTotalComments.toLocaleString()}</span>
                     </div>
                   </TableHead>
-                  <TableHead className="text-white/60 text-center">관리</TableHead>
+                  <TableHead className="text-gray-900/60 text-center">관리</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredViral.map(row => {
                   const isEditing = editingViralId === row._id;
                   return (
-                  <TableRow key={row._id} className="border-white/10 hover:bg-white/5 text-sm">
-                    <TableCell className="text-white/50 font-mono">{row.dateLabel}</TableCell>
+                  <TableRow key={row._id} className="border-gray-100 hover:bg-gray-50 text-sm">
+                    <TableCell className="text-gray-900/50 font-mono">{row.dateLabel}</TableCell>
                     <TableCell>
-                      <span className="bg-white/10 px-2 py-0.5 rounded text-xs text-white/80">{row.platform}</span>
+                      <span className="bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-900/80">{row.platform}</span>
                     </TableCell>
-                    <TableCell className="font-medium text-white">
-                      {isEditing ? <Input value={editViralForm.creator} onChange={e => setEditViralForm({...editViralForm, creator: e.target.value})} className="h-6 text-xs w-20 bg-transparent border-white/20"/> : row.creator}
+                    <TableCell className="font-medium text-gray-900">
+                      {isEditing ? <Input value={editViralForm.creator} onChange={e => setEditViralForm({...editViralForm, creator: e.target.value})} className="h-6 text-xs w-20 bg-transparent border-gray-200"/> : row.creator}
                     </TableCell>
-                    <TableCell className="text-white/80 max-w-[200px]">
+                    <TableCell className="text-gray-900/80 max-w-[200px]">
                       {isEditing ? (
                         <div className="flex flex-col gap-1">
-                          <Input placeholder="URL" value={editViralForm.url || ""} onChange={e => setEditViralForm({...editViralForm, url: e.target.value})} className="h-6 text-xs bg-transparent border-white/20"/>
+                          <Input placeholder="URL" value={editViralForm.url || ""} onChange={e => setEditViralForm({...editViralForm, url: e.target.value})} className="h-6 text-xs bg-transparent border-gray-200"/>
                         </div>
                       ) : (
                         <div className="flex items-center gap-3">
                           {row.thumbnailUrl ? (
-                            <img src={`/api/proxy-image?url=${encodeURIComponent(row.thumbnailUrl)}`} referrerPolicy="no-referrer" alt="thumbnail" className="w-14 h-14 object-cover rounded-md shadow-md border border-white/10 shrink-0" />
+                            <img src={`/api/proxy-image?url=${encodeURIComponent(row.thumbnailUrl)}`} referrerPolicy="no-referrer" alt="thumbnail" className="w-14 h-14 object-cover rounded-md shadow-md border border-gray-100 shrink-0" />
                           ) : (
-                            <div className="w-14 h-14 bg-white/5 rounded-md flex items-center justify-center shrink-0 border border-white/10 text-white/20 text-[10px]">No Img</div>
+                            <div className="w-14 h-14 bg-gray-50 rounded-md flex items-center justify-center shrink-0 border border-gray-100 text-gray-900/20 text-[10px]">No Img</div>
                           )}
                           <div className="flex flex-col gap-1 overflow-hidden">
                             <div className="font-bold text-xs truncate max-w-[130px] leading-tight" title={row.title !== "-" ? row.title : "제목 없음"}>
@@ -755,14 +756,14 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
                         </div>
                       )}
                     </TableCell>
-                    <TableCell className="text-right font-mono text-white">
-                      {isEditing ? <Input value={editViralForm.views} onChange={e => setEditViralForm({...editViralForm, views: e.target.value})} className="h-6 text-xs w-16 text-right bg-transparent border-white/20 ml-auto"/> : row.views.toLocaleString()}
+                    <TableCell className="text-right font-mono text-gray-900">
+                      {isEditing ? <Input value={editViralForm.views} onChange={e => setEditViralForm({...editViralForm, views: e.target.value})} className="h-6 text-xs w-16 text-right bg-transparent border-gray-200 ml-auto"/> : row.views.toLocaleString()}
                     </TableCell>
-                    <TableCell className="text-right font-mono text-white/60">
+                    <TableCell className="text-right font-mono text-gray-900/60">
                       {isEditing ? (
                         <div className="flex gap-1 justify-end">
-                           <Input placeholder="Likes" value={editViralForm.likes} onChange={e => setEditViralForm({...editViralForm, likes: e.target.value})} className="h-6 text-xs w-12 text-right bg-transparent border-white/20"/>
-                           <Input placeholder="Comms" value={editViralForm.comments} onChange={e => setEditViralForm({...editViralForm, comments: e.target.value})} className="h-6 text-xs w-12 text-right bg-transparent border-white/20"/>
+                           <Input placeholder="Likes" value={editViralForm.likes} onChange={e => setEditViralForm({...editViralForm, likes: e.target.value})} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200"/>
+                           <Input placeholder="Comms" value={editViralForm.comments} onChange={e => setEditViralForm({...editViralForm, comments: e.target.value})} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200"/>
                         </div>
                       ) : (
                         <>👍 {row.likes.toLocaleString()} / 💬 {row.comments.toLocaleString()}</>
@@ -772,17 +773,17 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
                       <div className="flex items-center justify-center gap-2">
                         {isEditing ? (
                           <>
-                            <button onClick={saveEditViral} className="p-1 rounded hover:bg-white/10 text-green-400"><Check className="w-4 h-4" /></button>
-                            <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-white/10 text-white/50"><X className="w-4 h-4" /></button>
+                            <button onClick={saveEditViral} className="p-1 rounded hover:bg-gray-100 text-green-400"><Check className="w-4 h-4" /></button>
+                            <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-900/50"><X className="w-4 h-4" /></button>
                           </>
                         ) : (
                           <>
                             {row.url && (
-                              <button onClick={() => handleFetchSnsStats(row._id, row.url)} className="p-1 rounded hover:bg-white/10 text-blue-400" title="자동 수집">
+                              <button onClick={() => handleFetchSnsStats(row._id, row.url)} className="p-1 rounded hover:bg-gray-100 text-blue-400" title="자동 수집">
                                 {isFetchingUrl === row._id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
                               </button>
                             )}
-                            <button onClick={() => startEditViral(row)} className="p-1 rounded hover:bg-white/10 text-white/50"><Pencil className="w-4 h-4" /></button>
+                            <button onClick={() => startEditViral(row)} className="p-1 rounded hover:bg-gray-100 text-gray-900/50"><Pencil className="w-4 h-4" /></button>
                             <button onClick={() => { if(confirm("삭제하시겠습니까?")) deleteViralRow({ viralId: row._id })}} className="p-1 rounded hover:bg-red-500/20 text-red-500/70"><Trash className="w-4 h-4" /></button>
                           </>
                         )}
@@ -799,25 +800,25 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
 
       {/* ── 바이럴 컬럼 매핑 모달 ── */}
       {previewData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-          <div className="bg-[#111] border border-white/20 rounded-2xl p-6 w-[820px] max-h-[90vh] flex flex-col shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-100 backdrop-blur-sm p-4">
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 w-[820px] max-h-[90vh] flex flex-col shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg text-white font-bold flex items-center gap-2">
+              <h3 className="text-lg text-gray-900 font-bold flex items-center gap-2">
                 <Settings2 className="w-5 h-5" /> 바이럴 컨텐츠 컬럼 매핑
               </h3>
               <button onClick={() => { setPreviewData(null); setMapping({}); }}>
-                <X className="w-5 h-5 text-white/50 hover:text-white" />
+                <X className="w-5 h-5 text-gray-900/50 hover:text-gray-900" />
               </button>
             </div>
 
             {isGuessingCols ? (
               <div className="flex flex-col items-center justify-center py-16 gap-3">
                 <RefreshCw className="w-7 h-7 animate-spin text-indigo-400" />
-                <p className="text-sm text-white/60">AI가 시트 구조를 분석하고 컬럼을 자동 감지 중...</p>
+                <p className="text-sm text-gray-900/60">AI가 시트 구조를 분석하고 컬럼을 자동 감지 중...</p>
               </div>
             ) : (
               <>
-                <p className="text-sm text-white/40 mb-5">
+                <p className="text-sm text-gray-900/40 mb-5">
                   AI가 아래와 같이 열을 자동 감지했습니다. 확인 후 필요 시 수정해주세요.
                 </p>
                 <div className="flex gap-6 overflow-hidden flex-1">
@@ -830,16 +831,16 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
                   </div>
 
                   {/* 데이터 미리보기 */}
-                  <div className="w-1/2 flex flex-col border-l border-white/10 pl-6 overflow-y-auto">
-                    <span className="text-white/60 text-xs font-semibold uppercase tracking-wider mb-2">
+                  <div className="w-1/2 flex flex-col border-l border-gray-100 pl-6 overflow-y-auto">
+                    <span className="text-gray-900/60 text-xs font-semibold uppercase tracking-wider mb-2">
                       데이터 미리보기 (상위 5행)
                     </span>
-                    <div className="bg-black/50 p-3 rounded-lg border border-white/5 overflow-x-auto">
-                      <table className="text-xs text-white/70 w-full text-left border-collapse">
+                    <div className="bg-gray-100 p-3 rounded-lg border border-white/5 overflow-x-auto">
+                      <table className="text-xs text-gray-900/70 w-full text-left border-collapse">
                         <thead>
                           <tr>
                             {Array.from({ length: Math.min(numCols, 12) }).map((_, i) => (
-                              <th key={i} className="border-b border-white/10 pb-2 px-1 text-white/40 font-mono font-normal whitespace-nowrap">
+                              <th key={i} className="border-b border-gray-100 pb-2 px-1 text-gray-900/40 font-mono font-normal whitespace-nowrap">
                                 {i + 1}열({String.fromCharCode(65 + i)})
                               </th>
                             ))}
@@ -858,18 +859,18 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
                         </tbody>
                       </table>
                       {numCols > 12 && (
-                        <div className="text-white/30 text-xs mt-2 text-center">... (이후 열 생략)</div>
+                        <div className="text-gray-900/30 text-xs mt-2 text-center">... (이후 열 생략)</div>
                       )}
                     </div>
                   </div>
                 </div>
 
-                <div className="flex gap-3 justify-end mt-6 pt-4 border-t border-white/10">
+                <div className="flex gap-3 justify-end mt-6 pt-4 border-t border-gray-100">
                   <Button variant="ghost" onClick={() => { setPreviewData(null); setMapping({}); }}
-                    className="text-white/60">취소</Button>
+                    className="text-gray-900/60">취소</Button>
                   <Button onClick={handleConfirmMapping}
                     disabled={Object.values(mapping).length === 0 || isSyncing}
-                    className="bg-white text-black hover:bg-white/80">
+                    className="bg-white text-black hover:bg-gray-800">
                     {isSyncing
                       ? <RefreshCw className="w-4 h-4 animate-spin mr-2" />
                       : <Check className="w-4 h-4 mr-2" />}

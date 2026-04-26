@@ -63,8 +63,9 @@ async function getAccessToken(): Promise<string> {
 
 export async function POST(req: NextRequest) {
   try {
-    const { startDate, endDate, metrics, dimensions, timeUnit } = await req.json();
+    const { startDate, endDate, metrics, dimensions, timeUnit, propertyId } = await req.json();
 
+    const targetPropertyId = propertyId || GA4_PROPERTY_ID;
     const accessToken = await getAccessToken();
 
     const todayStr = new Date().toISOString().split("T")[0];
@@ -85,6 +86,11 @@ export async function POST(req: NextRequest) {
         ga4Dimensions = [{ name: "date" }];
         ga4OrderBy = [{ dimension: { dimensionName: "date" } }];
       }
+    } else {
+      // 커스텀 디멘션이 들어오면 정렬은 기본적으로 metrics의 첫 번째 항목(세션수) 내림차순으로 설정 (TOP N 추출 목적)
+      ga4OrderBy = [
+        { desc: true, metric: { metricName: metrics?.[0]?.name || "sessions" } }
+      ];
     }
 
     const body = {
@@ -100,7 +106,7 @@ export async function POST(req: NextRequest) {
     };
 
     const res = await fetch(
-      `https://analyticsdata.googleapis.com/v1beta/properties/${GA4_PROPERTY_ID}:runReport`,
+      `https://analyticsdata.googleapis.com/v1beta/properties/${targetPropertyId}:runReport`,
       {
         method: "POST",
         headers: {

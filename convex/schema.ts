@@ -22,6 +22,16 @@ export default defineSchema({
     endDate: v.string(),
     status: v.union(v.literal("active"), v.literal("completed")),
     createdBy: v.string(),
+    // KPI 목표 설정 (캠페인별)
+    kpiTargets: v.optional(v.array(v.object({
+      label: v.string(),        // 예: "캠페인 노출"
+      target: v.number(),       // 목표 수치
+      current: v.number(),      // 수동 입력 현재값 (자동합산 외 보정용)
+      category: v.string(),     // "exposure" | "event" | "popup" 등
+      description: v.optional(v.string()), // 부가 설명
+    }))),
+    // 표시할 탭 목록 (없으면 전체 표시)
+    visibleTabs: v.optional(v.array(v.string())),
   }),
 
   milestones: defineTable({

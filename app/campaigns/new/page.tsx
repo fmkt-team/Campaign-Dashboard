@@ -41,15 +41,15 @@ export default function NewCampaignPage() {
 
   return (
     <div className="min-h-screen p-8 lg:p-12 max-w-3xl mx-auto">
-      <h1 className="text-3xl font-bold text-white mb-8">Create New Campaign</h1>
+      <h1 className="text-3xl font-bold text-gray-900 mb-8">Create New Campaign</h1>
       
       <form onSubmit={handleSubmit}>
         <GlassCard className="flex flex-col gap-6">
           <div>
-            <label className="block text-sm text-white/60 mb-2">Campaign Name</label>
+            <label className="block text-sm text-gray-500 mb-2">Campaign Name</label>
             <Input 
               required
-              className="bg-white/5 border-white/10 text-white" 
+              className="bg-gray-50 border-gray-200 text-gray-900" 
               placeholder="e.g. 2026 데스커 브랜드 마케팅"
               value={formData.name}
               onChange={e => setFormData({ ...formData, name: e.target.value })}
@@ -57,27 +57,27 @@ export default function NewCampaignPage() {
           </div>
           <div className="grid grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm text-white/60 mb-2">Start Date</label>
+              <label className="block text-sm text-gray-500 mb-2">Start Date</label>
               <Input 
                 required
                 type="date"
-                className="bg-white/5 border-white/10 text-white block w-full"
+                className="bg-gray-50 border-gray-200 text-gray-900 block w-full"
                 value={formData.startDate}
                 onChange={e => setFormData({ ...formData, startDate: e.target.value })} 
               />
             </div>
             <div>
-              <label className="block text-sm text-white/60 mb-2">End Date (optional)</label>
+              <label className="block text-sm text-gray-500 mb-2">End Date (optional)</label>
               <Input 
                 type="date"
-                className="bg-white/5 border-white/10 text-white block w-full"
+                className="bg-gray-50 border-gray-200 text-gray-900 block w-full"
                 value={formData.endDate}
                 onChange={e => setFormData({ ...formData, endDate: e.target.value })} 
               />
             </div>
           </div>
           <div>
-            <label className="block text-sm text-white/60 mb-2">Brand Color</label>
+            <label className="block text-sm text-gray-500 mb-2">Brand Color</label>
             <div className="flex gap-4 items-center">
               <input 
                 type="color" 
@@ -85,13 +85,13 @@ export default function NewCampaignPage() {
                 value={formData.brandColor}
                 onChange={e => setFormData({ ...formData, brandColor: e.target.value })}
               />
-              <span className="text-white font-mono">{formData.brandColor}</span>
+              <span className="text-gray-700 font-mono">{formData.brandColor}</span>
             </div>
           </div>
           
-          <div className="flex justify-end gap-4 mt-4 pt-6 border-t border-white/10">
-            <Button type="button" variant="ghost" className="text-white hover:bg-white/10" onClick={() => router.back()}>Cancel</Button>
-            <Button type="submit" className="bg-white text-black hover:bg-white/80">Initialize Campaign</Button>
+          <div className="flex justify-end gap-4 mt-4 pt-6 border-t border-gray-100">
+            <Button type="button" variant="ghost" className="text-gray-500 hover:bg-gray-50" onClick={() => router.back()}>Cancel</Button>
+            <Button type="submit" className="bg-gray-900 text-white hover:bg-gray-800">Initialize Campaign</Button>
           </div>
         </GlassCard>
       </form>
