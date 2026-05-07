@@ -13,14 +13,15 @@ function parseNumber(val: any): number {
 }
 
 function parseDate(val: any): string {
-  if (!val) return "1970-01-01";
+  if (!val) return "";
   const s = String(val).trim();
   const m = s.match(/(\d{2,4})[-/.](\d{1,2})[-/.](\d{1,2})/);
   if (m) {
     const y = m[1].length === 2 ? `20${m[1]}` : m[1];
-    return `${y}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    const result = `${y}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    return result === "1970-01-01" ? "" : result;
   }
-  return s || "1970-01-01";
+  return "";
 }
 
 // ── Main Route ──────────────────────────────────────────────────────────────
@@ -143,6 +144,20 @@ Instructions:
 
     // ── 전체 데이터 추출 모드 ──
     if (type === "digital") {
+      const headerRow = data[headerRowIndex] || [];
+      // 고정 매핑 컬럼의 인덱스 집합
+      const fixedIndices = new Set(
+        Object.values(mapping).filter(v => v !== null && v !== undefined).map(v => Number(v))
+      );
+      // 추가 컬럼: 고정 컬럼에 포함되지 않는 나머지 헤더
+      const extraColDefs: { label: string; colIdx: number }[] = [];
+      headerRow.forEach((cell: any, i: number) => {
+        if (fixedIndices.has(i)) return;
+        const label = String(cell || "").trim();
+        if (!label) return;
+        extraColDefs.push({ label, colIdx: i });
+      });
+
       let lastKnownDate = "1970-01-01";
       let lastKnownMedium = "-";
 
@@ -152,40 +167,51 @@ Instructions:
           const mIdx = mapping["medium"];
           let medium = mIdx !== null && mIdx !== undefined ? String(row[mIdx as any] || "").trim() : "";
           if (medium === "") medium = lastKnownMedium; else lastKnownMedium = medium;
-          
           if (!medium) return null;
 
-          const dateIdx = mapping["date"];
-          const spendIdx = mapping["spend"];
-          const impIdx = mapping["impressions"];
-          const viewsIdx = mapping["views"];
+          const dateIdx   = mapping["date"];
+          const spendIdx  = mapping["spend"];
+          const impIdx    = mapping["impressions"];
+          const viewsIdx  = mapping["views"];
           const clicksIdx = mapping["clicks"];
 
           let parsedDate = parseDate(dateIdx !== null ? row[dateIdx as any] : "1970-01-01");
           if (parsedDate === "1970-01-01" && lastKnownDate !== "1970-01-01") parsedDate = lastKnownDate;
           else lastKnownDate = parsedDate;
 
-          const spend = parseNumber(spendIdx !== null ? row[spendIdx as any] : 0);
-          const impressions = parseNumber(impIdx !== null ? row[impIdx as any] : 0);
-          const views = parseNumber(viewsIdx !== null ? row[viewsIdx as any] : 0);
-          const clicks = parseNumber(clicksIdx !== null ? row[clicksIdx as any] : 0);
+          const spend       = parseNumber(spendIdx  !== null ? row[spendIdx as any]  : 0);
+          const impressions = parseNumber(impIdx    !== null ? row[impIdx as any]    : 0);
+          const views       = parseNumber(viewsIdx  !== null ? row[viewsIdx as any]  : 0);
+          const clicks      = parseNumber(clicksIdx !== null ? row[clicksIdx as any] : 0);
+
+          // 추가 컬럼 데이터
+          const extraData: Record<string, number> = {};
+          for (const ec of extraColDefs) {
+            const val = parseNumber(row[ec.colIdx]);
+            if (val !== 0 || String(row[ec.colIdx] || "").trim() !== "") {
+              extraData[ec.label] = val;
+            }
+          }
 
           return {
-            date: parsedDate,
-            medium,
-            spend,
-            impressions,
-            views,
-            clicks,
+            date: parsedDate, medium, spend, impressions, views, clicks,
             cpv: views > 0 ? spend / views : 0,
             ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
             vtr: impressions > 0 ? (views / impressions) * 100 : 0,
             recordedAt: Date.now(),
+            extraData: Object.keys(extraData).length > 0 ? extraData : undefined,
           };
         })
         .filter(Boolean);
 
-      return NextResponse.json({ rows, mapping, headerRowIndex });
+      // 모든 헤더 목록 (label + colIdx + isFixed)
+      const allHeaders = headerRow.map((cell: any, i: number) => ({
+        label: String(cell || "").trim(),
+        colIdx: i,
+        isFixed: fixedIndices.has(i),
+      })).filter((h: any) => h.label);
+
+      return NextResponse.json({ rows, mapping, headerRowIndex, allHeaders, extraColDefs });
     }
 
     if (type === "viral") {

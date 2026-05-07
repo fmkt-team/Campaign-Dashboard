@@ -1,6 +1,8 @@
 "use client";
 
-import { use, useState } from "react";
+import { useState, useEffect } from "react";
+import { useParams } from "next/navigation";
+import { useRefresh } from "@/lib/refresh-context";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -272,9 +274,13 @@ function InsightFormModal({
 }
 
 // ── 메인 페이지 ───────────────────────────────────────────────────
-export default function InsightsPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function InsightsPage() {
+  const params = useParams();
+  const id = params.id as string;
   const campaignId = id as Id<"campaigns">;
+
+  const { refreshTrigger } = useRefresh();
+  const [lastRefresh, setLastRefresh] = useState(0);
 
   const insights = (useQuery(api.insights.getInsights, { campaignId }) ?? []) as Insight[];
   const addInsight = useMutation(api.insights.addInsight);
@@ -284,6 +290,14 @@ export default function InsightsPage({ params }: { params: Promise<{ id: string 
   const [editing, setEditing] = useState<Insight | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // 새로고침 컨텍스트 리스너
+  useEffect(() => {
+    if (refreshTrigger !== lastRefresh) {
+      setLastRefresh(refreshTrigger);
+      // Show a brief notification or update status
+    }
+  }, [refreshTrigger, lastRefresh]);
 
   const handleSave = async (form: FormState) => {
     setIsSaving(true);

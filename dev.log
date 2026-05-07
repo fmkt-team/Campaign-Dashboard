@@ -1,0 +1,48 @@
+
+> campaign-dashboard@0.1.0 dev
+> next dev
+
+   ▲ Next.js 15.1.0
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.219.106:3000
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 6.1s
+ ○ Compiling / ...
+ ✓ Compiled / in 14.5s (779 modules)
+ GET / 200 in 15698ms
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 2.3s (769 modules)
+ GET /.well-known/appspecific/com.chrome.devtools.json 404 in 1501ms
+ GET /.well-known/appspecific/com.chrome.devtools.json 404 in 259ms
+ GET / 200 in 280ms
+ GET /.well-known/appspecific/com.chrome.devtools.json 404 in 51ms
+ ○ Compiling /campaigns/[id]/timeline ...
+ ✓ Compiled /campaigns/[id]/timeline in 11.6s (1616 modules)
+ GET /campaigns/kd77f5d9jx87mexb566msbn8js854x8w/timeline 200 in 16531ms
+ GET /_next/static/chunks/app/campaigns/%5Bid%5D/LayoutGroupContext.mjs.map 404 in 149ms
+ ✓ Compiled in 14s (1626 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Caching failed for pack: Error: invalid code lengths set
+ ✓ Compiled in 3.8s (1626 modules)
+ ✓ Compiled in 3.2s (1626 modules)
+ ✓ Compiled in 2.9s (1626 modules)
+ ✓ Compiled in 3.6s (1626 modules)
+ ✓ Compiled in 3.8s (1626 modules)
+ ✓ Compiled in 3.9s (1626 modules)
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 1442ms (1616 modules)
+ OPTIONS /api/auth/issue/sso/jwt 404 in 1802ms
+ ✓ Compiled in 4.6s (1630 modules)
+ ✓ Compiled in 4.9s (1626 modules)
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 1010ms (1616 modules)
+ OPTIONS /api/auth/issue/sso/jwt 404 in 1343ms
+ ✓ Compiled in 5s (1626 modules)
+ ✓ Compiled in 3.7s (1626 modules)
+ ✓ Compiled in 2.5s (808 modules)
+ ✓ Compiled in 1821ms (808 modules)
+ ✓ Compiled in 3.4s (808 modules)
+ ✓ Compiled in 1509ms (808 modules)
+ ✓ Compiled in 2.2s (808 modules)
+ ✓ Compiled in 1341ms (808 modules)

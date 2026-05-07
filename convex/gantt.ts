@@ -64,6 +64,47 @@ export const syncGanttFromSheet = mutation({
   },
 });
 
+// 개별 태스크 삽입 (경합 방지용)
+export const insertGanttTask = mutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    category: v.string(),
+    subTask: v.string(),
+    assignee: v.string(),
+    progress: v.number(),
+    startDate: v.string(),
+    endDate: v.string(),
+    sortOrder: v.number(),
+    color: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("ganttTasks", {
+      ...args,
+      isManuallyEdited: true,
+    });
+  },
+});
+
+// 대분류 통째로 삭제
+export const deleteGanttCategory = mutation({
+  args: {
+    campaignId: v.id("campaigns"),
+    category: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("ganttTasks")
+      .withIndex("by_campaign", (q) => q.eq("campaignId", args.campaignId))
+      .collect();
+    
+    for (const row of existing) {
+      if (row.category === args.category) {
+        await ctx.db.delete(row._id);
+      }
+    }
+  },
+});
+
 // 개별 태스크 수기 수정
 export const updateGanttTask = mutation({
   args: {
@@ -75,6 +116,16 @@ export const updateGanttTask = mutation({
     startDate: v.optional(v.string()),
     endDate: v.optional(v.string()),
     color: v.optional(v.string()),
+    note: v.optional(v.string()),
+    barLabel: v.optional(v.string()),
+    activities: v.optional(v.array(v.object({
+      id: v.string(),
+      name: v.string(),
+      startDate: v.string(),
+      endDate: v.string(),
+      progress: v.number(),
+      color: v.optional(v.string()),
+    }))),
   },
   handler: async (ctx, args) => {
     const { taskId, ...updates } = args;
@@ -83,5 +134,84 @@ export const updateGanttTask = mutation({
       Object.entries(updates).filter(([_, v]) => v !== undefined)
     );
     await ctx.db.patch(taskId, { ...cleanUpdates, isManuallyEdited: true });
+  },
+});
+
+// 그래프/차트 추가
+export const addGraphToTask = mutation({
+  args: {
+    taskId: v.id("ganttTasks"),
+    title: v.string(),
+    type: v.string(), // 'line' | 'bar' | 'area' | 'pie'
+    description: v.optional(v.string()),
+    imageUrl: v.optional(v.string()),
+    data: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task not found");
+
+    const graphId = `graph-${Date.now()}`;
+    const newGraph = {
+      id: graphId,
+      title: args.title,
+      type: args.type,
+      description: args.description,
+      imageUrl: args.imageUrl,
+      data: args.data,
+      createdAt: Date.now(),
+    };
+
+    const graphs = task.graphs || [];
+    graphs.push(newGraph);
+
+    await ctx.db.patch(args.taskId, { graphs });
+  },
+});
+
+// 그래프 제거
+export const removeGraphFromTask = mutation({
+  args: {
+    taskId: v.id("ganttTasks"),
+    graphId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const task = await ctx.db.get(args.taskId);
+    if (!task) throw new Error("Task not found");
+
+    const graphs = (task.graphs || []).filter((g: any) => g.id !== args.graphId);
+    await ctx.db.patch(args.taskId, { graphs });
+  },
+});
+
+// 그래프 업데이트
+export const updateGraph = mutation({
+  args: {
+    taskId: v.id("ganttTasks"),
+    graphId: v.string(),
+    title: v.optional(v.string()),
+    type: v.optional(v.string()),
+    description: v.optional(v.string()),
+    imageUrl: v.optional(v.string()),
+    data: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { taskId, graphId, ...updates } = args;
+    const task = await ctx.db.get(taskId);
+    if (!task) throw new Error("Task not found");
+
+    const graphs = (task.graphs || []).map((g: any) => {
+      if (g.id === graphId) {
+        return {
+          ...g,
+          ...Object.fromEntries(
+            Object.entries(updates).filter(([_, v]) => v !== undefined)
+          ),
+        };
+      }
+      return g;
+    });
+
+    await ctx.db.patch(taskId, { graphs });
   },
 });

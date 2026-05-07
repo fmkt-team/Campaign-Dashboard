@@ -1,0 +1,22 @@
+
+> campaign-dashboard@0.1.0 dev
+> next dev
+
+   ▲ Next.js 15.1.0
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.219.106:3000
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 7.3s
+ ○ Compiling / ...
+ ✓ Compiled / in 11.8s (771 modules)
+ GET / 200 in 12633ms
+ ✓ Compiled in 1053ms (383 modules)
+ ○ Compiling /_not-found ...
+ ✓ Compiled /_not-found in 1831ms (761 modules)
+ GET /campaigns 404 in 2202ms
+ GET / 200 in 144ms
+ ✓ Compiled in 813ms (386 modules)
+ GET / 200 in 55ms
+[?25h

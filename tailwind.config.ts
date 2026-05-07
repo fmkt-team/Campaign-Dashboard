@@ -18,7 +18,12 @@ const config = {
       },
     },
     extend: {
+      fontFamily: {
+        sans: ['FursysSans', 'FursysHangul', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+      },
       colors: {
+        'fursys-red':   '#E30613',
+        'fursys-black': '#0d1012',
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",

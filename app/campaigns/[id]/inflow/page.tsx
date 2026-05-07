@@ -1,6 +1,8 @@
 "use client";
 
-import { use, useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import { useParams } from "next/navigation";
+import { useRefresh } from "@/lib/refresh-context";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -23,9 +25,13 @@ function processNumber(val: string) {
   return isNaN(num) ? 0 : num;
 }
 
-export default function InflowPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function InflowPage() {
+  const params = useParams();
+  const id = params.id as string;
   const campaignId = id as Id<"campaigns">;
+
+  const { refreshTrigger } = useRefresh();
+  const [lastRefresh, setLastRefresh] = useState(0);
 
   const traffic = useQuery(api.inflow.getTrafficWeekly, { campaignId }) ?? [];
   const syncTraffic = useMutation(api.inflow.syncTrafficWeekly);
@@ -47,6 +53,14 @@ export default function InflowPage({ params }: { params: Promise<{ id: string }>
     window.addEventListener("paste", handler);
     return () => window.removeEventListener("paste", handler);
   }, []);
+
+  // 새로고침 컨텍스트 리스너
+  useEffect(() => {
+    if (refreshTrigger !== lastRefresh) {
+      setLastRefresh(refreshTrigger);
+      // Show a brief notification or update status
+    }
+  }, [refreshTrigger, lastRefresh]);
 
   const handleApplyPaste = async () => {
     if (!pastedData) return;

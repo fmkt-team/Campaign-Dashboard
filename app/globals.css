@@ -1,34 +1,61 @@
+/* ── Fursys Brand Fonts ─────────────────────────────────────── */
+@font-face {
+  font-family: 'FursysSans';
+  src: url('/fonts/FursysSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'FursysSans';
+  src: url('/fonts/FursysSans-Medium.woff2') format('woff2');
+  font-weight: 500 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'FursysHangul';
+  src: url('/fonts/FursysHangul-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'FursysHangul';
+  src: url('/fonts/FursysHangul-Medium.woff2') format('woff2');
+  font-weight: 500 700;
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    --background: 0 0% 98%;
-    --foreground: 0 0% 12%;
+    /* Fursys Brand: Red #E30613, Black #0d1012 */
+    --background: 0 0% 97%;
+    --foreground: 210 10% 5%;
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 12%;
+    --card-foreground: 210 10% 5%;
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 12%;
-    --primary: 234 89% 56%;
+    --popover-foreground: 210 10% 5%;
+    --primary: 357 96% 47%;          /* Fursys Red #E30613 */
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 14% 96%;
-    --secondary-foreground: 0 0% 12%;
-    --muted: 220 14% 96%;
+    --secondary: 220 14% 95%;
+    --secondary-foreground: 210 10% 5%;
+    --muted: 220 14% 95%;
     --muted-foreground: 0 0% 45%;
-    --accent: 220 14% 96%;
-    --accent-foreground: 0 0% 12%;
-    --destructive: 0 84% 60%;
+    --accent: 357 96% 47%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 357 96% 47%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 13% 91%;
-    --input: 220 13% 91%;
-    --ring: 234 89% 56%;
+    --border: 220 13% 90%;
+    --input: 220 13% 90%;
+    --ring: 357 96% 47%;
     --radius: 0.625rem;
-    --chart-1: 234 89% 56%;
-    --chart-2: 160 60% 45%;
+    --chart-1: 357 96% 47%;          /* Fursys Red */
+    --chart-2: 210 10% 20%;          /* Fursys Dark */
     --chart-3: 30 80% 55%;
-    --chart-4: 280 65% 60%;
-    --chart-5: 340 75% 55%;
+    --chart-4: 160 60% 42%;
+    --chart-5: 280 65% 58%;
   }
 }
 
@@ -37,8 +64,9 @@
     border-color: hsl(var(--border));
   }
   body {
-    @apply text-foreground font-sans;
-    background: #F8F9FA;
-    color: #1a1a1a;
+    @apply text-foreground;
+    font-family: 'FursysSans', 'FursysHangul', ui-sans-serif, system-ui, sans-serif;
+    background: #F5F5F5;
+    color: #0d1012;
   }
 }

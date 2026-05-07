@@ -1,14 +1,15 @@
 "use client";
 
+import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { GlassCard } from "@/components/glass-card";
 import { KpiCard } from "@/components/kpi-card";
-import { use } from "react";
 
-export default function ViewerDashboard({ params }: { params: Promise<{ token: string }> }) {
-  const resolvedParams = use(params);
-  const validation = useQuery(api.shareLinks.validateToken, { token: resolvedParams.token });
+export default function ViewerDashboard() {
+  const params = useParams();
+  const token = params.token as string;
+  const validation = useQuery(api.shareLinks.validateToken, { token });
 
   if (validation === undefined) {
     return <div className="min-h-screen flex items-center justify-center text-white/50">Loading Dashboard...</div>;

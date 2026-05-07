@@ -62,6 +62,8 @@ export default defineSchema({
     vtr: v.number(),
     date: v.string(),
     recordedAt: v.number(),
+    // 시트에서 감지된 추가 컬럼 데이터 (JSON 문자열로 저장, key: 컬럼명, value: 숫자)
+    extraData: v.optional(v.string()),
   }).index("by_campaign", ["campaignId"]),
 
   youtubeVideos: defineTable({
@@ -98,12 +100,33 @@ export default defineSchema({
     category: v.string(),           // 대분류 (A열)
     subTask: v.string(),            // 업무명 (C열)
     assignee: v.string(),           // 담당자 (E열)
-    startDate: v.string(),          // 시작일 YYYY-MM-DD
-    endDate: v.string(),            // 종료일 YYYY-MM-DD
+    startDate: v.string(),          // 시작일 YYYY-MM-DD (기본 활동)
+    endDate: v.string(),            // 종료일 YYYY-MM-DD (기본 활동)
     progress: v.number(),           // 진척도 0~100
     sortOrder: v.number(),          // 표시 순서
     color: v.string(),              // 막대 색상
     isManuallyEdited: v.boolean(),  // 수기 수정 여부
+    note: v.optional(v.string()),   // 추가 메모/텍스트
+    barLabel: v.optional(v.string()), // 바에 표시할 텍스트
+    // 추가 활동들 (다중 활동 지원)
+    activities: v.optional(v.array(v.object({
+      id: v.string(),               // 고유 ID
+      name: v.string(),             // 활동명
+      startDate: v.string(),        // 시작일
+      endDate: v.string(),          // 종료일
+      progress: v.number(),         // 진척도
+      color: v.optional(v.string()), // 활동 색상 (선택)
+    }))),
+    // 그래프/차트 데이터 (여러 개 추가 가능)
+    graphs: v.optional(v.array(v.object({
+      id: v.string(),               // 고유 ID
+      title: v.string(),            // 그래프 제목
+      type: v.string(),             // 'line' | 'bar' | 'area' | 'pie'
+      description: v.optional(v.string()), // 그래프 설명
+      imageUrl: v.optional(v.string()), // 이미지 URL (첨부된 이미지)
+      data: v.optional(v.string()), // JSON 문자열로 저장된 차트 데이터
+      createdAt: v.number(),
+    })))
   }).index("by_campaign", ["campaignId"]),
 
   campaignPhases: defineTable({
@@ -122,8 +145,8 @@ export default defineSchema({
 
   viralContents: defineTable({
     campaignId: v.id("campaigns"),
-    platform: v.string(), // e.g., "Instagram", "YouTube", "Blog"
-    creator: v.string(),  // e.g., 크리에이터 채널명
+    platform: v.string(),
+    creator: v.string(),
     title: v.string(),
     date: v.string(),
     views: v.number(),

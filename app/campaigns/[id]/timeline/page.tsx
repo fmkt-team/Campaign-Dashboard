@@ -1,6 +1,8 @@
 "use client";
 
-import React, { use, useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useParams } from "next/navigation";
+import { useRefresh } from "@/lib/refresh-context";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -43,6 +45,10 @@ const pickColor = (cat: string) => {
   for (const [k, v] of COLOR_MAP) if (cat.includes(k)) return v;
   const h = [...cat].reduce((a, c) => a * 31 + c.charCodeAt(0), 0);
   return PALETTE[Math.abs(h) % PALETTE.length];
+};
+const getNewColor = (newCat: string, oldColor: string) => {
+  for (const [k, v] of COLOR_MAP) if (newCat.includes(k)) return v;
+  return oldColor;
 };
 
 // ─── 붙여넣기 파서 ───────────────────────────────────────────────────────────
@@ -99,11 +105,21 @@ function parsePasteText(text: string, year: string): PastedRow[] {
 }
 
 // ─── 날짜 편집 팝업 ──────────────────────────────────────────────────────────
-function DatePopup({ task, onSave, onClose }: {
-  task: any; onSave: (id: string, s: string, e: string) => void; onClose: () => void;
+function DatePopup({ task, onSave, onClose, onSaveLabel, updateTask }: {
+  task: any; onSave: (id: string, s: string, e: string) => void; onClose: () => void; onSaveLabel?: (id: string, label: string) => void; updateTask?: any;
 }) {
   const [s, setS] = useState(task.startDate || "");
   const [e, setE] = useState(task.endDate   || "");
+  const [label, setLabel] = useState(task.barLabel || "");
+
+  const handleSave = async () => {
+    onSave(task._id, s, e);
+    if (label !== task.barLabel && updateTask) {
+      await updateTask({ taskId: task._id, barLabel: label });
+    }
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm"
       onClick={onClose}>
@@ -114,6 +130,12 @@ function DatePopup({ task, onSave, onClose }: {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 ml-2 shrink-0"><X className="w-4 h-4" /></button>
         </div>
         <div className="space-y-3">
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">텍스트</label>
+            <input type="text" value={label} onChange={v => setLabel(v.target.value)}
+              placeholder="바에 표시할 텍스트 (선택)"
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-gray-400" />
+          </div>
           <div>
             <label className="text-xs text-gray-500 block mb-1">시작일</label>
             <input type="date" value={s} onChange={v => setS(v.target.value)}
@@ -127,8 +149,60 @@ function DatePopup({ task, onSave, onClose }: {
         </div>
         <div className="flex gap-2 mt-4">
           <Button variant="ghost" size="sm" className="flex-1 text-gray-500 hover:bg-gray-50" onClick={onClose}>취소</Button>
-          <Button size="sm" className="flex-1 bg-gray-900 text-gray-900 hover:bg-gray-800"
-            onClick={() => { onSave(task._id, s, e); onClose(); }}>
+          <Button size="sm" className="flex-1 bg-gray-900 text-white hover:bg-gray-800"
+            onClick={handleSave}>
+            <Check className="w-3.5 h-3.5 mr-1" />저장
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 활동 편집 팝업 ──────────────────────────────────────────────────────────
+function ActivityEditPopup({ activity, actIdx, onSave, onClose }: {
+  activity: any; actIdx: number; onSave: (actIdx: number, name: string, s: string, e: string) => void; onClose: () => void;
+}) {
+  const [name, setName] = useState(activity.name || "");
+  const [s, setS] = useState(activity.startDate || "");
+  const [e, setE] = useState(activity.endDate || "");
+
+  const handleSave = () => {
+    onSave(actIdx, name, s, e);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm"
+      onClick={onClose}>
+      <div className="bg-white border border-gray-200 rounded-2xl p-6 w-72 shadow-xl"
+        onClick={ev => ev.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-gray-900 text-sm font-semibold truncate">활동 편집</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 ml-2 shrink-0"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">활동명</label>
+            <input type="text" value={name} onChange={v => setName(v.target.value)}
+              placeholder="활동명"
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-gray-400" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">시작일</label>
+            <input type="date" value={s} onChange={v => setS(v.target.value)}
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-gray-400" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">종료일</label>
+            <input type="date" value={e} onChange={v => setE(v.target.value)}
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-gray-400" />
+          </div>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <Button variant="ghost" size="sm" className="flex-1 text-gray-500 hover:bg-gray-50" onClick={onClose}>취소</Button>
+          <Button size="sm" className="flex-1 bg-gray-900 text-white hover:bg-gray-800"
+            onClick={handleSave}>
             <Check className="w-3.5 h-3.5 mr-1" />저장
           </Button>
         </div>
@@ -138,12 +212,14 @@ function DatePopup({ task, onSave, onClose }: {
 }
 
 // ─── 드래그 간트 바 ──────────────────────────────────────────────────────────
-function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, onSave, onClickEdit, onClear }: {
+function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, onSave, onClickEdit, onClear, onSaveLabel, isDraggingRef }: {
   task: any; chartStartTs: number; totalDays: number; containerW: number;
   rowH: number; barColor: string;
   onSave: (id: string, s: string, e: string) => void;
   onClickEdit: (task: any) => void;
   onClear: (id: string) => void;
+  onSaveLabel?: (id: string, label: string) => void;
+  isDraggingRef?: React.MutableRefObject<boolean>;
 }) {
   const pxDay = containerW / totalDays;
   const [ls, setLs] = useState(task.startDate);
@@ -157,6 +233,7 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
 
   const drag = useCallback((e: React.MouseEvent, mode: "move"|"left"|"right") => {
     e.preventDefault(); e.stopPropagation();
+    if (isDraggingRef) isDraggingRef.current = true;
     const ox = e.clientX, os = toTs(lsRef.current), oe = toTs(leRef.current);
     let moved = false;
 
@@ -171,35 +248,40 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
     const up = () => {
       if (moved) onSave(task._id, lsRef.current, leRef.current);
       else if (mode === "move") onClickEdit(task);
+      if (isDraggingRef) {
+        setTimeout(() => { isDraggingRef.current = false; }, 100);
+      }
       window.removeEventListener("mousemove", mv);
       window.removeEventListener("mouseup", up);
     };
     window.addEventListener("mousemove", mv);
     window.addEventListener("mouseup", up);
-  }, [pxDay, task, onSave, onClickEdit]);
+  }, [pxDay, task, onSave, onClickEdit, isDraggingRef]);
 
   return (
-    <div className="absolute top-1/2 -translate-y-1/2 rounded-lg cursor-grab select-none group/b"
+    <div className="absolute top-1/2 -translate-y-1/2 rounded-lg cursor-grab select-none group/b pointer-events-auto z-10 hover:z-[60]"
       style={{ left: leftPx, width: widthPx, height: rowH - 10, backgroundColor: barColor }}
       onMouseDown={e => drag(e, "move")}
     >
+      {/* 툴팁 */}
+      <span className="absolute z-50 invisible opacity-0 group-hover/b:visible group-hover/b:opacity-100 bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-md whitespace-nowrap transition-all pointer-events-none bottom-full mb-1 left-1/2 -translate-x-1/2">
+        {task.barLabel ? `${task.barLabel} | ` : ""}{fmtMD(ls)}{ls !== le ? `~${fmtMD(le)}` : ""}
+        <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900" />
+      </span>
+
       <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90"
         onMouseDown={e => drag(e, "left")}><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
 
-      {/* 날짜 텍스트 - 바 너비가 충분하면 내부, 좁으면 외부(오른쪽)에 표시 */}
-      {widthPx >= 64 ? (
-        <div className="absolute inset-0 flex items-center justify-center px-3 pointer-events-none">
-          <span className="text-xs text-gray-900 font-medium truncate">{fmtMD(ls)} ~ {fmtMD(le)}</span>
-        </div>
-      ) : (
-        <div className="absolute top-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap"
-          style={{ left: widthPx + 6 }}>
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-            style={{ backgroundColor: barColor + "dd", color: "white" }}>
-            {fmtMD(ls)}{ls !== le ? ` ~ ${fmtMD(le)}` : ""}
-          </span>
-        </div>
-      )}
+      {/* 바 텍스트/날짜 - 클릭하면 팝업 편집 */}
+      <div className="absolute inset-0 flex items-center justify-center px-2 cursor-pointer"
+        onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+        onClick={(e) => { e.stopPropagation(); onClickEdit(task); }}>
+        {task.barLabel ? (
+          <span className="text-xs text-gray-900 font-semibold truncate">{task.barLabel} | {fmtMD(ls)}{ls !== le ? `~${fmtMD(le)}` : ""}</span>
+        ) : (
+          <span className="text-[10px] text-gray-900/60 font-medium">{fmtMD(ls)}{ls !== le ? ` ~ ${fmtMD(le)}` : ""}</span>
+        )}
+      </div>
 
       {/* 진척도 바 */}
       {task.progress > 0 && (
@@ -222,7 +304,7 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
 
 // ─── 인라인 편집 ─────────────────────────────────────────────────────────────
 function InlineEdit({ value, onSave, onEnter, placeholder, className }: {
-  value: string; onSave: (v: string) => void; onEnter?: () => void;
+  value: string; onSave: (v: string) => void; onEnter?: (v: string) => void;
   placeholder?: string; className?: string;
 }) {
   const [editing, setEditing] = useState(false);
@@ -232,7 +314,7 @@ function InlineEdit({ value, onSave, onEnter, placeholder, className }: {
   const commit = () => { onSave(draft); setEditing(false); };
   
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") { commit(); onEnter?.(); }
+    if (e.key === "Enter") { commit(); onEnter?.(draft); }
     if (e.key === "Escape") setEditing(false);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -390,7 +472,7 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
         </Button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {kpiTargets.map((kpi: any, idx: number) => {
+        {kpiTargets.slice(0, 3).map((kpi: any, idx: number) => {
           const current = getKpiCurrent(kpi);
           const pct = kpi.target > 0 ? Math.min(100, (current / kpi.target) * 100) : 0;
           const colorClass = pct >= 100 ? "text-green-500" : pct >= 60 ? "text-indigo-500" : pct >= 30 ? "text-amber-500" : "text-gray-400";
@@ -462,18 +544,433 @@ const ROW_H   = 44;
 const CAT_H   = 34;
 const LABEL_W = 340;
 
-export default function TimelinePage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+// ─── 그래프 관리 모달 ──────────────────────────────────────────────────────────
+function GraphManagerModal({
+  taskId,
+  task,
+  onClose,
+  onAddGraph
+}: {
+  taskId: string;
+  task: any;
+  onClose: () => void;
+  onAddGraph: (title: string, type: string, description: string) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState<"line" | "bar" | "area" | "pie">("line");
+  const [description, setDescription] = useState("");
+
+  const handleAdd = async () => {
+    if (!title.trim()) return;
+    await onAddGraph(title, type, description);
+    setTitle("");
+    setType("line");
+    setDescription("");
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white border border-gray-200 rounded-2xl p-6 w-[420px] max-h-[70vh] overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-gray-900 font-bold">그래프 추가</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="space-y-4 mb-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">그래프 제목</label>
+            <input
+              type="text"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="예: 월간 트래픽"
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-gray-400"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">차트 유형</label>
+            <select
+              value={type}
+              onChange={e => setType(e.target.value as any)}
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-gray-400"
+            >
+              <option value="line">라인 차트</option>
+              <option value="bar">바 차트</option>
+              <option value="area">에어리어 차트</option>
+              <option value="pie">파이 차트</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 mb-1.5">설명 (선택)</label>
+            <textarea
+              value={description}
+              onChange={e => setDescription(e.target.value)}
+              placeholder="그래프에 대한 설명..."
+              className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-gray-400 h-20 resize-none"
+            />
+          </div>
+        </div>
+
+        {task?.graphs && task.graphs.length > 0 && (
+          <div className="border-t border-gray-100 pt-4 mb-4">
+            <p className="text-xs font-semibold text-gray-700 mb-3">현재 그래프 ({task.graphs.length})</p>
+            <div className="space-y-2">
+              {task.graphs.map((graph: any) => (
+                <div key={graph.id} className="flex items-start justify-between gap-2 bg-gray-50 p-3 rounded">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900">{graph.title}</p>
+                    <p className="text-xs text-gray-500">{graph.type}</p>
+                    {graph.description && <p className="text-xs text-gray-400 mt-1">{graph.description}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" className="flex-1 text-gray-500" onClick={onClose}>취소</Button>
+          <Button
+            size="sm"
+            className="flex-1 bg-gray-900 text-gray-900 hover:bg-gray-800"
+            onClick={handleAdd}
+            disabled={!title.trim()}
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" />추가
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── 월간 캘린더 뷰 컴포넌트 ─────────────────────────────────────────────────
+function CalendarView({ tasks, chartStart, chartEnd }: {
+  tasks: any[]; chartStart: string; chartEnd: string;
+}) {
+  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
+
+  // 오늘 날짜를 기준으로 초기 월 설정
+  const today = new Date();
+  const [displayYear, setDisplayYear] = useState(today.getFullYear());
+  const [displayMonth, setDisplayMonth] = useState(today.getMonth());
+
+  const allCategories = Array.from(new Set(tasks.map(t => t.category || "미분류")));
+  const categoryColors = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const t of tasks) {
+      const cat = t.category || "미분류";
+      if (!map.has(cat)) {
+        map.set(cat, t.color || pickColor(cat));
+      }
+    }
+    return map;
+  }, [tasks]);
+  const filteredTasks = selectedCategories.size === 0
+    ? tasks
+    : tasks.filter(t => selectedCategories.has(t.category));
+
+  // 현재 표시할 월의 달력 생성
+  const year = displayYear;
+  const month = displayMonth;
+  const monthStr = new Date(year, month).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long' });
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startDayOfWeek = firstDay.getDay();
+
+  const weeks: { date: string; tasks: any[] }[][] = [];
+  let currentWeek: { date: string; tasks: any[] }[] = [];
+
+  for (let i = 0; i < startDayOfWeek; i++) {
+    currentWeek.push({ date: '', tasks: [] });
+  }
+
+  for (let day = 1; day <= lastDay.getDate(); day++) {
+    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dayTasks = filteredTasks.filter(t => {
+      if (!t.startDate || !t.endDate) return false;
+      const tStart = new Date(t.startDate).getTime();
+      const tEnd = new Date(t.endDate).getTime();
+      const dTs = new Date(dateStr).getTime();
+      return tStart <= dTs && dTs <= tEnd;
+    });
+
+    // 활동(activities)도 함께 표시
+    const allItemsForDay = dayTasks.map(t => ({ ...t, isActivity: false }));
+    for (const task of filteredTasks) {
+      if (task.activities) {
+        for (let actIdx = 0; actIdx < task.activities.length; actIdx++) {
+          const activity = task.activities[actIdx];
+          if (!activity.startDate || !activity.endDate) continue;
+          const actStart = new Date(activity.startDate).getTime();
+          const actEnd = new Date(activity.endDate).getTime();
+          const dTs = new Date(dateStr).getTime();
+          if (actStart <= dTs && dTs <= actEnd) {
+            console.log("[CAL] day:", dateStr, "task:", task.subTask, "activity name:", activity.name, "actIdx:", actIdx);
+            allItemsForDay.push({
+              ...activity,
+              parentTask: task,
+              isActivity: true,
+              __calendarKey: `${task._id}-act-${actIdx}`,
+            });
+          }
+        }
+      }
+    }
+
+    currentWeek.push({ date: dateStr, tasks: allItemsForDay });
+
+    if (currentWeek.length === 7) {
+      weeks.push(currentWeek);
+      currentWeek = [];
+    }
+  }
+
+  if (currentWeek.length > 0) {
+    while (currentWeek.length < 7) {
+      currentWeek.push({ date: '', tasks: [] });
+    }
+    weeks.push(currentWeek);
+  }
+
+  const goToPreviousMonth = () => {
+    if (displayMonth === 0) {
+      setDisplayYear(displayYear - 1);
+      setDisplayMonth(11);
+    } else {
+      setDisplayMonth(displayMonth - 1);
+    }
+  };
+
+  const goToNextMonth = () => {
+    if (displayMonth === 11) {
+      setDisplayYear(displayYear + 1);
+      setDisplayMonth(0);
+    } else {
+      setDisplayMonth(displayMonth + 1);
+    }
+  };
+
+  return (
+    <GlassCard className="p-6">
+      {/* 대분류 필터 */}
+      <div className="mb-6 pb-4 border-b border-gray-100">
+        <p className="text-xs font-semibold text-gray-600 mb-3">대분류 필터</p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setSelectedCategories(new Set())}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-all text-white ${
+              selectedCategories.size === 0
+                ? 'opacity-100 bg-gray-600'
+                : 'opacity-40 bg-gray-400'
+            }`}
+          >
+            전체
+          </button>
+          {allCategories.map(cat => (
+            <button
+              key={cat}
+              onClick={() => {
+                const newSet = new Set(selectedCategories);
+                if (newSet.has(cat)) {
+                  newSet.delete(cat);
+                } else {
+                  newSet.add(cat);
+                }
+                setSelectedCategories(newSet);
+              }}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-all text-white ${
+                selectedCategories.size === 0 || selectedCategories.has(cat)
+                  ? 'opacity-100'
+                  : 'opacity-40'
+              }`}
+              style={{
+                backgroundColor: categoryColors.get(cat) || pickColor(cat),
+              }}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 월 이동 */}
+      <div className="border border-gray-100 rounded-lg p-6 bg-white">
+        <div className="flex items-center justify-center gap-3 mb-4">
+          <button
+            onClick={goToPreviousMonth}
+            className="p-1.5 rounded hover:bg-gray-100 transition-colors"
+            title="이전 달"
+          >
+            <ArrowRight className="w-4 h-4 rotate-180" />
+          </button>
+          <h3 className="text-lg font-bold text-gray-900">{monthStr}</h3>
+          <button
+            onClick={goToNextMonth}
+            className="p-1.5 rounded hover:bg-gray-100 transition-colors"
+            title="다음 달"
+          >
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* 요일 헤더 */}
+        <div className="grid grid-cols-7 gap-2 mb-3">
+          {['일', '월', '화', '수', '목', '금', '토'].map(d => (
+            <div key={d} className="text-xs font-semibold text-gray-500 text-center py-2">
+              {d}
+            </div>
+          ))}
+        </div>
+
+        {/* 날짜 그리드 - 주(week) 단위로 렌더링 */}
+        <div className="border border-gray-100 rounded-lg overflow-hidden">
+          {weeks.map((week, wIdx) => {
+            // 이 주(week)에 걸치는 태스크 바 계산
+            const monthStartStr = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+            const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
+            const monthEndStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+
+            const weekBars: { task: any; startCol: number; endCol: number }[] = [];
+
+            // 주의 모든 tasks (main + activities 포함)에서 weekBars 생성
+            const allTasksInWeek = new Map<string, any>();
+            for (const day of week) {
+              for (const task of day.tasks) {
+                if (!task.startDate || !task.endDate) continue;
+                const uniqueId = task.__calendarKey || task._id || task.id || `temp_${Math.random()}`;
+                const key = `${uniqueId}-${task.isActivity ? 'activity' : 'task'}`;
+                if (!allTasksInWeek.has(key)) {
+                  allTasksInWeek.set(key, { ...task, _id: uniqueId, __key: key });
+                }
+              }
+            }
+
+            for (const task of Array.from(allTasksInWeek.values())) {
+              const visStart = task.startDate < monthStartStr ? monthStartStr : task.startDate;
+              const visEnd = task.endDate > monthEndStr ? monthEndStr : task.endDate;
+              if (visStart > visEnd) continue;
+
+              let startCol = -1, endCol = -1;
+              for (let i = 0; i < 7; i++) {
+                const d = week[i].date;
+                if (!d) continue;
+                if (d >= visStart && startCol === -1) startCol = i;
+                if (d <= visEnd) endCol = i;
+              }
+              if (startCol === -1 && endCol !== -1) {
+                for (let i = 0; i < 7; i++) {
+                  if (week[i].date) { startCol = i; break; }
+                }
+              }
+
+              if (startCol !== -1 && endCol !== -1 && startCol <= endCol) {
+                weekBars.push({ task, startCol, endCol });
+              }
+            }
+
+            const todayStr = new Date().toISOString().split('T')[0];
+
+            return (
+              <div key={wIdx} className={wIdx > 0 ? 'border-t border-gray-100' : ''}>
+                {/* 날짜 숫자 행 */}
+                <div className="grid grid-cols-7">
+                  {week.map((day, dIdx) => {
+                    const isToday = day.date === todayStr;
+                    const isWeekend = dIdx === 0 || dIdx === 6;
+                    return (
+                      <div
+                        key={dIdx}
+                        className={`p-2 min-h-[36px] ${dIdx > 0 ? 'border-l border-gray-100' : ''} ${!day.date ? 'bg-gray-50' : ''}`}
+                      >
+                        {day.date && (
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                            isToday
+                              ? 'bg-blue-500 text-white'
+                              : isWeekend
+                                ? 'text-gray-400'
+                                : 'text-gray-700'
+                          }`}>
+                            {new Date(day.date + 'T00:00:00').getDate()}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* 이 주의 태스크 바들 */}
+                {weekBars.length > 0 && (
+                  <div className="relative" style={{ height: weekBars.length * 24 + 4 }}>
+                    {weekBars.map((bar, barIdx) => {
+                      const colW = 100 / 7;
+                      const isActivity = bar.task.isActivity;
+                      const displayText = isActivity
+                        ? (bar.task.name ? `${bar.task.parentTask?.subTask || ''} | ${bar.task.name}` : `${bar.task.parentTask?.subTask || ''}`)
+                        : (bar.task.barLabel ? `${bar.task.subTask} | ${bar.task.barLabel}` : bar.task.subTask);
+                      const tooltipText = isActivity
+                        ? (bar.task.name 
+                            ? `${bar.task.parentTask?.subTask || ''} | ${bar.task.name} (${bar.task.startDate} ~ ${bar.task.endDate})`
+                            : `${bar.task.parentTask?.subTask || ''} (${bar.task.startDate} ~ ${bar.task.endDate})`)
+                        : `${bar.task.barLabel || bar.task.subTask} (${bar.task.startDate} ~ ${bar.task.endDate})`;
+                      return (
+                        <div
+                          key={`${bar.task.__key}-${barIdx}`}
+                          className="absolute rounded px-2 flex items-center text-[10px] text-white font-medium group z-10 hover:z-[60]"
+                          style={{
+                            top: barIdx * 24 + 2,
+                            left: `calc(${bar.startCol * colW}% + 2px)`,
+                            width: `calc(${(bar.endCol - bar.startCol + 1) * colW}% - 4px)`,
+                            height: 20,
+                            backgroundColor: isActivity
+                              ? (bar.task.color || categoryColors.get(bar.task.parentTask?.category || '미분류') || pickColor(bar.task.parentTask?.category || ''))
+                              : (categoryColors.get(bar.task.category || '미분류') || pickColor(bar.task.category || '')),
+                          }}
+                        >
+                          <span className="truncate block w-full">{displayText}</span>
+                          <span className="absolute z-[99] invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-900 text-white text-xs px-2 py-1 rounded shadow-md whitespace-nowrap transition-all pointer-events-none bottom-full mb-1 left-1/2 -translate-x-1/2">
+                            {tooltipText}
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900" />
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+export default function TimelinePage() {
+  const params = useParams();
+  const id = params.id as string;
   const campaignId = id as Id<"campaigns">;
+
+  const { refreshTrigger } = useRefresh();
+  const [lastRefresh, setLastRefresh] = useState(0);
 
   const campaign   = useQuery(api.campaigns.getCampaignById, { id: campaignId });
   const ganttTasks = useQuery(api.gantt.getGanttTasks, { campaignId });
   const syncGantt  = useMutation(api.gantt.syncGanttFromSheet);
   const updateTask = useMutation(api.gantt.updateGanttTask);
+  const insertTask = useMutation(api.gantt.insertGanttTask);
+  const deleteCategoryMutation = useMutation(api.gantt.deleteGanttCategory);
+  const addGraph   = useMutation(api.gantt.addGraphToTask);
+  const removeGraph = useMutation(api.gantt.removeGraphFromTask);
 
   const chartRef = useRef<HTMLDivElement>(null);
+  const isDraggingRef = useRef(false);
   const [chartW, setChartW] = useState(1200);
   const [editBar, setEditBar] = useState<any | null>(null);
+  const [editActivity, setEditActivity] = useState<any | null>(null);
+  const [editActivityIdx, setEditActivityIdx] = useState<number>(0);
   const [pasteRows, setPasteRows] = useState<PastedRow[] | null>(null);
 
   // 월 연장 상태 - localStorage에 저장하여 탭 이동 후에도 유지
@@ -489,6 +986,14 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // 새로고침 컨텍스트 리스너
+  useEffect(() => {
+    if (refreshTrigger !== lastRefresh) {
+      setLastRefresh(refreshTrigger);
+      // Show a brief notification or update status
+    }
+  }, [refreshTrigger, lastRefresh]);
 
   const setExtraStartMonths = (updater: number | ((prev: number) => number)) => {
     setExtraStartMonthsRaw(prev => {
@@ -507,6 +1012,15 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
 
   const [dragItem, setDragItem] = useState<{type: "category"|"task", id: string}|null>(null);
   const [dragOverItem, setDragOverItem] = useState<{type: "category"|"task", id: string}|null>(null);
+
+  // 채널별 업무 타임라인 뷰 모드
+  const [timelineViewMode, setTimelineViewMode] = useState<"gantt" | "calendar">("gantt");
+
+  // 그래프 관리 모달 상태
+  const [graphModalTaskId, setGraphModalTaskId] = useState<string | null>(null);
+  const [newGraphTitle, setNewGraphTitle] = useState("");
+  const [newGraphType, setNewGraphType] = useState<"line" | "bar" | "area" | "pie">("line");
+  const [newGraphDescription, setNewGraphDescription] = useState("");
 
   // 캠페인 단계 (Phases)
   const phases = useQuery(api.phases.getPhases, { campaignId });
@@ -609,7 +1123,7 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
   const seen = new Map<string, typeof allTasks>();
   for (const t of allTasks) {
     const key = t.category || "미분류";
-    if (!seen.has(key)) { seen.set(key, []); grouped.push({ category: key, color: pickColor(key), tasks: seen.get(key)! }); }
+    if (!seen.has(key)) { seen.set(key, []); grouped.push({ category: key, color: t.color || pickColor(key), tasks: seen.get(key)! }); }
     seen.get(key)!.push(t);
   }
 
@@ -623,15 +1137,36 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
 
   // 새 소분류 추가 (특정 카테고리 맨 아래)
   const addSubTask = async (category: string) => {
-    const newTask = { category, subTask: "", assignee: "", progress: 0, startDate: chartStart, endDate: chartStart, sortOrder: totalTasks, color: pickColor(category) };
-    await syncGantt({ campaignId, tasks: [...serialize(allTasks), newTask] });
+    await insertTask({
+      campaignId, category, subTask: "", assignee: "", progress: 0,
+      startDate: "", endDate: "", sortOrder: totalTasks, color: pickColor(category)
+    });
+    setTimeout(() => {
+      const triggers = Array.from(document.querySelectorAll(`[data-task-cat="${category}"] .inline-edit-trigger`)) as HTMLElement[];
+      if (triggers.length > 0) {
+        triggers[triggers.length - 1].click();
+      }
+    }, 500);
   };
 
   // 새 대분류 추가
   const addCategory = async () => {
-    const category = "새 대분류";
-    const newTask = { category, subTask: "새 업무", assignee: "", progress: 0, startDate: chartStart, endDate: chartStart, sortOrder: totalTasks, color: pickColor(category) };
-    await syncGantt({ campaignId, tasks: [...serialize(allTasks), newTask] });
+    let category = "새 대분류";
+    if (grouped.some(g => g.category === category)) {
+      category = "새 대분류 " + Math.floor(Math.random() * 100);
+    }
+    const usedColors = new Set(grouped.map(g => g.color));
+    const available = PALETTE.filter(c => !usedColors.has(c));
+    const newColor = available.length > 0 ? available[Math.floor(Math.random() * available.length)] : PALETTE[Math.floor(Math.random() * PALETTE.length)];
+
+    await insertTask({
+      campaignId, category, subTask: "", assignee: "", progress: 0,
+      startDate: "", endDate: "", sortOrder: totalTasks, color: newColor
+    });
+    setTimeout(() => {
+      const el = document.querySelector(`[data-cat-group="${category}"] .inline-edit-trigger`) as HTMLElement;
+      if (el) el.click();
+    }, 500);
   };
 
   // 막대 저장
@@ -639,9 +1174,60 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
     await updateTask({ taskId: taskId as Id<"ganttTasks">, startDate: s, endDate: e });
   }, [updateTask]);
 
+  const handleSaveBarLabel = useCallback(async (taskId: string, label: string) => {
+    await updateTask({ taskId: taskId as Id<"ganttTasks">, barLabel: label });
+  }, [updateTask]);
+
   // 막대 날짜 삭제 (날짜 비우기)
   const handleBarClear = async (taskId: string) => {
     await updateTask({ taskId: taskId as Id<"ganttTasks">, startDate: "", endDate: "" });
+  };
+
+  // 활동 추가 (클릭 위치 기반)
+  const handleAddActivity = async (taskId: Id<"ganttTasks">, clickX?: number, containerEl?: HTMLElement) => {
+    const task = allTasks.find(t => t._id === taskId);
+    if (!task) return;
+
+    let startDate = chartStart;
+    if (clickX !== undefined && containerEl) {
+      const rect = containerEl.getBoundingClientRect();
+      const relativeX = clickX - rect.left;
+      const pct = Math.max(0, Math.min(100, (relativeX / rect.width) * 100));
+      const offset = Math.floor((pct / 100) * totalDays);
+      startDate = toStr(toTs(chartStart) + offset * MS_DAY);
+    }
+
+    const newActivity = {
+      id: `activity_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      name: "",
+      startDate: startDate,
+      endDate: toStr(toTs(startDate) + 6 * MS_DAY),
+      progress: 0,
+      color: task.color,
+    };
+    const activities = [...(task.activities || []), newActivity];
+    await updateTask({ taskId, activities });
+  };
+
+  // 활동 저장
+  const handleSaveActivity = async (actIdx: number, name: string, startDate: string, endDate: string) => {
+    const taskId = editActivity?.taskId;
+    const task = allTasks.find(t => t._id === taskId);
+    console.log("[SAVE] actIdx:", actIdx, "taskId:", taskId, "task found:", !!task, "activities count:", task?.activities?.length);
+    if (!task) return;
+    const activities = (task.activities || []).map((a, i) =>
+      i === actIdx ? { ...a, name, startDate, endDate } : a
+    );
+    console.log("[SAVE] updated activities:", JSON.stringify(activities));
+    await updateTask({ taskId: task._id, activities });
+  };
+
+  // 활동 삭제
+  const handleRemoveActivity = async (taskId: Id<"ganttTasks">, activityIdx: number) => {
+    const task = allTasks.find(t => t._id === taskId);
+    if (!task) return;
+    const activities = (task.activities || []).filter((_a, i) => i !== activityIdx);
+    await updateTask({ taskId, activities });
   };
 
   // 빈 행에서 클릭 위치로 날짜 계산 후 7일짜리 막대 생성
@@ -663,8 +1249,7 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
   // 대분류 전체 삭제
   const handleDeleteCategory = async (cat: string) => {
     if (!confirm(`'${cat}' 대분류와 하위 ${allTasks.filter(t => t.category === cat).length}개 업무를 모두 삭제하시겠습니까?`)) return;
-    const remaining = serialize(allTasks.filter(t => t.category !== cat));
-    await syncGantt({ campaignId, tasks: remaining });
+    await deleteCategoryMutation({ campaignId, category: cat });
   };
 
   // 대분류 상대 위치 추가
@@ -677,9 +1262,13 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
     if (newGrouped.some(g => g.category === newCat)) {
       newCat = "새 대분류 " + Math.floor(Math.random()*100);
     }
-    const newTask = { category: newCat, subTask: "새 업무", assignee: "", progress: 0, startDate: chartStart, endDate: chartStart, sortOrder: 0, color: pickColor(newCat), _id: "temp" as any } as any;
+    const usedColors = new Set(grouped.map(g => g.color));
+    const available = PALETTE.filter(c => !usedColors.has(c));
+    const newColor = available.length > 0 ? available[Math.floor(Math.random() * available.length)] : PALETTE[Math.floor(Math.random() * PALETTE.length)];
+
+    const newTask = { category: newCat, subTask: "", assignee: "", progress: 0, startDate: chartStart, endDate: chartStart, sortOrder: 0, color: newColor, _id: "temp" as any } as any;
     
-    newGrouped.splice(insertIdx, 0, { category: newCat, color: pickColor(newCat), tasks: [newTask] });
+    newGrouped.splice(insertIdx, 0, { category: newCat, color: newColor, tasks: [newTask] });
     
     const flat = newGrouped.flatMap(g => g.tasks).map((t, i) => ({
       category: t.category, subTask: t.subTask, assignee: t.assignee ?? "", progress: t.progress, 
@@ -832,10 +1421,17 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
           {(phases ?? []).map((phase, idx) => (
             <React.Fragment key={phase._id}>
               {/* 단계 카드 */}
-              <GlassCard className="min-w-[280px] p-6 relative group border border-white/10">
+              <GlassCard
+                className="min-w-[280px] p-6 relative group border transition-all"
+                style={{
+                  backgroundColor: (phase.color || "#3b82f6") + "15",
+                  borderColor: (phase.color || "#3b82f6") + "40"
+                }}
+              >
                 <button
                   onClick={() => deletePhase({ id: phase._id })}
-                  className="absolute top-3 right-3 text-gray-900/30 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute top-3 right-3 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  style={{ color: phase.color + "60" }}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -843,22 +1439,24 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
                   <InlineEdit
                     value={phase.title}
                     placeholder="Phase 1"
-                    onSave={v => upsertPhase({ 
-                      id: phase._id, campaignId: phase.campaignId, title: v, 
-                      subtitle: phase.subtitle, sortOrder: phase.sortOrder, 
-                      color: phase.color, items: phase.items 
+                    onSave={v => upsertPhase({
+                      id: phase._id, campaignId: phase.campaignId, title: v,
+                      subtitle: phase.subtitle, sortOrder: phase.sortOrder,
+                      color: phase.color, items: phase.items
                     })}
-                    className="text-sm tracking-widest text-gray-900/60 uppercase font-mono mb-1 text-center"
+                    className="text-sm tracking-widest uppercase font-mono mb-1 text-center"
+                    style={{ color: phase.color + "80" }}
                   />
                   <InlineEdit
                     value={phase.subtitle}
                     placeholder="목표 입력"
-                    onSave={v => upsertPhase({ 
-                      id: phase._id, campaignId: phase.campaignId, title: phase.title, 
-                      subtitle: v, sortOrder: phase.sortOrder, 
-                      color: phase.color, items: phase.items 
+                    onSave={v => upsertPhase({
+                      id: phase._id, campaignId: phase.campaignId, title: phase.title,
+                      subtitle: v, sortOrder: phase.sortOrder,
+                      color: phase.color, items: phase.items
                     })}
-                    className="text-lg font-bold text-gray-900 text-center"
+                    className="text-lg font-bold text-center"
+                    style={{ color: phase.color }}
                   />
                 </div>
 
@@ -867,10 +1465,10 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
                     <div
                       key={iOffset}
                       className={cn(
-                        "p-4 rounded-xl border relative group/item transition-colors",
+                        "p-4 rounded-xl border relative group/item transition-colors shadow-md",
                         item.isHighlighted
                           ? "bg-indigo-500/10 border-indigo-500/30"
-                          : "bg-white/5 border-white/10"
+                          : "bg-gray-50 border-gray-200"
                       )}
                     >
                       <button
@@ -972,18 +1570,43 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
           <div>
             <h2 className="text-lg font-bold text-gray-900">채널별 업무 타임라인</h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              셀 클릭으로 편집 · Enter로 다음 행 추가 · 막대 드래그로 기간 조절 · 
+              셀 클릭으로 편집 · Enter로 다음 행 추가 · 막대 드래그로 기간 조절 ·
               <kbd className="ml-1 bg-gray-100 px-1.5 py-0.5 rounded text-gray-500 font-mono">Ctrl+V</kbd>로 스프레드시트 붙여넣기
             </p>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+              <button
+                onClick={() => setTimelineViewMode("gantt")}
+                className={cn(
+                  "px-3 py-1.5 rounded text-xs font-medium transition-all",
+                  timelineViewMode === "gantt"
+                    ? "bg-gray-900 text-white"
+                    : "text-gray-600 hover:bg-white"
+                )}
+              >
+                Table
+              </button>
+              <button
+                onClick={() => setTimelineViewMode("calendar")}
+                className={cn(
+                  "px-3 py-1.5 rounded text-xs font-medium transition-all",
+                  timelineViewMode === "calendar"
+                    ? "bg-gray-900 text-white"
+                    : "text-gray-600 hover:bg-white"
+                )}
+              >
+                Calendar
+              </button>
+            </div>
             <Button onClick={addCategory} size="sm"
-              className="bg-gray-900 text-gray-900 hover:bg-gray-800 gap-2 font-semibold ml-2">
+              className="bg-gray-900 text-white hover:bg-gray-800 gap-2 font-semibold ml-2">
               <Plus className="w-4 h-4" /> 대분류 추가
             </Button>
           </div>
         </div>
 
+        {timelineViewMode === "gantt" ? (
         <GlassCard className="p-0 overflow-hidden">
           <div className="overflow-auto" style={{ maxHeight: "72vh", scrollbarWidth: "thin", scrollbarColor: "rgba(0,0,0,0.1) transparent" }}>
             <div style={{ minWidth: LABEL_W + dynamicChartMin }}>
@@ -1060,6 +1683,7 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
 
                   {/* 대분류 헤더 행 */}
                   <div className={cn("flex items-center border-b border-gray-100 sticky group/cat transition-all select-none bg-gray-100", isDragOverCategory && "border-t-2 border-t-gray-400")}
+                    data-cat-group={category}
                     style={{ top: 40, height: CAT_H, zIndex: 15 }}
                     draggable
                     onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDragItem({ type: "category", id: category }); }}
@@ -1075,11 +1699,22 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
                         placeholder="대분류명"
                         onSave={async v => {
                           const updated = serialize(allTasks).map(t =>
-                            t.category === category ? { ...t, category: v, color: pickColor(v) } : t
+                            t.category === category ? { ...t, category: v, color: getNewColor(v, t.color) } : t
                           );
                           await syncGantt({ campaignId, tasks: updated });
                         }}
-                        onEnter={() => addSubTask(category)}
+                        onEnter={(newVal) => {
+                          const targetCat = newVal || category;
+                          const catTasks = grouped.find(g => g.category === category)?.tasks || [];
+                          if (catTasks.length === 0) {
+                            addSubTask(targetCat);
+                          } else {
+                            setTimeout(() => {
+                              const triggers = Array.from(document.querySelectorAll(`[data-task-cat="${targetCat}"] .inline-edit-trigger`)) as HTMLElement[];
+                              if (triggers.length > 0) triggers[0].click();
+                            }, 500);
+                          }
+                        }}
                         className="text-gray-900 font-semibold text-xs flex-1"
                       />
                       <button onClick={() => handleAddCategoryRelative(catIdx, 0)} className="opacity-0 group-hover/cat:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-indigo-400" title="위에 대분류 추가">
@@ -1102,11 +1737,12 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
                   </div>
 
                   {/* 소분류 행 */}
-                  {tasks.map((task) => {
+                  {tasks.map((task, taskIdx) => {
                     const isDragOverTask = dragOverItem?.type === "task" && dragOverItem.id === task._id;
                     return (
                     <div key={task._id} className={cn("flex border-b border-gray-100 hover:bg-gray-50 bg-white group/row transition-all select-none", isDragOverTask && "border-t-2 border-t-gray-400")}
-                      style={{ height: ROW_H }}
+                      data-task-cat={category}
+                      style={{ minHeight: ROW_H }}
                       draggable
                       onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDragItem({ type: "task", id: task._id }); e.stopPropagation(); }}
                       onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverItem({ type: "task", id: task._id }); }}
@@ -1115,52 +1751,257 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
                     >
 
                       {/* 소분류 라벨 */}
-                      <div style={{ minWidth: LABEL_W, width: LABEL_W }}
-                        className="flex items-center pl-8 pr-2 border-r border-white/5 h-full gap-1 overflow-hidden cursor-grab active:cursor-grabbing">
-                        <div className="w-1 h-4 rounded-full shrink-0" style={{ backgroundColor: color }} />
-                        <InlineEdit
-                          value={task.subTask}
-                          placeholder="소분류 / 업무명"
-                          onSave={v => updateTask({ taskId: task._id, subTask: v })}
-                          onEnter={() => addSubTask(category)}
-                          className="text-gray-900/80 flex-1"
-                        />
-                        {/* 삭제 버튼 */}
-                        <button
-                          onClick={() => handleDelete(task._id)}
-                          className="opacity-0 group-hover/row:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-red-400"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
+                      <div className="flex flex-col border-r border-white/5" style={{ minWidth: LABEL_W, width: LABEL_W, minHeight: ROW_H }}>
+                        {/* 업무명 */}
+                        <div className="flex items-center pl-8 pr-2 gap-1 overflow-hidden cursor-grab active:cursor-grabbing" style={{ minHeight: ROW_H }}>
+                          <div className="w-1 h-4 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                          <InlineEdit
+                            value={task.subTask}
+                            placeholder="소분류 / 업무명"
+                            onSave={v => updateTask({ taskId: task._id, subTask: v })}
+                            onEnter={(newVal) => {
+                              const isLast = taskIdx === tasks.length - 1;
+                              if (isLast) {
+                                addSubTask(category);
+                              } else {
+                                setTimeout(() => {
+                                  const triggers = Array.from(document.querySelectorAll(`[data-task-cat="${category}"] .inline-edit-trigger`)) as HTMLElement[];
+                                  if (triggers[taskIdx + 1]) triggers[taskIdx + 1].click();
+                                }, 100);
+                              }
+                            }}
+                            className="text-gray-900/80 flex-1"
+                          />
+                          {/* 삭제 버튼 */}
+                          <button
+                            onClick={() => handleDelete(task._id)}
+                            className="opacity-0 group-hover/row:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-red-400"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
 
-                      {/* 간트 바 영역 */}
-                      <div className="relative flex-1" style={{ height: ROW_H, minWidth: dynamicChartMin }}>
-                        {monthTicks.map(({ label, pct }) => (
-                          <div key={label} className="absolute top-0 bottom-0 w-px bg-white/5" style={{ left: `${pct}%` }} />
-                        ))}
-                        <div className="absolute top-0 bottom-0 w-px bg-red-400/25 pointer-events-none" style={{ left: `${todayPct}%` }} />
-                        {task.startDate && task.endDate ? (
-                          <GanttBar
-                            task={task}
-                            chartStartTs={toTs(chartStart)}
-                            totalDays={totalDays}
-                            containerW={chartW}
-                            rowH={ROW_H}
-                            barColor={color}
-                            onSave={handleBarSave}
-                            onClickEdit={setEditBar}
-                            onClear={handleBarClear}
-                          />
-                        ) : (
-                          // 빈 행: 클릭하면 그 날짜에 7일 막대 생성
-                          <div
-                            onClick={(e) => handleEmptyRowClick(task, e)}
-                            className="absolute inset-0 flex items-center pl-4 text-xs text-gray-900/0 hover:text-gray-900/30 hover:bg-white/3 transition-colors cursor-crosshair group/empty"
-                          >
-                            <span className="opacity-0 group-hover/empty:opacity-100 transition-opacity select-none">클릭하여 일정 추가</span>
+                      {/* 간트 바 영역 - 기본 활동 + 추가 활동들 */}
+                      <div className="flex-1 min-w-max">
+                        {/* 기본 활동 + 추가 활동들 컨테이너 */}
+                        <div
+                          onClick={(e) => {
+                            if (!isDraggingRef.current) {
+                              handleAddActivity(task._id, e.clientX, e.currentTarget as HTMLElement);
+                            }
+                          }}
+                          className="relative group/activities cursor-crosshair"
+                          style={{
+                            height: ROW_H,
+                            minWidth: dynamicChartMin,
+                          }}
+                        >
+                          {/* 기본 활동 */}
+                          <div className="absolute inset-x-0 top-0" style={{ height: ROW_H }}>
+                            {monthTicks.map(({ label, pct }) => (
+                              <div key={label} className="absolute top-0 bottom-0 w-px bg-white/5" style={{ left: `${pct}%` }} />
+                            ))}
+                            <div className="absolute top-0 bottom-0 w-px bg-red-400/25 pointer-events-none" style={{ left: `${todayPct}%` }} />
+
+                            {task.startDate && task.endDate ? (
+                              <div className="absolute inset-0 cursor-pointer group/bar pointer-events-none">
+                                <GanttBar
+                                  task={task}
+                                  chartStartTs={toTs(chartStart)}
+                                  totalDays={totalDays}
+                                  containerW={chartW}
+                                  rowH={ROW_H}
+                                  barColor={color}
+                                  onSave={handleBarSave}
+                                  onClickEdit={setEditBar}
+                                  onClear={handleBarClear}
+                                  onSaveLabel={handleSaveBarLabel}
+                                  isDraggingRef={isDraggingRef}
+                                />
+                              </div>
+                            ) : (
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEmptyRowClick(task, e);
+                                }}
+                                className="absolute inset-0 flex items-center pl-4 text-xs text-gray-900/0 hover:text-gray-900/30 hover:bg-white/3 transition-colors cursor-crosshair group/empty"
+                              >
+                                <span className="opacity-0 group-hover/empty:opacity-100 transition-opacity select-none">클릭하여 일정 추가</span>
+                              </div>
+                            )}
                           </div>
-                        )}
+
+                          {/* 추가 활동들 */}
+                          {task.activities && task.activities.map((activity, idx) => {
+                            const actStart = toTs(activity.startDate);
+                            const actEnd = toTs(activity.endDate);
+                            const chartStartTs = toTs(chartStart);
+                            const left = ((actStart - chartStartTs) / MS_DAY / totalDays) * 100;
+                            const width = ((actEnd - actStart) / MS_DAY / totalDays) * 100;
+                            const pxDay = chartW / totalDays;
+
+                            const handleActivityDrag = (e: React.MouseEvent, mode: "move" | "left" | "right") => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              isDraggingRef.current = true;
+                              console.log("[DRAG] idx:", idx, "mode:", mode, "task._id:", task._id);
+                              const ox = e.clientX;
+                              const os = actStart;
+                              const oe = actEnd;
+                              const actIdx = idx;
+                              const taskId = task._id;
+                              let moved = false;
+
+                              const mv = (ev: MouseEvent) => {
+                                const dd = Math.round((ev.clientX - ox) / pxDay);
+                                if (dd === 0) return;
+                                moved = true;
+                                const currentTask = allTasks.find(t => t._id === taskId);
+                                if (!currentTask?.activities) return;
+                                const currentActivity = currentTask.activities[actIdx];
+                                if (!currentActivity) return;
+                                const newStart = mode === "move" || mode === "left" ? toStr(os + dd * MS_DAY) : currentActivity.startDate;
+                                const newEnd = mode === "move" || mode === "right" ? toStr(oe + dd * MS_DAY) : currentActivity.endDate;
+                                const updatedActivities = currentTask.activities.map((a, i) => i === actIdx ? { ...a, startDate: newStart, endDate: newEnd } : a);
+                                updateTask({ taskId, activities: updatedActivities });
+                              };
+
+                              const up = () => {
+                                if (!moved) {
+                                  const currentTask = allTasks.find(t => t._id === taskId);
+                                  const currentActivity = currentTask?.activities?.[actIdx];
+                                  console.log("[UP] actIdx:", actIdx, "currentActivity:", currentActivity?.name, "activities count:", currentTask?.activities?.length);
+                                  if (currentActivity) { setEditActivityIdx(actIdx); setEditActivity({ ...currentActivity, taskId }); }
+                                }
+                                setTimeout(() => { isDraggingRef.current = false; }, 100);
+                                window.removeEventListener("mousemove", mv);
+                                window.removeEventListener("mouseup", up);
+                              };
+
+                              window.addEventListener("mousemove", mv);
+                              window.addEventListener("mouseup", up);
+                            };
+
+                            return (
+                              <div
+                                key={`${task._id}-act-${idx}`}
+                                className="absolute rounded-lg cursor-move group/activity select-none z-10 hover:z-[60]"
+                                style={{
+                                  height: ROW_H - 10,
+                                  top: 5,
+                                  left: `${Math.max(0, left)}%`,
+                                  width: `${Math.max(3, width)}%`,
+                                  backgroundColor: color,
+                                }}
+                                onMouseDown={(e) => console.log("[OUTER BAR mousedown] idx:", idx, "task:", task.subTask)}
+                              >
+                                {/* 왼쪽 리사이징 핸들 */}
+                                <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/activity:opacity-100 transition-opacity bg-white/90 z-20"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    isDraggingRef.current = true;
+                                    const ox = e.clientX;
+                                    const os = actStart;
+                                    const oe = actEnd;
+                                    const actIdx = idx;
+                                    const taskId = task._id;
+                                    let moved = false;
+                                    const pxDay = chartW / totalDays;
+
+                                    const mv = (ev: MouseEvent) => {
+                                      const dd = Math.round((ev.clientX - ox) / pxDay);
+                                      if (dd === 0) return;
+                                      moved = true;
+                                      const currentTask = allTasks.find(t => t._id === taskId);
+                                      if (!currentTask?.activities) return;
+                                      const newStart = toStr(Math.min(os + dd * MS_DAY, oe - MS_DAY));
+                                      const updatedActivities = currentTask.activities.map((a, i) => i === actIdx ? { ...a, startDate: newStart } : a);
+                                      updateTask({ taskId, activities: updatedActivities });
+                                    };
+                                    const up = () => {
+                                      setTimeout(() => { isDraggingRef.current = false; }, 100);
+                                      window.removeEventListener("mousemove", mv);
+                                      window.removeEventListener("mouseup", up);
+                                    };
+                                    window.addEventListener("mousemove", mv);
+                                    window.addEventListener("mouseup", up);
+                                  }}
+                                ><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+
+                                {/* 텍스트 */}
+                                <div className="absolute inset-0 flex items-center justify-center px-2 cursor-pointer"
+                                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); handleActivityDrag(e, "move"); }}>
+                                  {/* 툴팁 */}
+                                  <span className="absolute z-50 invisible opacity-0 group-hover/activity:visible group-hover/activity:opacity-100 bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-md whitespace-nowrap transition-all pointer-events-none bottom-full mb-1 left-1/2 -translate-x-1/2">
+                                    {activity.name ? `${activity.name} | ` : ""}{fmtMD(activity.startDate)}{activity.startDate !== activity.endDate ? `~${fmtMD(activity.endDate)}` : ""}
+                                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900" />
+                                  </span>
+
+                                  {activity.name ? (
+                                    <span className="text-xs text-gray-900 font-semibold truncate">{activity.name} | {fmtMD(activity.startDate)}~{fmtMD(activity.endDate)}</span>
+                                  ) : (
+                                    <span className="text-[10px] text-gray-900/60 font-medium">{fmtMD(activity.startDate)} ~ {fmtMD(activity.endDate)}</span>
+                                  )}
+                                </div>
+
+                                {/* 오른쪽 리사이징 핸들 */}
+                                <div className="absolute right-0 top-0 h-full w-2.5 cursor-ew-resize rounded-r-lg flex items-center justify-center opacity-0 group-hover/activity:opacity-100 transition-opacity bg-white/90 z-20"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    isDraggingRef.current = true;
+                                    const ox = e.clientX;
+                                    const os = actStart;
+                                    const oe = actEnd;
+                                    const actIdx = idx;
+                                    const taskId = task._id;
+                                    let moved = false;
+                                    const pxDay = chartW / totalDays;
+
+                                    const mv = (ev: MouseEvent) => {
+                                      const dd = Math.round((ev.clientX - ox) / pxDay);
+                                      if (dd === 0) return;
+                                      moved = true;
+                                      const currentTask = allTasks.find(t => t._id === taskId);
+                                      if (!currentTask?.activities) return;
+                                      const newEnd = toStr(Math.max(oe + dd * MS_DAY, os + MS_DAY));
+                                      const updatedActivities = currentTask.activities.map((a, i) => i === actIdx ? { ...a, endDate: newEnd } : a);
+                                      updateTask({ taskId, activities: updatedActivities });
+                                    };
+                                    const up = () => {
+                                      setTimeout(() => { isDraggingRef.current = false; }, 100);
+                                      window.removeEventListener("mousemove", mv);
+                                      window.removeEventListener("mouseup", up);
+                                    };
+                                    window.addEventListener("mousemove", mv);
+                                    window.addEventListener("mouseup", up);
+                                  }}
+                                ><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+
+                                {/* X 삭제 버튼 */}
+                                <button
+                                  onMouseDown={e => e.stopPropagation()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveActivity(task._id, idx);
+                                  }}
+                                  className="absolute -top-2 -right-2 z-30 opacity-0 group-hover/activity:opacity-100 transition-opacity w-4 h-4 rounded-full bg-white/90 border border-white/20 flex items-center justify-center text-gray-900/60 hover:text-red-400 hover:border-red-400/60"
+                                  title="활동 삭제">
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            );
+                          })}
+
+                          {(!task.activities || task.activities.length === 0) && (
+                            <div className="absolute inset-0 flex items-center pl-4 text-xs text-gray-900/0 group-hover/activities:text-gray-900/30 transition-colors">
+                              <span className="select-none">클릭하여 활동 추가</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )})}
@@ -1189,13 +2030,20 @@ export default function TimelinePage({ params }: { params: Promise<{ id: string 
             </div>
           </div>
         </GlassCard>
+        ) : (
+        <CalendarView key={allTasks.length} tasks={allTasks} chartStart={chartStart} chartEnd={chartEnd} />
+        )}
       </div>
 
       {/* 날짜 편집 팝업 */}
-      {editBar && <DatePopup task={editBar} onSave={handleBarSave} onClose={() => setEditBar(null)} />}
+      {editBar && <DatePopup task={editBar} onSave={handleBarSave} onClose={() => setEditBar(null)} updateTask={updateTask} />}
+
+      {/* 활동 편집 팝업 */}
+      {editActivity && <ActivityEditPopup activity={editActivity} actIdx={editActivityIdx} onSave={handleSaveActivity} onClose={() => setEditActivity(null)} />}
 
       {/* 붙여넣기 확인 모달 */}
       {pasteRows && <PasteModal rows={pasteRows} onApply={applyPaste} onClose={() => setPasteRows(null)} />}
+
     </div>
   );
 }

@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
 
     // 단위에 따른 디멘션 설정
     let ga4Dimensions = dimensions;
-    let ga4OrderBy = [{ dimension: { dimensionName: "date" } }];
+    let ga4OrderBy: any[] = [{ dimension: { dimensionName: "date" } }];
 
     if (!ga4Dimensions) {
       if (timeUnit === "week") {
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     } else {
       // 커스텀 디멘션이 들어오면 정렬은 기본적으로 metrics의 첫 번째 항목(세션수) 내림차순으로 설정 (TOP N 추출 목적)
       ga4OrderBy = [
-        { desc: true, metric: { metricName: metrics?.[0]?.name || "sessions" } }
+        { metric: { metricName: metrics?.[0]?.name || "sessions" }, orderDirection: "DESCENDING" }
       ];
     }
 

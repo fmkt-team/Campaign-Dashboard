@@ -1,0 +1,6 @@
+- Preparing Convex functions...
+
+[36mA minor update is available for Convex[39m [2m(1.35.1 → 1.37.0)[22m
+[2mChangelog:[22m [4mhttps://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog[24m
+Your Convex AI files are out of date. Run npx convex ai-files update to get the latest.
+[32m✔[39m 18:34:21 Convex functions ready! (8.51s)

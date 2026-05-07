@@ -1,6 +1,7 @@
 "use client";
 
-import { use, useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -8,51 +9,91 @@ import { GlassCard } from "@/components/glass-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Check, X, UploadCloud, FileSpreadsheet, RefreshCw, Settings2, Pencil, Trash, Link as LinkIcon } from "lucide-react";
-import { fetchSpreadsheetData } from "@/lib/google-sheets";
+import {
+  Check, X, UploadCloud, FileSpreadsheet, RefreshCw, Settings2,
+  Pencil, Trash, Link as LinkIcon, SlidersHorizontal,
+  MessageSquare, ThumbsUp, Eye, Target, TrendingUp, ArrowUpDown,
+  ChevronUp, ChevronDown,
+} from "lucide-react";
 import * as xlsx from "xlsx";
 import { format, startOfWeek, parseISO } from "date-fns";
+import { useRefresh } from "@/lib/refresh-context";
 
-type ViewMode = "daily" | "weekly" | "monthly";
+type ViewMode  = "daily" | "weekly" | "monthly" | "total";
+type ActiveTab = "media" | "video" | "viral";
+
+const VIEW_MODE_LABELS: Record<ViewMode, string> = {
+  daily: "일별", weekly: "주차별", monthly: "월별", total: "전체",
+};
+
+const FIXED_COLS = [
+  { key: "spend",       label: "집행 비용" },
+  { key: "impressions", label: "노출수" },
+  { key: "views",       label: "조회수" },
+  { key: "clicks",      label: "클릭수" },
+  { key: "cpv",         label: "CPV" },
+  { key: "ctrVtr",      label: "CTR / VTR" },
+];
+
+const DEFAULT_VISIBLE: Record<string, boolean> = {
+  spend: true, impressions: true, views: true, clicks: true, cpv: true, ctrVtr: true,
+};
+
+// ── 포맷 헬퍼 ────────────────────────────────────────────────
+function fmt(n: number)    { return n.toLocaleString(); }
+function pct(n: number)    { return n.toFixed(1) + "%"; }
+function fmtKrw(n: number) { return "₩" + n.toLocaleString(); }
 
 function processNumber(val: any) {
   if (typeof val === "number") return val;
   if (!val) return 0;
-  const num = parseFloat(String(val).replace(/[^0-9.-]+/g, ""));
-  return isNaN(num) ? 0 : num;
+  const n = parseFloat(String(val).replace(/[^0-9.-]+/g, ""));
+  return isNaN(n) ? 0 : n;
 }
-
-function processDate(val: any) {
-  if (!val) return "1970-01-01";
-  const str = String(val).trim();
-  const match = str.match(/(\d{2,4})[-/.](\d{1,2})[-/.](\d{1,2})/);
-  if (match) {
-    const y = match[1].length === 2 ? `20${match[1]}` : match[1];
-    const m = match[2].padStart(2, "0");
-    const d = match[3].padStart(2, "0");
-    return `${y}-${m}-${d}`;
+function processDate(val: any): string {
+  if (!val) return "";
+  const s = String(val).trim();
+  const m = s.match(/(\d{2,4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) {
+    const y = m[1].length === 2 ? `20${m[1]}` : m[1];
+    return `${y}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
   }
-  return str;
+  return "";
+}
+const VALID_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// extraData JSON 문자열 → 객체 파싱 헬퍼
+function parseExtra(raw: any): Record<string, number> {
+  if (!raw) return {};
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+  return raw as Record<string, number>;
 }
 
+// ── 그루핑 ───────────────────────────────────────────────────
 function groupDigitalKpis(data: any[], viewMode: ViewMode) {
+  const valid = data.filter(r => r.date && r.date !== "1970-01-01" && VALID_DATE_RE.test(r.date));
   const groups = new Map<string, any>();
-  for (const row of data) {
-    if (!row.date) continue;
+  for (const row of valid) {
+    const extra = parseExtra(row.extraData);
     let key = row.date;
     try {
-      if (viewMode === "weekly") key = format(startOfWeek(parseISO(row.date), { weekStartsOn: 1 }), "yyyy-MM-dd");
+      if (viewMode === "weekly")  key = format(startOfWeek(parseISO(row.date), { weekStartsOn: 1 }), "yyyy-MM-dd");
       else if (viewMode === "monthly") key = row.date.substring(0, 7);
-    } catch (e) {}
-    const combinedKey = `${key}_${row.medium}`;
-    if (!groups.has(combinedKey)) {
-      groups.set(combinedKey, { dateLabel: key, medium: row.medium, spend: 0, impressions: 0, views: 0, clicks: 0 });
+      else if (viewMode === "total")   key = "전체";
+    } catch {}
+    const mapKey = viewMode === "total" ? `total_${row.medium}` : `${key}_${row.medium}`;
+    if (!groups.has(mapKey)) {
+      const baseExtra: Record<string, number> = {};
+      for (const k of Object.keys(extra)) baseExtra[k] = 0;
+      groups.set(mapKey, { dateLabel: key, medium: row.medium, spend: 0, impressions: 0, views: 0, clicks: 0, extra: baseExtra });
     }
-    const g = groups.get(combinedKey);
-    g.spend += row.spend;
-    g.impressions += row.impressions;
-    g.views += row.views;
-    g.clicks += row.clicks;
+    const g = groups.get(mapKey)!;
+    g.spend += row.spend; g.impressions += row.impressions; g.views += row.views; g.clicks += row.clicks;
+    for (const [k, v] of Object.entries(extra)) {
+      g.extra[k] = (g.extra[k] || 0) + (v as number);
+    }
   }
   return Array.from(groups.values()).map(g => ({
     ...g,
@@ -64,232 +105,366 @@ function groupDigitalKpis(data: any[], viewMode: ViewMode) {
 
 function groupViral(data: any[], viewMode: ViewMode) {
   return data.map(row => {
-    let key = row.date || "1970-01-01";
+    let key = row.date || "";
     try {
-      if (viewMode === "weekly") key = format(startOfWeek(parseISO(row.date), { weekStartsOn: 1 }), "yyyy-MM-dd (주차)");
-      else if (viewMode === "monthly") key = row.date.substring(0, 7) + " (월)";
-    } catch (e) {}
+      if (viewMode === "weekly")  key = format(startOfWeek(parseISO(row.date), { weekStartsOn: 1 }), "yyyy-MM-dd");
+      else if (viewMode === "monthly") key = row.date.substring(0, 7);
+    } catch {}
     return { ...row, dateLabel: key };
   }).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 }
 
-export default function AwarenessPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
-  const campaignId = id as Id<"campaigns">;
+// Helper to check if a metric improved compared to previous period
+function getMetricComparisonClass(grouped: any[], currentIdx: number, currentRow: any, metricKey: string): string {
+  const prevSameMedium = grouped
+    .slice(0, currentIdx)
+    .reverse()
+    .find(r => r.medium === currentRow.medium);
 
-  const digitalKpis = useQuery(api.awareness.getDigitalKpis, { campaignId }) ?? [];
-  const viralContents = useQuery(api.awareness.getViralContents, { campaignId }) ?? [];
+  if (!prevSameMedium) return "";
 
-  const syncDigitalKpis = useMutation(api.awareness.syncDigitalKpis);
+  const currentVal = currentRow[metricKey];
+  const prevVal = prevSameMedium[metricKey];
+
+  if (currentVal > prevVal) return "text-fursys-red";
+  return "";
+}
+
+// ── 요약 카드 컴포넌트 ────────────────────────────────────────
+function StatCard({
+  label, value, sub, accent, kpiInfo, onKpiEdit, isHighlight
+}: {
+  label: string; value: string; sub?: string; accent?: boolean;
+  kpiInfo?: { target: number | string; rate?: number; isBudget?: boolean };
+  onKpiEdit?: () => void;
+  isHighlight?: boolean;
+}) {
+  const bgColor = accent !== false ? "#1A1A1A" : "#ffffff";
+  const textColor = accent !== false ? "text-white" : "text-gray-900";
+  const subTextColor = accent !== false ? "text-white/60" : "text-gray-400";
+
+  return (
+    <div className={`rounded-xl p-5 flex flex-col gap-2 border cursor-pointer transition-all hover:shadow-lg`}
+      style={{ backgroundColor: bgColor, borderColor: isHighlight ? "#DC2626" : (accent !== false ? "#1A1A1A" : "#E5E7EB") }}
+      onClick={onKpiEdit}>
+      <span className={`text-xs font-medium ${accent !== false ? "text-white/70" : "text-gray-400"}`}>{label}</span>
+      <span className={`text-2xl font-bold tracking-tight ${textColor}`}>{value}</span>
+      {sub && <span className={`text-xs ${subTextColor}`}>{sub}</span>}
+      {kpiInfo && (
+        <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
+          <div className="flex items-center justify-between">
+            <span className={`text-[11px] ${subTextColor}`}>
+              {kpiInfo.isBudget ? `예산 ${kpiInfo.target}` : `목표 ${kpiInfo.target}`}
+            </span>
+            {kpiInfo.rate !== undefined && (
+              <span className={`text-[11px] font-medium ${kpiInfo.rate >= 100 ? "text-green-400" : "text-gray-400"}`}>
+                {kpiInfo.rate.toFixed(1)}%
+              </span>
+            )}
+          </div>
+          {kpiInfo.rate !== undefined && (
+            <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full transition-all ${kpiInfo.rate >= 100 ? "bg-green-400" : "bg-fursys-red"}`}
+                style={{ width: `${Math.min(kpiInfo.rate, 100)}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 댓글 모달 ─────────────────────────────────────────────────
+function CommentsModal({
+  title, commentsList, isLoading, errorMsg, onClose, onFetch,
+}: {
+  title: string; commentsList: any[]; isLoading: boolean;
+  errorMsg?: string; onClose: () => void; onFetch: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-[560px] max-h-[80vh] flex flex-col border border-gray-100">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-fursys-red" /> 댓글 — {title}
+          </h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-gray-400 hover:text-gray-700" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          {isLoading ? (
+            <div className="flex flex-col items-center gap-3 py-12">
+              <RefreshCw className="w-6 h-6 animate-spin text-fursys-red" />
+              <p className="text-sm text-gray-400">댓글을 불러오는 중...</p>
+            </div>
+          ) : errorMsg ? (
+            <div className="py-10 text-center">
+              <p className="text-sm text-gray-400 mb-4">{errorMsg}</p>
+              <Button size="sm" onClick={onFetch} className="bg-fursys-red hover:bg-red-700 text-white">
+                다시 불러오기
+              </Button>
+            </div>
+          ) : commentsList.length === 0 ? (
+            <div className="py-10 text-center">
+              <p className="text-sm text-gray-400 mb-4">저장된 댓글이 없습니다.</p>
+              <Button size="sm" onClick={onFetch} className="bg-fursys-red hover:bg-red-700 text-white">
+                댓글 수집하기
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {commentsList.map((c, i) => (
+                <div key={i} className="border border-gray-100 rounded-lg p-3 bg-gray-50">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-semibold text-gray-700">{c.author || "익명"}</span>
+                    <div className="flex items-center gap-2 text-[11px] text-gray-400">
+                      {c.likes !== undefined && <span>👍 {c.likes}</span>}
+                      {c.date && <span>{c.date}</span>}
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-700 leading-relaxed">{c.text}</p>
+                </div>
+              ))}
+              <Button size="sm" variant="outline" onClick={onFetch} className="mt-2 self-center">
+                <RefreshCw className="w-3 h-3 mr-1" /> 새로고침
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+export default function AwarenessPage() {
+  const params = useParams();
+  const campaignId = params.id as Id<"campaigns">;
+  const { refreshTrigger } = useRefresh();
+  const [lastRefresh, setLastRefresh] = useState(0);
+
+  const digitalKpis   = useQuery(api.awareness.getDigitalKpis,   { campaignId }) ?? [];
+  const viralContents = useQuery(api.awareness.getViralContents,  { campaignId }) ?? [];
+  const youtubeVideos = useQuery(api.awareness.getYouTubeVideos,  { campaignId }) ?? [];
+  const campaign      = useQuery(api.campaigns.getCampaignById,   { id: campaignId }) ?? null;
+
+  const syncDigitalKpis   = useMutation(api.awareness.syncDigitalKpis);
+  const clearDigitalKpis  = useMutation(api.awareness.clearDigitalKpis);
   const syncViralContents = useMutation(api.awareness.syncViralContents);
-  const updateViralRow = useMutation(api.awareness.updateViralRow);
-  const deleteViralRow = useMutation(api.awareness.deleteViralRow);
-
-  const youtubeVideos = useQuery(api.awareness.getYouTubeVideos, { campaignId }) ?? [];
-  const addYouTubeVideo = useMutation(api.awareness.addYouTubeVideo);
-  const updateYouTubeVideo = useMutation(api.awareness.updateYouTubeVideo);
+  const clearViralContents = useMutation(api.awareness.clearViralContents);
+  const updateViralRow    = useMutation(api.awareness.updateViralRow);
+  const deleteViralRow    = useMutation(api.awareness.deleteViralRow);
+  const addYouTubeVideo   = useMutation(api.awareness.addYouTubeVideo);
   const deleteYouTubeVideo = useMutation(api.awareness.deleteYouTubeVideo);
+  const updateCampaign     = useMutation(api.campaigns.updateCampaignSettings);
 
-  const [newYoutubeUrl, setNewYoutubeUrl] = useState("");
-  const [isAddingYoutube, setIsAddingYoutube] = useState(false);
+  // ── 탭·뷰 ────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<ActiveTab>("media");
+  const [viewMode,  setViewMode]  = useState<ViewMode>("weekly");
+  const [showCumulative, setShowCumulative] = useState(true);
 
-  const [filterMonth, setFilterMonth] = useState("all");
-  const [filterPlatform, setFilterPlatform] = useState("all");
-  const [viewMode, setViewMode] = useState<ViewMode>("weekly");
+  // ── 누적 성과 항목 선택 ──────────────────────────────────────
+  const [cumulativeVisibleItems, setCumulativeVisibleItems] = useState<Record<string, boolean>>({
+    spend: true, impressions: true, views: true, clicks: true, cpv: true, ctr: true,
+  });
+  const [showCumulativeSettings, setShowCumulativeSettings] = useState(false);
 
+  // ── 누적 성과 항목 순서 편집 ──────────────────────────────────
+  const [cumulativeItemOrder, setCumulativeItemOrder] = useState<string[]>(["spend", "impressions", "views", "clicks", "cpv", "ctr"]);
+  const [showItemOrder, setShowItemOrder] = useState(false);
+  const [draggedCumulativeItem, setDraggedCumulativeItem] = useState<string | null>(null);
+
+  // ── 매디어 퍼포먼스 컬럼 순서 편집 ──────────────────────────
+  const [mediaColOrder, setMediaColOrder] = useState<string[]>(["spend", "impressions", "views", "clicks", "cpv", "ctrVtr"]);
+  const [showMediaColOrder, setShowMediaColOrder] = useState(false);
+  const [draggedMediaCol, setDraggedMediaCol] = useState<string | null>(null);
+
+  // ── 컬럼 설정 ────────────────────────────────────────────────
+  const [visibleCols,    setVisibleCols]    = useState<Record<string, boolean>>(DEFAULT_VISIBLE);
+  const [extraColLabels, setExtraColLabels] = useState<string[]>([]); // 시트에서 감지된 추가 컬럼
+  const [showColSettings, setShowColSettings] = useState(false);
+
+  // ── KPI 카드 ─────────────────────────────────────────────────
+  const [showKpiEdit,  setShowKpiEdit]  = useState(false);
+  const [editingKpi,   setEditingKpi]   = useState<{ label: string; target: number; idx: number } | null>(null);
+  const [kpiTargetVal, setKpiTargetVal] = useState("");
+
+  // ── 업로드 ───────────────────────────────────────────────────
   const [showConfig, setShowConfig] = useState<{ type: "digital" | "viral"; source: "sheet" | "excel" } | null>(null);
-  const [sheetUrl, setSheetUrl] = useState("");
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<string>("");
+  const [sheetUrl,   setSheetUrl]   = useState("");
+  const [isSyncing,  setIsSyncing]  = useState(false);
+  const [syncStatus, setSyncStatus] = useState("");
 
-  // 바이럴 매핑 상태
-  const [previewData, setPreviewData] = useState<any[][] | null>(null);
-  const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [headerRowIdx, setHeaderRowIdx] = useState(0);
+  // ── 바이럴 매핑 ──────────────────────────────────────────────
+  const [previewData,    setPreviewData]    = useState<any[][] | null>(null);
+  const [mapping,        setMapping]        = useState<Record<string, string>>({});
+  const [headerRowIdx,   setHeaderRowIdx]   = useState(0);
   const [isGuessingCols, setIsGuessingCols] = useState(false);
 
-  // 개별 편집 상태
+  // ── 바이럴 필터·편집 ─────────────────────────────────────────
+  const [filterMonth,    setFilterMonth]    = useState("all");
+  const [filterPlatform, setFilterPlatform] = useState("all");
   const [editingViralId, setEditingViralId] = useState<string | null>(null);
-  const [editViralForm, setEditViralForm] = useState<any>({});
-  const [isFetchingUrl, setIsFetchingUrl] = useState<string | null>(null);
+  const [editViralForm,  setEditViralForm]  = useState<any>({});
+  const [isFetchingUrl,  setIsFetchingUrl]  = useState<string | null>(null);
+
+  // ── 유튜브 ───────────────────────────────────────────────────
+  const [newYoutubeUrl,   setNewYoutubeUrl]   = useState("");
+  const [isAddingYoutube, setIsAddingYoutube] = useState(false);
+
+  // ── 댓글 모달 ────────────────────────────────────────────────
+  const [commentModal, setCommentModal] = useState<{
+    type: "yt" | "viral"; id: string; title: string;
+    url: string; commentsList: any[]; isLoading: boolean; error?: string;
+  } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── AI로 매체 퍼포먼스 자동 분석 ──────────────────────────────
-  const runDigitalAI = async (data: any[][]) => {
+  // ── 전역 새로고침 감지 ─────────────────────────────────────────
+  useEffect(() => {
+    if (refreshTrigger !== lastRefresh) {
+      setLastRefresh(refreshTrigger);
+      setSyncStatus("✨ 데이터 새로고침 중...");
+      setTimeout(() => setSyncStatus(""), 2000);
+    }
+  }, [refreshTrigger, lastRefresh]);
+
+  // ── AI 매체 분석 ─────────────────────────────────────────────
+  const runDigitalAI = async (rawData: any[][]) => {
     setIsSyncing(true);
     setSyncStatus("AI가 매체 데이터를 분석 중...");
     try {
-      const payload = data.filter(r => r.some(c => c !== "")).slice(0, 200);
+      const payload = rawData.filter(r => r.some(c => c !== "")).slice(0, 200);
       const res = await fetch("/api/parse-sheet-ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data: payload, type: "digital" }),
       });
       const parsed = await res.json();
       if (!res.ok) throw new Error(parsed.error || "AI 분석 실패");
       if (!parsed.rows) throw new Error("AI 응답 형식 오류");
 
-      const rows = parsed.rows.map((r: any) => ({
-        date: r.date || "1970-01-01",
-        medium: r.medium || "-",
-        spend: processNumber(r.spend),
-        impressions: processNumber(r.impressions),
-        views: processNumber(r.views),
-        clicks: processNumber(r.clicks),
-        cpv: processNumber(r.views) > 0 ? processNumber(r.spend) / processNumber(r.views) : 0,
-        ctr: processNumber(r.impressions) > 0 ? (processNumber(r.clicks) / processNumber(r.impressions)) * 100 : 0,
-        vtr: processNumber(r.impressions) > 0 ? (processNumber(r.views) / processNumber(r.impressions)) * 100 : 0,
-        recordedAt: Date.now(),
-      }));
-      await syncDigitalKpis({ campaignId, rows });
+      const rows = (parsed.rows as any[])
+        .map((r: any) => {
+          const date = processDate(r.date) || "";
+          if (!date || date === "1970-01-01" || !VALID_DATE_RE.test(date)) return null;
+          return {
+            date, medium: r.medium || "-",
+            spend: processNumber(r.spend), impressions: processNumber(r.impressions),
+            views: processNumber(r.views), clicks: processNumber(r.clicks),
+            cpv: processNumber(r.views) > 0 ? processNumber(r.spend) / processNumber(r.views) : 0,
+            ctr: processNumber(r.impressions) > 0 ? (processNumber(r.clicks) / processNumber(r.impressions)) * 100 : 0,
+            vtr: processNumber(r.impressions) > 0 ? (processNumber(r.views) / processNumber(r.impressions)) * 100 : 0,
+            recordedAt: Date.now(),
+            // extraData의 키가 한글일 수 있으므로 JSON 문자열로 직렬화
+            extraData: r.extraData && Object.keys(r.extraData).length > 0
+              ? JSON.stringify(r.extraData)
+              : undefined,
+          };
+        })
+        .filter(Boolean);
+
+      await syncDigitalKpis({ campaignId, rows: rows as any[] });
+
+      // 추가 컬럼 레이블 저장
+      if (parsed.extraColDefs?.length) {
+        const newLabels = (parsed.extraColDefs as any[]).map((c: any) => c.label).filter(Boolean);
+        setExtraColLabels(newLabels);
+        setVisibleCols(v => {
+          const next = { ...v };
+          newLabels.forEach((l: string) => { if (!(l in next)) next[l] = true; });
+          return next;
+        });
+      }
+
       setSyncStatus(`✅ ${rows.length}개 행 동기화 완료!`);
       setTimeout(() => setSyncStatus(""), 3000);
       setShowConfig(null);
+      setShowColSettings(true);
     } catch (e: any) {
       alert("AI 매체 분석 오류: " + e.message);
       setSyncStatus("");
-    } finally {
-      setIsSyncing(false);
-    }
+    } finally { setIsSyncing(false); }
   };
 
-  // ── 바이럴 컬럼 AI 추론 후 매핑 팝업 열기 ────────────────────
-  const openViralMapper = async (data: any[][]) => {
-    setPreviewData(data);
-    setMapping({});
-    setHeaderRowIdx(0);
-    setIsGuessingCols(true);
-    setShowConfig(null);
+  // ── 바이럴 AI 컬럼 추론 ──────────────────────────────────────
+  const openViralMapper = async (rawData: any[][]) => {
+    setPreviewData(rawData); setMapping({}); setHeaderRowIdx(0); setIsGuessingCols(true); setShowConfig(null);
     try {
-      const sample = data.slice(0, 15);
       const res = await fetch("/api/parse-sheet-ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: sample, type: "viral", mode: "guess_columns" }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ data: rawData.slice(0, 15), type: "viral", mode: "guess_columns" }),
       });
       const parsed = await res.json();
-      if (parsed.headerRowIndex !== undefined) {
-        setHeaderRowIdx(parsed.headerRowIndex);
-      }
+      if (parsed.headerRowIndex !== undefined) setHeaderRowIdx(parsed.headerRowIndex);
       if (parsed.mapping) {
-        const stringMap: Record<string, string> = {};
-        Object.entries(parsed.mapping).forEach(([k, v]) => {
-          if (v !== null && v !== undefined) stringMap[k] = String(v);
-        });
-        setMapping(stringMap);
+        const sm: Record<string, string> = {};
+        Object.entries(parsed.mapping).forEach(([k, v]) => { if (v != null) sm[k] = String(v); });
+        setMapping(sm);
       }
-    } catch (e) {
-      console.warn("AI column guess failed:", e);
-    } finally {
-      setIsGuessingCols(false);
-    }
+    } catch {}
+    finally { setIsGuessingCols(false); }
   };
 
-  // ── 구글 시트 동기화 ──────────────────────────────────────────
+  // ── 구글 시트 동기화 ─────────────────────────────────────────
   const handleSheetSync = async (type: "digital" | "viral") => {
     if (!sheetUrl) return alert("스프레드시트 주소를 입력해주세요.");
     setIsSyncing(true);
     try {
-      const res = await fetchSpreadsheetData(sheetUrl);
+      const res = await fetch("/api/fetch-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl }),
+      }).then(r => r.json());
       if (!res.success || !res.data) throw new Error(res.error || "데이터 없음");
-      if (type === "digital") {
-        await runDigitalAI(res.data);
-      } else {
-        await openViralMapper(res.data);
-      }
-    } catch (e: any) {
-      alert("구글 시트 연동 에러: " + e.message);
-    } finally {
-      setIsSyncing(false);
-      setSheetUrl("");
-    }
+      if (type === "digital") await runDigitalAI(res.data); else await openViralMapper(res.data);
+    } catch (e: any) { alert("구글 시트 연동 에러: " + e.message); }
+    finally { setIsSyncing(false); setSheetUrl(""); }
   };
 
-  // ── 엑셀 업로드 ───────────────────────────────────────────────
+  // ── 엑셀 업로드 ──────────────────────────────────────────────
   const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>, type: "digital" | "viral") => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const wb = xlsx.read(bstr, { type: "binary", cellText: false, cellDates: true });
+        const wb = xlsx.read(evt.target?.result, { type: "binary", cellText: false, cellDates: true });
         const ws = wb.Sheets[wb.SheetNames[0]];
         const data = xlsx.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: "yyyy-mm-dd" }) as any[][];
-        if (type === "digital") {
-          await runDigitalAI(data);
-        } else {
-          await openViralMapper(data);
-        }
-      } catch (err: any) {
-        alert("엑셀 파싱 에러: " + err.message);
-      } finally {
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      }
+        if (type === "digital") await runDigitalAI(data); else await openViralMapper(data);
+      } catch (err: any) { alert("엑셀 파싱 에러: " + err.message); }
+      finally { if (fileInputRef.current) fileInputRef.current.value = ""; }
     };
     reader.readAsBinaryString(file);
   };
 
-  // ── 바이럴 매핑 확정 동기화 ──────────────────────────────────
+  // ── 바이럴 매핑 확정 ─────────────────────────────────────────
   const handleConfirmMapping = async () => {
     if (!previewData) return;
     setIsSyncing(true);
     try {
-      const validRows = previewData.slice(headerRowIdx + 1).filter(row =>
-        Object.values(mapping).some(colIdx => {
-          const v = row[parseInt(colIdx)];
-          return v !== undefined && v !== "";
-        })
-      );
-      let lastKnownDate = "";
-      let lastKnownPlatform = "-";
-      let lastKnownCreator = "-";
+      let lDate = "", lPlat = "-", lCreator = "-";
+      const rows = previewData.slice(headerRowIdx + 1)
+        .filter(row => Object.values(mapping).some(ci => { const v = row[parseInt(ci)]; return v !== undefined && v !== ""; }))
+        .map(cols => {
+          let date = mapping["date"] ? processDate(cols[parseInt(mapping["date"])]) : "";
+          if (!date) date = lDate; else lDate = date;
+          let platform = mapping["platform"] ? String(cols[parseInt(mapping["platform"])] || "").trim() : "";
+          if (!platform || platform === "-") platform = lPlat; else lPlat = platform;
+          const rawUrl = mapping["url"] ? String(cols[parseInt(mapping["url"])] || "").trim() : "";
+          if (rawUrl.includes("youtube.com") || rawUrl.includes("youtu.be")) platform = "YouTube";
+          else if (rawUrl.includes("instagram.com")) platform = "Instagram";
+          else if (rawUrl.includes("blog.naver.com") || rawUrl.includes("naver.com")) platform = "Naver Blog";
+          let creator = mapping["creator"] ? String(cols[parseInt(mapping["creator"])] || "").trim() : "";
+          if (!creator || creator === "-") creator = lCreator; else lCreator = creator;
+          return { date, platform: platform || "-", creator: creator || "-", title: "-", views: 0, likes: 0, comments: 0, url: rawUrl, thumbnailUrl: undefined };
+        });
 
-      const rows = validRows.map(cols => {
-        let dateStr = mapping["date"] ? processDate(cols[parseInt(mapping["date"])]) : "";
-        if (dateStr === "1970-01-01") dateStr = "";
-        if (dateStr === "" && mapping["date"]) dateStr = lastKnownDate; else lastKnownDate = dateStr;
-
-        let platform = mapping["platform"] ? String(cols[parseInt(mapping["platform"])] || "").trim() : "";
-        if (!platform || platform === "-") platform = lastKnownPlatform; else lastKnownPlatform = platform;
-
-        const rawUrl = mapping["url"] ? String(cols[parseInt(mapping["url"])] || "").trim() : "";
-
-          if (rawUrl.includes("youtube.com") || rawUrl.includes("youtu.be")) {
-            platform = "YouTube";
-          } else if (rawUrl.includes("instagram.com")) {
-            platform = "Instagram";
-          } else if (rawUrl.includes("blog.naver.com") || rawUrl.includes("naver.com")) {
-            platform = "Naver Blog";
-          }
-
-        let creator = mapping["creator"] ? String(cols[parseInt(mapping["creator"])] || "").trim() : "";
-        if (!creator || creator === "-") creator = lastKnownCreator; else lastKnownCreator = creator;
-
-        return {
-          date: dateStr,
-          platform: platform || "-",
-          creator: creator || "-",
-          title: "-", // title은 더 이상 시트에서 매핑하지 않음
-          views: 0,
-          likes: 0,
-          comments: 0,
-          url: rawUrl,
-          thumbnailUrl: undefined,
-        };
-      });
-
-      setSyncStatus("업로드된 URL의 성과 데이터를 AI가 실시간으로 수집하고 있습니다...");
-      
-      const enrichedRows = await Promise.all(rows.map(async (row) => {
+      setSyncStatus("URL 성과 데이터 실시간 수집 중...");
+      const enriched = await Promise.all(rows.map(async row => {
         if (!row.url) return row;
         try {
-          const res = await fetch("/api/fetch-sns-stats", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url: row.url }),
-          });
+          const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: row.url }) });
           const data = await res.json();
           if (data.success && data.stats) {
             row.views = data.stats.views !== undefined ? processNumber(data.stats.views) : 0;
@@ -297,146 +472,127 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
             row.comments = data.stats.comments !== undefined ? processNumber(data.stats.comments) : 0;
             if (data.stats.title && data.stats.title !== "-") row.title = data.stats.title;
             if (data.stats.thumbnailUrl) row.thumbnailUrl = data.stats.thumbnailUrl;
-            if (data.stats.date && row.date === "") row.date = data.stats.date;
+            if (data.stats.date && !row.date) row.date = data.stats.date;
           }
-        } catch(e) {
-           console.error("fetchSnsStats for sync failed:", e);
-        }
+        } catch {}
         return row;
       }));
 
-      setSyncStatus("수집 완료! DB에 안전하게 저장 중입니다...");
-      await syncViralContents({ campaignId, rows: enrichedRows });
-    } catch (e: any) {
-      alert("동기화 실패: " + e.message);
-    } finally {
-      setIsSyncing(false);
-      setPreviewData(null);
-      setMapping({});
-    }
+      setSyncStatus("저장 중...");
+      await syncViralContents({ campaignId, rows: enriched });
+    } catch (e: any) { alert("동기화 실패: " + e.message); }
+    finally { setIsSyncing(false); setPreviewData(null); setMapping({}); }
   };
 
-  const startEditViral = (row: any) => {
-    setEditingViralId(row._id);
-    setEditViralForm({ ...row });
-  };
-
-  const saveEditViral = async () => {
-    if (!editingViralId) return;
-    await updateViralRow({
-      viralId: editingViralId as Id<"viralContents">,
-      updates: {
-        url: editViralForm.url,
-        creator: editViralForm.creator,
-        views: processNumber(editViralForm.views),
-        likes: processNumber(editViralForm.likes),
-        comments: processNumber(editViralForm.comments),
-      }
-    });
-    setEditingViralId(null);
-  };
-
-  const handleFetchSnsStats = async (rowId: string, url: string) => {
-    if (!url) {
-      alert("URL이 없습니다.");
-      return;
-    }
-    setIsFetchingUrl(rowId);
-    try {
-      const res = await fetch("/api/fetch-sns-stats", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
-      if (data.success && data.stats) {
-        await updateViralRow({ 
-          viralId: rowId as Id<"viralContents">, 
-          updates: { 
-            views: data.stats.views, 
-            likes: data.stats.likes, 
-            comments: data.stats.comments,
-            title: data.stats.title !== "-" ? data.stats.title : undefined,
-            thumbnailUrl: data.stats.thumbnailUrl,
-            date: data.stats.date,
-          } 
-        });
-      } else {
-        alert(data.error || "수집 실패");
-      }
-    } catch (e: any) {
-      alert("오류 발생: " + e.message);
-    } finally {
-      setIsFetchingUrl(null);
-    }
-  };
-
+  // ── 유튜브 추가 ──────────────────────────────────────────────
   const handleAddYoutube = async () => {
     if (!newYoutubeUrl) return;
     setIsAddingYoutube(true);
     try {
-      const res = await fetch("/api/fetch-sns-stats", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: newYoutubeUrl }),
-      });
+      const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: newYoutubeUrl }) });
       const data = await res.json();
       if (data.success && data.stats) {
-        let yId = "-";
         const idMatch = newYoutubeUrl.match(/(?:v=|youtu\.be\/|shorts\/)([^&?]+)/);
-        if (idMatch) yId = idMatch[1];
-  
         await addYouTubeVideo({
-          campaignId,
-          youtubeId: yId,
+          campaignId, youtubeId: idMatch ? idMatch[1] : "-",
           title: data.stats.title !== "-" ? data.stats.title : "제목 없음",
           thumbnailUrl: data.stats.thumbnailUrl || "",
-          views: data.stats.views || 0,
-          likes: data.stats.likes || 0,
-          comments: data.stats.comments || 0,
-          likeRate: 0,
-          uploadDate: data.stats.date || new Date().toISOString().split('T')[0],
+          views: data.stats.views || 0, likes: data.stats.likes || 0, comments: data.stats.comments || 0,
+          likeRate: 0, uploadDate: data.stats.date || new Date().toISOString().split("T")[0],
         });
         setNewYoutubeUrl("");
+      } else alert(data.error || "수집 실패");
+    } catch (e: any) { alert("오류: " + e.message); }
+    finally { setIsAddingYoutube(false); }
+  };
+
+  const handleFetchSnsStats = async (rowId: string, url: string) => {
+    if (!url) return alert("URL이 없습니다.");
+    setIsFetchingUrl(rowId);
+    try {
+      const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+      const data = await res.json();
+      if (data.success && data.stats) {
+        await updateViralRow({ viralId: rowId as Id<"viralContents">, updates: { views: data.stats.views, likes: data.stats.likes, comments: data.stats.comments, title: data.stats.title !== "-" ? data.stats.title : undefined, thumbnailUrl: data.stats.thumbnailUrl, date: data.stats.date } });
+      } else alert(data.error || "수집 실패");
+    } catch (e: any) { alert("오류: " + e.message); }
+    finally { setIsFetchingUrl(null); }
+  };
+
+  // ── 댓글 불러오기 (로컬 상태만 업데이트, Convex 저장 없음) ───
+  const fetchComments = async (modalState?: typeof commentModal) => {
+    const modal = modalState || commentModal;
+    if (!modal) return;
+    setCommentModal(prev => prev ? { ...prev, isLoading: true, error: undefined } : null);
+    try {
+      const res = await fetch("/api/fetch-comments", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: modal.url }),
+      });
+      const data = await res.json();
+      if (data.commentsList !== undefined) {
+        setCommentModal(prev => prev ? { ...prev, commentsList: data.commentsList, isLoading: false, error: data.error } : null);
       } else {
-        alert(data.error || "수집 실패");
+        setCommentModal(prev => prev ? { ...prev, isLoading: false, error: data.error || "수집 실패" } : null);
       }
     } catch (e: any) {
-      alert("오류 발생: " + e.message);
-    } finally {
-      setIsAddingYoutube(false);
+      setCommentModal(prev => prev ? { ...prev, isLoading: false, error: e.message } : null);
     }
   };
 
-  // ── 매핑 드롭다운 렌더 ────────────────────────────────────────
-  const numCols = previewData ? Math.max(...previewData.slice(0, 10).map(r => r.length), 0) : 0;
-
-  // 각 컬럼의 첫 번째 비어있지 않은 샘플값들 미리 계산
-  // 각 컬럼의 헤더 명 (AI가 찾아낸 headerRowIdx 활용)
-  const colSamples = Array.from({ length: numCols }).map((_, i) => {
-    const sample = previewData?.[headerRowIdx]?.[i];
-    return sample ? String(sample).substring(0, 15) : "(빈값)";
-  });
-
-  const renderMappingSelect = (field: string, label: string, required = false) => {
-    const isDetected = mapping[field] !== undefined;
-    return (
-      <div key={field} className={`flex flex-col gap-1 p-2 rounded border ${
-        !isDetected && required ? "border-amber-500/40 bg-amber-500/5" : "border-gray-100 bg-gray-50"
-      }`}>
-        <div className="flex items-center gap-2">
-          <span className="text-gray-900/80 text-xs font-medium">{label}</span>
-          {isDetected
-            ? <span className="text-[10px] bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">✓ 자동 감지</span>
-            : <span className="text-[10px] bg-gray-100 text-gray-900/40 px-1.5 py-0.5 rounded">{required ? "⚠ 필수" : "선택"}</span>
+  // ── 댓글 자동 로드 (YouTube & 바이럴) ─────────────────────────
+  useEffect(() => {
+    if (commentModal && commentModal.commentsList.length === 0 && commentModal.isLoading && !commentModal.error) {
+      const fetchAsync = async () => {
+        setCommentModal(prev => prev ? { ...prev, isLoading: true, error: undefined } : null);
+        try {
+          const res = await fetch("/api/fetch-comments", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: commentModal.url }),
+          });
+          const data = await res.json();
+          if (data.commentsList !== undefined) {
+            setCommentModal(prev => prev ? { ...prev, commentsList: data.commentsList, isLoading: false, error: data.error } : null);
+          } else {
+            setCommentModal(prev => prev ? { ...prev, isLoading: false, error: data.error || "수집 실패" } : null);
           }
+        } catch (e: any) {
+          setCommentModal(prev => prev ? { ...prev, isLoading: false, error: e.message } : null);
+        }
+      };
+      fetchAsync();
+    }
+  }, [commentModal?.id, commentModal?.url]);
+
+  // ── KPI 저장 ─────────────────────────────────────────────────
+  const saveKpiTarget = async () => {
+    if (!editingKpi || !campaign) return;
+    const targets = [...(campaign.kpiTargets || [])];
+    const newTarget = { label: editingKpi.label, target: parseFloat(kpiTargetVal) || 0, current: 0, category: "awareness" };
+    if (editingKpi.idx >= 0) targets[editingKpi.idx] = { ...targets[editingKpi.idx], target: newTarget.target };
+    else targets.push(newTarget);
+    await updateCampaign({ id: campaign._id, kpiTargets: targets });
+    setEditingKpi(null); setKpiTargetVal("");
+  };
+
+  // ── 매핑 드롭다운 ────────────────────────────────────────────
+  const numCols = previewData ? Math.max(...previewData.slice(0, 10).map(r => r.length), 0) : 0;
+  const colSamples = Array.from({ length: numCols }).map((_, i) => {
+    const s = previewData?.[headerRowIdx]?.[i];
+    return s ? String(s).substring(0, 15) : "(빈값)";
+  });
+  const renderMappingSelect = (field: string, label: string, required = false) => {
+    const detected = mapping[field] !== undefined;
+    return (
+      <div key={field} className={`flex flex-col gap-1 p-2 rounded border ${!detected && required ? "border-amber-500/40 bg-amber-500/5" : "border-gray-100 bg-gray-50"}`}>
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-gray-900/80">{label}</span>
+          {detected ? <span className="text-[10px] bg-green-500/20 text-green-600 px-1.5 py-0.5 rounded">✓ 자동 감지</span>
+                    : <span className="text-[10px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded">{required ? "⚠ 필수" : "선택"}</span>}
         </div>
-        <select
-          value={mapping[field] ?? ""}
-          onChange={e => setMapping({ ...mapping, [field]: e.target.value })}
-          className="w-full bg-white text-gray-900 border border-gray-200 rounded p-1.5 text-xs outline-none"
-        >
-          <option value="">-- 매핑 안 함 (공란) --</option>
+        <select value={mapping[field] ?? ""} onChange={e => setMapping({ ...mapping, [field]: e.target.value })}
+          className="w-full bg-white text-gray-900 border border-gray-200 rounded p-1.5 text-xs outline-none">
+          <option value="">-- 매핑 안 함 --</option>
           {Array.from({ length: numCols }).map((_, i) => (
             <option key={i} value={i}>{`${i + 1}열 [${String.fromCharCode(65 + i)}] — ${colSamples[i]}`}</option>
           ))}
@@ -445,442 +601,932 @@ export default function AwarenessPage({ params }: { params: Promise<{ id: string
     );
   };
 
-  // ── UI 렌더 ────────────────────────────────────────────────────
-  const groupedDigital = groupDigitalKpis(digitalKpis, "daily");
-  const groupedViral = groupViral(viralContents, "daily");
+  // ── 집계 ────────────────────────────────────────────────────
+  const groupedDigital = groupDigitalKpis(digitalKpis, viewMode);
+  const allDigital     = groupDigitalKpis(digitalKpis, "total");
+  const groupedViral   = groupViral(viralContents, "daily");
 
-  const viralMonths = Array.from(new Set(groupedViral.map(v => v.date?.substring(0, 7)))).filter(Boolean).sort().reverse();
+  // 매체 퍼포먼스 누적 합계
+  const totalSpend       = allDigital.reduce((a, r) => a + r.spend, 0);
+  const totalImpressions = allDigital.reduce((a, r) => a + r.impressions, 0);
+  const totalViews       = allDigital.reduce((a, r) => a + r.views, 0);
+  const totalClicks      = allDigital.reduce((a, r) => a + r.clicks, 0);
+  const avgCpv           = totalViews > 0 ? Math.round(totalSpend / totalViews) : 0;
+  const avgCtr           = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+
+  // 추가 컬럼 누적
+  const extraTotals: Record<string, number> = {};
+  for (const row of digitalKpis) {
+    const extra = parseExtra(row.extraData);
+    for (const [k, v] of Object.entries(extra)) {
+      extraTotals[k] = (extraTotals[k] || 0) + (v as number);
+    }
+  }
+  // 감지된 추가 컬럼 목록 (DB 데이터에서 추출)
+  const detectedExtraCols = Array.from(new Set(
+    digitalKpis.flatMap(r => Object.keys(parseExtra(r.extraData)))
+  ));
+
+  // KPI 타겟 목록
+  const kpiTargets = campaign?.kpiTargets || [];
+
+  // 바이럴 통계
+  const viralMonths    = Array.from(new Set(groupedViral.map(v => v.date?.substring(0, 7)))).filter(Boolean).sort().reverse();
   const viralPlatforms = Array.from(new Set(groupedViral.map(v => v.platform))).filter(Boolean).sort();
-
-  const filteredViral = groupedViral.filter(v => {
+  const filteredViral  = groupedViral.filter(v => {
     if (filterMonth !== "all" && v.date?.substring(0, 7) !== filterMonth) return false;
     if (filterPlatform !== "all" && v.platform !== filterPlatform) return false;
     return true;
   });
+  const viralTotalViews    = filteredViral.reduce((a, v) => a + (v.views    || 0), 0);
+  const viralTotalLikes    = filteredViral.reduce((a, v) => a + (v.likes    || 0), 0);
+  const viralTotalComments = filteredViral.reduce((a, v) => a + (v.comments || 0), 0);
+  const viralEngagePct     = viralTotalViews > 0 ? ((viralTotalLikes + viralTotalComments) / viralTotalViews) * 100 : 0;
 
-  const viralTotalViews = filteredViral.reduce((acc, v) => acc + (v.views || 0), 0);
-  const viralTotalLikes = filteredViral.reduce((acc, v) => acc + (v.likes || 0), 0);
-  const viralTotalComments = filteredViral.reduce((acc, v) => acc + (v.comments || 0), 0);
+  // 유튜브 통계
+  const ytTotalViews    = youtubeVideos.reduce((a, v) => a + (v.views    || 0), 0);
+  const ytTotalLikes    = youtubeVideos.reduce((a, v) => a + (v.likes    || 0), 0);
+  const ytTotalComments = youtubeVideos.reduce((a, v) => a + (v.comments || 0), 0);
+  const ytEngagePct     = ytTotalViews > 0 ? ((ytTotalLikes + ytTotalComments) / ytTotalViews) * 100 : 0;
 
-  const ytTotalViews = youtubeVideos.reduce((acc, v) => acc + (v.views || 0), 0);
-  const ytTotalLikes = youtubeVideos.reduce((acc, v) => acc + (v.likes || 0), 0);
-  const ytTotalComments = youtubeVideos.reduce((acc, v) => acc + (v.comments || 0), 0);
+  const TABS = [
+    { key: "media" as ActiveTab, label: "매체 퍼포먼스" },
+    { key: "video" as ActiveTab, label: "캠페인 광고 영상" },
+    { key: "viral" as ActiveTab, label: "바이럴 컨텐츠 성과" },
+  ];
 
   return (
-    <div className="flex flex-col gap-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-      {/* ── 매체 퍼포먼스 ── */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-gray-900">매체 퍼포먼스 모니터링</h2>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="border-gray-200 text-gray-900/80 hover:bg-gray-100"
-              onClick={() => setShowConfig({ type: "digital", source: "excel" })}>
-              <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
-            </Button>
-            <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0F9D58]/80 text-gray-900 border-0"
-              onClick={() => setShowConfig({ type: "digital", source: "sheet" })}>
-              <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
-            </Button>
-          </div>
-        </div>
+      {/* ── 탭 네비게이션 ── */}
+      <div className="flex border-b border-gray-200">
+        {TABS.map(tab => (
+          <button key={tab.key} onClick={() => setActiveTab(tab.key)}
+            className={`px-5 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === tab.key ? "border-fursys-red text-fursys-red" : "border-transparent text-gray-400 hover:text-gray-700"
+            }`}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-        {showConfig?.type === "digital" && (
-          <GlassCard className="p-4 mb-4 border-dashed bg-gray-50 animate-in slide-in-from-top-2">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-gray-900">매체 데이터 소스 연동</span>
-              <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-gray-900/50" /></button>
-            </div>
-            {showConfig.source === "sheet" ? (
-              <div className="flex flex-col gap-2">
-                <div className="flex gap-2">
-                  <Input value={sheetUrl} onChange={e => setSheetUrl(e.target.value)}
-                    placeholder="스프레드시트 URL 복사/붙여넣기..."
-                    className="bg-gray-50 border-gray-100 text-xs text-gray-900" />
-                  <Button size="sm" onClick={() => handleSheetSync("digital")} disabled={isSyncing}
-                    className="bg-white text-black whitespace-nowrap">
-                    {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : "AI 분석"}
-                  </Button>
+      {/* ════════════════════════════════════════════════════
+          탭 1: 매체 퍼포먼스
+      ════════════════════════════════════════════════════ */}
+      {activeTab === "media" && (
+        <div className="flex flex-col gap-6">
+
+          {/* KPI 요약 카드 */}
+          {digitalKpis.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-gray-900">전체 누적 성과</h3>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setShowItemOrder(v => !v)}
+                    className="text-xs flex items-center gap-1 text-gray-400 hover:text-fursys-red transition-colors">
+                    <ArrowUpDown className="w-3 h-3" /> 순서 편집
+                  </button>
+                  <button onClick={() => setShowCumulativeSettings(v => !v)}
+                    className="text-xs flex items-center gap-1 text-gray-400 hover:text-fursys-red transition-colors">
+                    <SlidersHorizontal className="w-3 h-3" /> 항목 선택
+                  </button>
                 </div>
-                <p className="text-[10px] text-gray-900/40">* URL 입력 → AI 자동 분석 → 매핑 없이 바로 저장됩니다.</p>
               </div>
-            ) : (
-              <div className="flex items-center gap-4">
+              {showCumulativeSettings && (
+                <div className="bg-gray-50 p-3 rounded-lg mb-3 flex flex-wrap gap-2 border border-gray-200">
+                  {[
+                    { key: "spend", label: "집행 비용" },
+                    { key: "impressions", label: "노출수" },
+                    { key: "views", label: "조회수" },
+                    { key: "clicks", label: "클릭수" },
+                    { key: "cpv", label: "CPV" },
+                    { key: "ctr", label: "CTR" },
+                  ].map(item => (
+                    <label key={item.key} className="flex items-center gap-2 cursor-pointer text-xs">
+                      <input type="checkbox" checked={cumulativeVisibleItems[item.key] ?? true}
+                        onChange={e => setCumulativeVisibleItems(v => ({ ...v, [item.key]: e.target.checked }))}
+                        className="accent-fursys-red w-3 h-3" />
+                      <span>{item.label}</span>
+                    </label>
+                  ))}
+                  {detectedExtraCols.map(col => (
+                    <label key={col} className="flex items-center gap-2 cursor-pointer text-xs">
+                      <input type="checkbox" checked={cumulativeVisibleItems[col] ?? true}
+                        onChange={e => setCumulativeVisibleItems(v => ({ ...v, [col]: e.target.checked }))}
+                        className="accent-fursys-red w-3 h-3" />
+                      <span className="bg-blue-50 px-1.5 py-0.5 rounded">{col}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {showItemOrder && (
+                <div className="bg-gray-50 p-3 rounded-lg mb-3 border border-gray-200 flex flex-col gap-2">
+                  <p className="text-xs text-gray-400 mb-2">드래그하여 순서를 변경할 수 있습니다. (회색 = 숨김 항목)</p>
+                  {(() => {
+                    const allItems = [...cumulativeItemOrder, ...detectedExtraCols.filter(col => !cumulativeItemOrder.includes(col))];
+                    return allItems.map((item, idx) => {
+                      const itemLabels: Record<string, string> = {
+                        spend: "집행 비용", impressions: "노출수", views: "조회수",
+                        clicks: "클릭수", cpv: "CPV", ctr: "CTR"
+                      };
+                      const itemLabel = itemLabels[item] || item;
+                      const isExtra = detectedExtraCols.includes(item);
+                      const isDragging = draggedCumulativeItem === item;
+                      const isVisible = cumulativeVisibleItems[item];
+
+                      return (
+                        <div
+                          key={item}
+                          draggable
+                          onDragStart={() => setDraggedCumulativeItem(item)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (!draggedCumulativeItem || draggedCumulativeItem === item) return;
+                            const allItems = [...cumulativeItemOrder, ...detectedExtraCols.filter(col => !cumulativeItemOrder.includes(col))];
+                            const draggedIdx = allItems.indexOf(draggedCumulativeItem);
+                            const targetIdx = allItems.indexOf(item);
+                            if (draggedIdx < targetIdx) {
+                              allItems.splice(draggedIdx, 1);
+                              allItems.splice(targetIdx - 1, 0, draggedCumulativeItem);
+                            } else {
+                              allItems.splice(draggedIdx, 1);
+                              allItems.splice(targetIdx, 0, draggedCumulativeItem);
+                            }
+                            setCumulativeItemOrder(allItems.filter(i => cumulativeItemOrder.includes(i)));
+                            setDraggedCumulativeItem(null);
+                          }}
+                          onDragEnd={() => setDraggedCumulativeItem(null)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded cursor-move transition-all ${
+                            isDragging
+                              ? "bg-fursys-red/10 border-fursys-red/30 border"
+                              : "bg-white border border-gray-200 hover:border-fursys-red/50"
+                          } ${!isVisible ? "opacity-40 bg-gray-200" : ""}`}>
+                          <span className="text-lg text-gray-300">⋮⋮</span>
+                          <span className={`text-xs font-medium flex-1 ${isExtra ? "bg-blue-50 px-1.5 py-0.5 rounded" : ""} ${isVisible ? "text-gray-700" : "text-gray-400 line-through"}`}>
+                            {itemLabel}
+                            {!isVisible && <span className="ml-1 text-[10px] bg-gray-300 text-white px-1.5 py-0.5 rounded">숨김</span>}
+                          </span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                {[...cumulativeItemOrder, ...detectedExtraCols.filter(col => !cumulativeItemOrder.includes(col))].map(item => {
+                  const spendKpi = kpiTargets.find(t => t.label?.includes("비용") || t.label?.includes("집행"));
+                  const impressKpi = kpiTargets.find(t => t.label?.includes("노출"));
+                  const viewsKpi = kpiTargets.find(t => t.label?.includes("조회"));
+                  const clicksKpi = kpiTargets.find(t => t.label?.includes("클릭"));
+                  const cpvKpi = kpiTargets.find(t => t.label?.includes("CPV"));
+                  const ctrKpi = kpiTargets.find(t => t.label?.includes("CTR"));
+
+                  if (item === "spend" && cumulativeVisibleItems.spend) {
+                    const kpiInfo = spendKpi ? {
+                      target: fmtKrw(spendKpi.target),
+                      rate: spendKpi.target > 0 ? (totalSpend / spendKpi.target) * 100 : 0,
+                      isBudget: true
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="spend"
+                        label="집행 비용"
+                        value={fmtKrw(totalSpend)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "집행 비용", target: spendKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("비용") || t.label?.includes("집행")) }); setKpiTargetVal(String(spendKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (item === "impressions" && cumulativeVisibleItems.impressions) {
+                    const kpiInfo = impressKpi ? {
+                      target: fmt(impressKpi.target),
+                      rate: impressKpi.target > 0 ? (totalImpressions / impressKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="impressions"
+                        label="노출수"
+                        value={fmt(totalImpressions)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "노출수", target: impressKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("노출")) }); setKpiTargetVal(String(impressKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (item === "views" && cumulativeVisibleItems.views) {
+                    const kpiInfo = viewsKpi ? {
+                      target: fmt(viewsKpi.target),
+                      rate: viewsKpi.target > 0 ? (totalViews / viewsKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="views"
+                        label="조회수"
+                        value={fmt(totalViews)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "조회수", target: viewsKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("조회")) }); setKpiTargetVal(String(viewsKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (item === "clicks" && cumulativeVisibleItems.clicks) {
+                    const kpiInfo = clicksKpi ? {
+                      target: fmt(clicksKpi.target),
+                      rate: clicksKpi.target > 0 ? (totalClicks / clicksKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="clicks"
+                        label="클릭수"
+                        value={fmt(totalClicks)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "클릭수", target: clicksKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("클릭")) }); setKpiTargetVal(String(clicksKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (item === "cpv" && cumulativeVisibleItems.cpv) {
+                    const kpiInfo = cpvKpi ? {
+                      target: fmtKrw(cpvKpi.target),
+                      rate: cpvKpi.target > 0 ? (avgCpv / cpvKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="cpv"
+                        label="평균 CPV"
+                        value={fmtKrw(avgCpv)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "CPV", target: cpvKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("CPV")) }); setKpiTargetVal(String(cpvKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (item === "ctr" && cumulativeVisibleItems.ctr) {
+                    const kpiInfo = ctrKpi ? {
+                      target: pct(ctrKpi.target),
+                      rate: ctrKpi.target > 0 ? (avgCtr / ctrKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="ctr"
+                        label="평균 CTR"
+                        value={pct(avgCtr)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "CTR", target: ctrKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("CTR")) }); setKpiTargetVal(String(ctrKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (detectedExtraCols.includes(item) && cumulativeVisibleItems[item]) return <StatCard key={item} label={item} value={fmt(extraTotals[item] || 0)} />;
+                  return null;
+                })}
+              </div>
+            </div>
+          )}
+
+
+          {/* KPI 편집 모달 */}
+          {editingKpi && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+              <div className="bg-white rounded-2xl p-6 w-[380px] shadow-2xl border border-gray-100">
+                <h3 className="font-bold text-gray-900 mb-4">KPI 목표 설정</h3>
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">KPI 항목명</label>
+                    <Input value={editingKpi.label} onChange={e => setEditingKpi({ ...editingKpi, label: e.target.value })}
+                      placeholder="예: 캠페인 노출수" className="text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500 mb-1 block">목표 수치</label>
+                    <Input value={kpiTargetVal} onChange={e => setKpiTargetVal(e.target.value)}
+                      type="number" placeholder="0" className="text-sm" />
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-5 justify-end">
+                  <Button variant="ghost" size="sm" onClick={() => setEditingKpi(null)}>취소</Button>
+                  <Button size="sm" onClick={saveKpiTarget} className="bg-fursys-red hover:bg-red-700 text-white">저장</Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 헤더 */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <h2 className="text-xl font-bold text-gray-900">매체 퍼포먼스 모니터링</h2>
+                <div className="flex bg-gray-100 rounded-lg p-0.5 gap-0.5">
+                  {(["total", "monthly", "weekly", "daily"] as ViewMode[]).map(m => (
+                    <button key={m} onClick={() => setViewMode(m)}
+                      className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${viewMode === m ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}>
+                      {VIEW_MODE_LABELS[m]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex-1" />
+              <div className="flex gap-2">
+                {digitalKpis.length > 0 && (
+                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
+                    onClick={() => setShowMediaColOrder(v => !v)}>
+                    <ArrowUpDown className="w-4 h-4 mr-2" /> 컬럼 순서
+                  </Button>
+                )}
+                {digitalKpis.length > 0 && (
+                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
+                    onClick={() => setShowColSettings(v => !v)}>
+                    <SlidersHorizontal className="w-4 h-4 mr-2" /> 컬럼 설정
+                  </Button>
+                )}
+                <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
+                  onClick={() => setShowConfig({ type: "digital", source: "excel" })}>
+                  <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
+                </Button>
+                <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0b7a45] text-white border-0"
+                  onClick={() => setShowConfig({ type: "digital", source: "sheet" })}>
+                  <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* 컬럼 순서 편집 패널 */}
+          {showMediaColOrder && (
+            <GlassCard className="p-4 bg-gray-50 animate-in slide-in-from-top-2">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <ArrowUpDown className="w-4 h-4" /> 테이블 컬럼 순서
+                </span>
+                <button onClick={() => setShowMediaColOrder(false)}><X className="w-4 h-4 text-gray-400" /></button>
+              </div>
+              <p className="text-xs text-gray-400 mb-3">드래그하여 컬럼 순서를 변경할 수 있습니다. (회색 = 숨김 항목)</p>
+              <div className="flex flex-col gap-2">
+                {(() => {
+                  const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
+                  const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
+                  const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
+
+                  return allCols.map((col) => {
+                    const label = FIXED_COLS.find(fc => fc.key === col)?.label || col;
+                    const isExtra = detectedExtraCols.includes(col);
+                    const isDragging = draggedMediaCol === col;
+                    const isVisible = visibleCols[col];
+
+                    return (
+                      <div
+                        key={col}
+                        draggable
+                        onDragStart={() => setDraggedMediaCol(col)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => {
+                          if (!draggedMediaCol || draggedMediaCol === col) return;
+                          const fixedOrder = mediaColOrder.filter(c => FIXED_COLS.some(fc => fc.key === c));
+                          const extraOrder = mediaColOrder.filter(c => !FIXED_COLS.some(fc => fc.key === c));
+                          const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(c => !mediaColOrder.includes(c))];
+                          const draggedIdx = allCols.indexOf(draggedMediaCol);
+                          const targetIdx = allCols.indexOf(col);
+                          if (draggedIdx < targetIdx) {
+                            allCols.splice(draggedIdx, 1);
+                            allCols.splice(targetIdx - 1, 0, draggedMediaCol);
+                          } else {
+                            allCols.splice(draggedIdx, 1);
+                            allCols.splice(targetIdx, 0, draggedMediaCol);
+                          }
+                          const newOrder = allCols.filter(c => FIXED_COLS.some(fc => fc.key === c) || mediaColOrder.includes(c));
+                          setMediaColOrder(newOrder);
+                          setDraggedMediaCol(null);
+                        }}
+                        onDragEnd={() => setDraggedMediaCol(null)}
+                        className={`flex items-center gap-2 px-3 py-2 rounded cursor-move transition-all ${
+                          isDragging
+                            ? "bg-fursys-red/10 border-fursys-red/30 border"
+                            : "bg-white border border-gray-200 hover:border-fursys-red/50"
+                        } ${!isVisible ? "opacity-40 bg-gray-200" : ""}`}>
+                        <span className="text-lg text-gray-300">⋮⋮</span>
+                        <span className={`text-sm flex-1 ${isExtra ? "bg-blue-50 px-2 py-0.5 rounded" : ""} ${isVisible ? "text-gray-800" : "text-gray-400 line-through"}`}>
+                          {label}
+                          {!isVisible && <span className="ml-1 text-[10px] bg-gray-300 text-white px-1.5 py-0.5 rounded">숨김</span>}
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </GlassCard>
+          )}
+
+          {/* 컬럼 설정 패널 */}
+          {showColSettings && (
+            <GlassCard className="p-4 bg-gray-50 animate-in slide-in-from-top-2">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <SlidersHorizontal className="w-4 h-4" /> 대시보드 노출 항목
+                </span>
+                <button onClick={() => setShowColSettings(false)}><X className="w-4 h-4 text-gray-400" /></button>
+              </div>
+              <p className="text-xs text-gray-400 mb-3">체크한 항목만 테이블에 표시됩니다.</p>
+              <div className="flex flex-wrap gap-3">
+                {FIXED_COLS.map(col => (
+                  <label key={col.key} className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={visibleCols[col.key] ?? true}
+                      onChange={e => setVisibleCols(v => ({ ...v, [col.key]: e.target.checked }))}
+                      className="accent-fursys-red w-4 h-4" />
+                    <span className="text-sm text-gray-800">{col.label}</span>
+                  </label>
+                ))}
+                {detectedExtraCols.map(label => (
+                  <label key={label} className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={visibleCols[label] ?? true}
+                      onChange={e => setVisibleCols(v => ({ ...v, [label]: e.target.checked }))}
+                      className="accent-fursys-red w-4 h-4" />
+                    <span className="text-sm text-gray-800 bg-blue-50 px-2 py-0.5 rounded">{label}</span>
+                  </label>
+                ))}
+              </div>
+            </GlassCard>
+          )}
+
+          {/* 업로드 패널 */}
+          {showConfig?.type === "digital" && (
+            <GlassCard className="p-4 border-dashed bg-gray-50 animate-in slide-in-from-top-2">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-semibold text-gray-900">매체 데이터 소스 연동</span>
+                <div className="flex items-center gap-2">
+                  {digitalKpis.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={async () => {
+                        if (confirm("모든 매체 데이터를 삭제하시겠습니까?")) {
+                          await clearDigitalKpis({ campaignId });
+                          setShowConfig(null);
+                        }
+                      }}
+                      className="text-red-500 hover:text-red-700 hover:bg-red-50 text-xs h-8"
+                    >
+                      <Trash className="w-3.5 h-3.5 mr-1" /> 데이터 삭제
+                    </Button>
+                  )}
+                  <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-gray-400" /></button>
+                </div>
+              </div>
+              {showConfig.source === "sheet" ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <Input value={sheetUrl} onChange={e => setSheetUrl(e.target.value)}
+                      placeholder="스프레드시트 URL..." className="bg-white border-gray-200 text-xs text-gray-900" />
+                    <Button size="sm" onClick={() => handleSheetSync("digital")} disabled={isSyncing}
+                      className="bg-white text-black whitespace-nowrap border border-gray-200">
+                      {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : "AI 분석"}
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-gray-400">* 모든 컬럼을 자동 감지해 저장합니다. 날짜 행만 수집됩니다.</p>
+                </div>
+              ) : (
                 <input type="file" accept=".xlsx,.xls,.csv" ref={fileInputRef}
                   onChange={e => handleExcelUpload(e, "digital")}
-                  className="text-xs text-gray-900/60 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-100 file:text-gray-900" />
-              </div>
-            )}
-            {isSyncing && syncStatus && (
-              <div className="mt-3 flex items-center gap-2 text-xs text-indigo-400">
-                <RefreshCw className="w-3 h-3 animate-spin" />
-                <span>{syncStatus}</span>
-              </div>
-            )}
-          </GlassCard>
-        )}
-
-        <GlassCard className="p-0 overflow-hidden min-h-[150px]">
-          {groupedDigital.length === 0 ? (
-            <div className="flex items-center justify-center h-[150px] text-gray-900/30 text-sm">
-              구글 시트 또는 엑셀 파일을 연동하면 AI가 자동으로 분석합니다.
-            </div>
-          ) : (
-            <Table>
-              <TableHeader className="bg-gray-50">
-                <TableRow className="border-gray-100 hover:bg-transparent">
-                  <TableHead className="text-gray-900/60">기간 ({viewMode})</TableHead>
-                  <TableHead className="text-gray-900/60">매체명</TableHead>
-                  <TableHead className="text-gray-900/60 text-right">집행 비용</TableHead>
-                  <TableHead className="text-gray-900/60 text-right">노출수</TableHead>
-                  <TableHead className="text-gray-900/60 text-right">조회수</TableHead>
-                  <TableHead className="text-gray-900/60 text-right">클릭수</TableHead>
-                  <TableHead className="text-gray-900/60 text-right">CPV</TableHead>
-                  <TableHead className="text-gray-900/60 text-right">CTR / VTR</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {groupedDigital.map((row, i) => (
-                  <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
-                    <TableCell className="font-mono text-gray-900/60">{row.dateLabel}</TableCell>
-                    <TableCell className="font-medium text-gray-900">{row.medium}</TableCell>
-                    <TableCell className="text-right text-gray-900/80">{row.spend.toLocaleString()}원</TableCell>
-                    <TableCell className="text-right text-gray-900/80">{row.impressions.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-gray-900">{row.views.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-gray-900">{row.clicks.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-gray-900/80">₩{row.cpv.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-bold text-indigo-400">{row.ctr}% / {row.vtr}%</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </GlassCard>
-      </div>
-
-      {/* ── 캠페인 연계 광고 영상 (유튜브 등) ── */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-gray-900">캠페인 연계 광고 영상</h2>
-          <div className="flex gap-2 items-center">
-            <Input 
-              value={newYoutubeUrl} 
-              onChange={e => setNewYoutubeUrl(e.target.value)} 
-              placeholder="유튜브 영상 URL 입력..."
-              className="h-8 w-64 bg-gray-50 border-gray-100 text-xs text-gray-900"
-            />
-            <Button size="sm" onClick={handleAddYoutube} disabled={isAddingYoutube} className="h-8 bg-blue-600 hover:bg-blue-500 text-gray-900">
-              {isAddingYoutube ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />} 
-              추가/수집
-            </Button>
-          </div>
-        </div>
-        
-        <GlassCard className="p-0 overflow-hidden mb-8">
-          {youtubeVideos.length === 0 ? (
-            <div className="flex items-center justify-center p-8 text-gray-900/30 text-sm">
-              우측 상단에 연계될 유튜브 영상 링크를 입력하여 영상을 추가하세요.
-            </div>
-          ) : (
-            <Table>
-              <TableHeader className="bg-gray-50">
-                <TableRow className="border-gray-100 hover:bg-transparent">
-                  <TableHead className="text-gray-900/60">업로드</TableHead>
-                  <TableHead className="text-gray-900/60">플랫폼</TableHead>
-                  <TableHead className="text-gray-900/60">콘텐츠 제목</TableHead>
-                  <TableHead className="text-right text-indigo-400">
-                    <div className="flex flex-col">
-                      <span className="text-gray-900/60 text-xs font-normal">조회수</span>
-                      <span className="font-bold text-sm">{ytTotalViews.toLocaleString()}</span>
-                    </div>
-                  </TableHead>
-                  <TableHead className="text-right text-indigo-400">
-                    <div className="flex flex-col">
-                      <span className="text-gray-900/60 text-xs font-normal">반응 (좋아요 / 댓글)</span>
-                      <span className="font-bold text-sm">👍 {ytTotalLikes.toLocaleString()} / 💬 {ytTotalComments.toLocaleString()}</span>
-                    </div>
-                  </TableHead>
-                  <TableHead className="text-gray-900/60 text-center w-[100px]">관리</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {youtubeVideos.map((vid: any) => (
-                  <TableRow key={vid._id} className="border-gray-100 hover:bg-gray-50 text-sm h-[72px]">
-                    <TableCell className="font-mono text-gray-900/60">{vid.uploadDate}</TableCell>
-                    <TableCell>
-                      <span className="px-2 py-1 bg-red-500/20 text-red-400 rounded text-[10px] font-bold">YT</span>
-                    </TableCell>
-                    <TableCell className="text-gray-900/80 max-w-[200px]">
-                      <div className="flex items-center gap-3">
-                        {vid.thumbnailUrl ? (
-                          <img src={`/api/proxy-image?url=${encodeURIComponent(vid.thumbnailUrl)}`} referrerPolicy="no-referrer" alt="thumbnail" className="w-14 h-14 object-cover rounded-md shadow-md border border-gray-100 shrink-0" />
-                        ) : (
-                          <div className="w-14 h-14 bg-gray-50 rounded-md flex items-center justify-center shrink-0 border border-gray-100 text-gray-900/20 text-[10px]">No Img</div>
-                        )}
-                        <div className="flex flex-col gap-1 overflow-hidden">
-                          <div className="font-bold text-xs truncate max-w-[130px] leading-tight" title={vid.title}>{vid.title}</div>
-                          {vid.youtubeId !== "-" && <a href={`https://youtube.com/watch?v=${vid.youtubeId}`} target="_blank" rel="noreferrer" className="text-[10px] hover:underline text-blue-400 font-medium truncate">🔗 영상 보러가기</a>}
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-gray-900">{vid.views.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-mono text-gray-900/60">👍 {vid.likes.toLocaleString()} / 💬 {vid.comments.toLocaleString()}</TableCell>
-                    <TableCell className="text-center">
-                      <button onClick={() => { if(confirm("삭제하시겠습니까?")) deleteYouTubeVideo({ videoId: vid._id })}} className="p-1 rounded hover:bg-red-500/20 text-red-500/70"><Trash className="w-4 h-4" /></button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </GlassCard>
-      </div>
-
-      {/* ── 바이럴 컨텐츠 ── */}
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
-            <h2 className="text-xl font-bold text-gray-900">바이럴 컨텐츠 성과</h2>
-            <div className="flex items-center gap-2">
-              <select className="bg-gray-50 border border-gray-100 text-gray-900 text-xs rounded p-1.5 outline-none" 
-                value={filterMonth} onChange={e => setFilterMonth(e.target.value)}>
-                <option value="all">전체 월</option>
-                {viralMonths.map(m => <option key={m} value={m}>{m}</option>)}
-              </select>
-              <select className="bg-gray-50 border border-gray-100 text-gray-900 text-xs rounded p-1.5 outline-none" 
-                value={filterPlatform} onChange={e => setFilterPlatform(e.target.value)}>
-                <option value="all">전체 플랫폼</option>
-                {viralPlatforms.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" className="border-gray-200 text-gray-900/80 hover:bg-gray-100"
-              onClick={() => setShowConfig({ type: "viral", source: "excel" })}>
-              <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
-            </Button>
-            <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0F9D58]/80 text-gray-900 border-0"
-              onClick={() => setShowConfig({ type: "viral", source: "sheet" })}>
-              <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
-            </Button>
-          </div>
-        </div>
-
-        {showConfig?.type === "viral" && (
-          <GlassCard className="p-4 mb-4 border-dashed bg-gray-50 animate-in slide-in-from-top-2">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-gray-900">바이럴 데이터 소스 연동</span>
-              <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-gray-900/50" /></button>
-            </div>
-            {showConfig.source === "sheet" ? (
-              <div className="flex flex-col gap-2">
-                <div className="flex gap-2">
-                  <Input value={sheetUrl} onChange={e => setSheetUrl(e.target.value)}
-                    placeholder="스프레드시트 URL 복사/붙여넣기..."
-                    className="bg-gray-50 border-gray-100 text-xs text-gray-900" />
-                  <Button size="sm" onClick={() => handleSheetSync("viral")} disabled={isSyncing}
-                    className="bg-white text-black whitespace-nowrap">
-                    {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : "가져오기"}
-                  </Button>
+                  className="text-xs text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-100 file:text-gray-900" />
+              )}
+              {isSyncing && syncStatus && (
+                <div className="mt-3 flex items-center gap-2 text-xs text-fursys-red">
+                  <RefreshCw className="w-3 h-3 animate-spin" /><span>{syncStatus}</span>
                 </div>
-                <p className="text-[10px] text-gray-900/40">* AI가 컬럼을 자동 감지하고 매핑 미리보기를 생성합니다.</p>
+              )}
+            </GlassCard>
+          )}
+
+          {/* 테이블 */}
+          <GlassCard className="p-0 overflow-hidden min-h-[120px]">
+            {groupedDigital.length === 0 ? (
+              <div className="flex items-center justify-center h-[120px] text-gray-400 text-sm">
+                구글 시트 또는 엑셀 파일을 연동하면 AI가 자동으로 분석합니다.
               </div>
             ) : (
-              <div className="flex items-center gap-4">
-                <input type="file" accept=".xlsx,.xls,.csv" ref={fileInputRef}
-                  onChange={e => handleExcelUpload(e, "viral")}
-                  className="text-xs text-gray-900/60 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-100 file:text-gray-900" />
-              </div>
+              <Table>
+                <TableHeader className="bg-gray-50">
+                  <TableRow className="border-gray-100 hover:bg-transparent">
+                    <TableHead className="text-gray-500 text-xs">기간 ({VIEW_MODE_LABELS[viewMode]})</TableHead>
+                    {(() => {
+                      const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
+                      const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
+                      const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
+                      return allCols.map(col => {
+                        const isVisible = visibleCols[col];
+                        if (!isVisible) return null;
+                        if (col === "spend") return <TableHead key="spend" className="text-gray-500 text-xs text-right">집행 비용</TableHead>;
+                        if (col === "impressions") return <TableHead key="impressions" className="text-gray-500 text-xs text-right">노출수</TableHead>;
+                        if (col === "views") return <TableHead key="views" className="text-gray-500 text-xs text-right">조회수</TableHead>;
+                        if (col === "clicks") return <TableHead key="clicks" className="text-gray-500 text-xs text-right">클릭수</TableHead>;
+                        if (col === "cpv") return <TableHead key="cpv" className="text-gray-500 text-xs text-right">CPV</TableHead>;
+                        if (col === "ctrVtr") return <TableHead key="ctrVtr" className="text-gray-500 text-xs text-right">CTR / VTR</TableHead>;
+                        return <TableHead key={col} className="text-gray-500 text-xs text-right">{col}</TableHead>;
+                      });
+                    })()}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {groupedDigital.map((row, i) => (
+                    <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
+                      <TableCell className="font-mono text-gray-500 text-xs">{row.dateLabel}</TableCell>
+                      {(() => {
+                        const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
+                        const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
+                        const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
+                        return allCols.map(col => {
+                          const isVisible = visibleCols[col];
+                          if (!isVisible) return null;
+                          const compareClass = getMetricComparisonClass(groupedDigital, i, row, col);
+                          if (col === "spend") return <TableCell key="spend" className={`text-right font-bold ${compareClass || "text-gray-700"}`}>{fmt(row.spend)}원</TableCell>;
+                          if (col === "impressions") return <TableCell key="impressions" className={`text-right font-bold ${compareClass || "text-gray-700"}`}>{fmt(row.impressions)}</TableCell>;
+                          if (col === "views") return <TableCell key="views" className={`text-right font-bold ${compareClass || "text-gray-900"}`}>{fmt(row.views)}</TableCell>;
+                          if (col === "clicks") return <TableCell key="clicks" className={`text-right font-bold ${compareClass || "text-gray-900"}`}>{fmt(row.clicks)}</TableCell>;
+                          if (col === "cpv") return <TableCell key="cpv" className={`text-right font-bold ${compareClass || "text-gray-700"}`}>{fmtKrw(row.cpv)}</TableCell>;
+                          if (col === "ctrVtr") {
+                            const ctrCompare = getMetricComparisonClass(groupedDigital, i, row, "ctr");
+                            const vtrCompare = getMetricComparisonClass(groupedDigital, i, row, "vtr");
+                            const anyImproved = ctrCompare || vtrCompare;
+                            return <TableCell key="ctrVtr" className={`text-right font-bold ${anyImproved || "text-gray-700"}`}>{row.ctr}% / {row.vtr}%</TableCell>;
+                          }
+                          const extraCompare = getMetricComparisonClass(groupedDigital, i, row, col);
+                          return <TableCell key={col} className={`text-right font-bold ${extraCompare || "text-gray-700"}`}>{fmt(row.extra?.[col] || 0)}</TableCell>;
+                        });
+                      })()}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </GlassCard>
-        )}
+        </div>
+      )}
 
-        <GlassCard className="p-0 overflow-hidden min-h-[150px]">
-          {groupedViral.length === 0 ? (
-            <div className="flex items-center justify-center h-[150px] text-gray-900/30 text-sm">
-              데이터를 연동해 주세요.
+      {/* ════════════════════════════════════════════════════
+          탭 2: 캠페인 광고 영상
+      ════════════════════════════════════════════════════ */}
+      {activeTab === "video" && (
+        <div className="flex flex-col gap-6">
+          {/* 요약 통계 */}
+          {youtubeVideos.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="누적 조회수"          value={fmt(ytTotalViews)} />
+              <StatCard label="누적 좋아요"           value={fmt(ytTotalLikes)} />
+              <StatCard label="누적 댓글"             value={fmt(ytTotalComments)} />
+              <StatCard label="조회 대비 인게이지먼트" value={pct(ytEngagePct)}
+                sub={`(좋아요+댓글) / 조회 × 100`} />
             </div>
-          ) : (
-            <Table>
-              <TableHeader className="bg-gray-50">
-                <TableRow className="border-gray-100 hover:bg-transparent">
-                  <TableHead className="text-gray-900/60">업로드 (daily)</TableHead>
-                  <TableHead className="text-gray-900/60">플랫폼</TableHead>
-                  <TableHead className="text-gray-900/60">크리에이터</TableHead>
-                  <TableHead className="text-gray-900/60">콘텐츠 제목</TableHead>
-                  <TableHead className="text-right text-indigo-400">
-                    <div className="flex flex-col">
-                      <span className="text-gray-900/60 text-xs font-normal">조회수</span>
-                      <span className="font-bold text-sm">{viralTotalViews.toLocaleString()}</span>
-                    </div>
-                  </TableHead>
-                  <TableHead className="text-right text-indigo-400">
-                    <div className="flex flex-col">
-                      <span className="text-gray-900/60 text-xs font-normal">반응 (좋아요 / 댓글)</span>
-                      <span className="font-bold text-sm">👍 {viralTotalLikes.toLocaleString()} / 💬 {viralTotalComments.toLocaleString()}</span>
-                    </div>
-                  </TableHead>
-                  <TableHead className="text-gray-900/60 text-center">관리</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredViral.map(row => {
-                  const isEditing = editingViralId === row._id;
-                  return (
-                  <TableRow key={row._id} className="border-gray-100 hover:bg-gray-50 text-sm">
-                    <TableCell className="text-gray-900/50 font-mono">{row.dateLabel}</TableCell>
-                    <TableCell>
-                      <span className="bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-900/80">{row.platform}</span>
-                    </TableCell>
-                    <TableCell className="font-medium text-gray-900">
-                      {isEditing ? <Input value={editViralForm.creator} onChange={e => setEditViralForm({...editViralForm, creator: e.target.value})} className="h-6 text-xs w-20 bg-transparent border-gray-200"/> : row.creator}
-                    </TableCell>
-                    <TableCell className="text-gray-900/80 max-w-[200px]">
-                      {isEditing ? (
-                        <div className="flex flex-col gap-1">
-                          <Input placeholder="URL" value={editViralForm.url || ""} onChange={e => setEditViralForm({...editViralForm, url: e.target.value})} className="h-6 text-xs bg-transparent border-gray-200"/>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-3">
-                          {row.thumbnailUrl ? (
-                            <img src={`/api/proxy-image?url=${encodeURIComponent(row.thumbnailUrl)}`} referrerPolicy="no-referrer" alt="thumbnail" className="w-14 h-14 object-cover rounded-md shadow-md border border-gray-100 shrink-0" />
-                          ) : (
-                            <div className="w-14 h-14 bg-gray-50 rounded-md flex items-center justify-center shrink-0 border border-gray-100 text-gray-900/20 text-[10px]">No Img</div>
-                          )}
-                          <div className="flex flex-col gap-1 overflow-hidden">
-                            <div className="font-bold text-xs truncate max-w-[130px] leading-tight" title={row.title !== "-" ? row.title : "제목 없음"}>
-                              {row.title !== "-" ? row.title : "제목 없음"}
-                            </div>
-                            {row.url ? <a href={row.url} target="_blank" rel="noreferrer" className="text-[10px] hover:underline text-blue-400 font-medium truncate">🔗 컨텐츠 보러가기</a> : null}
-                          </div>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-gray-900">
-                      {isEditing ? <Input value={editViralForm.views} onChange={e => setEditViralForm({...editViralForm, views: e.target.value})} className="h-6 text-xs w-16 text-right bg-transparent border-gray-200 ml-auto"/> : row.views.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-gray-900/60">
-                      {isEditing ? (
-                        <div className="flex gap-1 justify-end">
-                           <Input placeholder="Likes" value={editViralForm.likes} onChange={e => setEditViralForm({...editViralForm, likes: e.target.value})} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200"/>
-                           <Input placeholder="Comms" value={editViralForm.comments} onChange={e => setEditViralForm({...editViralForm, comments: e.target.value})} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200"/>
-                        </div>
-                      ) : (
-                        <>👍 {row.likes.toLocaleString()} / 💬 {row.comments.toLocaleString()}</>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-center w-[120px]">
-                      <div className="flex items-center justify-center gap-2">
-                        {isEditing ? (
-                          <>
-                            <button onClick={saveEditViral} className="p-1 rounded hover:bg-gray-100 text-green-400"><Check className="w-4 h-4" /></button>
-                            <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-900/50"><X className="w-4 h-4" /></button>
-                          </>
-                        ) : (
-                          <>
-                            {row.url && (
-                              <button onClick={() => handleFetchSnsStats(row._id, row.url)} className="p-1 rounded hover:bg-gray-100 text-blue-400" title="자동 수집">
-                                {isFetchingUrl === row._id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
-                              </button>
-                            )}
-                            <button onClick={() => startEditViral(row)} className="p-1 rounded hover:bg-gray-100 text-gray-900/50"><Pencil className="w-4 h-4" /></button>
-                            <button onClick={() => { if(confirm("삭제하시겠습니까?")) deleteViralRow({ viralId: row._id })}} className="p-1 rounded hover:bg-red-500/20 text-red-500/70"><Trash className="w-4 h-4" /></button>
-                          </>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
           )}
-        </GlassCard>
-      </div>
+
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-bold text-gray-900">캠페인 연계 광고 영상</h2>
+            <div className="flex gap-2 items-center">
+              <Input value={newYoutubeUrl} onChange={e => setNewYoutubeUrl(e.target.value)}
+                placeholder="유튜브 영상 URL 입력..."
+                className="h-8 w-64 bg-white border-gray-200 text-xs text-gray-900" />
+              <Button size="sm" onClick={handleAddYoutube} disabled={isAddingYoutube}
+                className="h-8 bg-fursys-red hover:bg-red-700 text-white">
+                {isAddingYoutube ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />}
+                추가/수집
+              </Button>
+            </div>
+          </div>
+
+          <GlassCard className="p-0 overflow-hidden">
+            {youtubeVideos.length === 0 ? (
+              <div className="flex items-center justify-center p-8 text-gray-400 text-sm">
+                유튜브 영상 링크를 입력하여 영상을 추가하세요.
+              </div>
+            ) : (
+              <Table>
+                <TableHeader className="bg-gray-50">
+                  <TableRow className="border-gray-100 hover:bg-transparent">
+                    <TableHead className="text-gray-500 text-xs">업로드</TableHead>
+                    <TableHead className="text-gray-500 text-xs">플랫폼</TableHead>
+                    <TableHead className="text-gray-500 text-xs">콘텐츠 제목</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">조회수</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">좋아요</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">댓글</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">인게이지먼트</TableHead>
+                    <TableHead className="text-gray-500 text-xs text-center w-[80px]">관리</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {youtubeVideos.map((vid: any) => {
+                    const eng = vid.views > 0 ? ((vid.likes + vid.comments) / vid.views * 100).toFixed(2) : "0.00";
+                    return (
+                      <TableRow key={vid._id} className="border-gray-100 hover:bg-gray-50 text-sm h-[72px]">
+                        <TableCell className="font-mono text-gray-400 text-xs">{vid.uploadDate}</TableCell>
+                        <TableCell>
+                          <span className="px-2 py-1 bg-red-100 text-fursys-red rounded text-[10px] font-bold">YT</span>
+                        </TableCell>
+                        <TableCell className="max-w-[220px]">
+                          <div className="flex items-center gap-3">
+                            {vid.thumbnailUrl ? (
+                              <img src={`/api/proxy-image?url=${encodeURIComponent(vid.thumbnailUrl)}`}
+                                referrerPolicy="no-referrer" alt="thumb"
+                                className="w-14 h-14 object-cover rounded-md border border-gray-100 shrink-0" />
+                            ) : (
+                              <div className="w-14 h-14 bg-gray-100 rounded-md shrink-0 border border-gray-100 flex items-center justify-center text-[10px] text-gray-300">No Img</div>
+                            )}
+                            <div className="flex flex-col gap-1 overflow-hidden">
+                              <div className="font-bold text-xs truncate max-w-[130px]" title={vid.title}>{vid.title}</div>
+                              {vid.youtubeId !== "-" && (
+                                <a href={`https://youtube.com/watch?v=${vid.youtubeId}`} target="_blank" rel="noreferrer"
+                                  className="text-[10px] text-blue-500 hover:underline truncate">🔗 영상 보러가기</a>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-gray-900">{fmt(vid.views)}</TableCell>
+                        <TableCell className="text-right font-mono text-gray-700">👍 {fmt(vid.likes)}</TableCell>
+                        <TableCell className="text-right font-mono text-gray-700">
+                          <button
+                            onClick={() => setCommentModal({ type: "yt", id: vid._id, title: vid.title, url: `https://youtube.com/watch?v=${vid.youtubeId}`, commentsList: vid.commentsList || [], isLoading: true })}
+                            className="flex items-center gap-1 ml-auto text-gray-700 hover:text-fursys-red transition-colors">
+                            <MessageSquare className="w-3.5 h-3.5" />
+                            {fmt(vid.comments)}
+                          </button>
+                        </TableCell>
+                        <TableCell className="text-right font-bold text-fursys-red">{eng}%</TableCell>
+                        <TableCell className="text-center">
+                          <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteYouTubeVideo({ videoId: vid._id }); }}
+                            className="p-1 rounded hover:bg-red-50 text-red-400"><Trash className="w-4 h-4" /></button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </GlassCard>
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════
+          탭 3: 바이럴 컨텐츠 성과
+      ════════════════════════════════════════════════════ */}
+      {activeTab === "viral" && (
+        <div className="flex flex-col gap-6">
+          {/* 요약 통계 */}
+          {viralContents.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="누적 조회수"          value={fmt(viralTotalViews)} />
+              <StatCard label="누적 좋아요"           value={fmt(viralTotalLikes)} />
+              <StatCard label="누적 댓글"             value={fmt(viralTotalComments)} />
+              <StatCard label="조회 대비 인게이지먼트" value={pct(viralEngagePct)}
+                sub="(좋아요+댓글) / 조회 × 100" />
+            </div>
+          )}
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <h2 className="text-xl font-bold text-gray-900">바이럴 컨텐츠 성과</h2>
+              <div className="flex items-center gap-2">
+                <select className="bg-white border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none"
+                  value={filterMonth} onChange={e => setFilterMonth(e.target.value)}>
+                  <option value="all">전체 월</option>
+                  {viralMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+                <select className="bg-white border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none"
+                  value={filterPlatform} onChange={e => setFilterPlatform(e.target.value)}>
+                  <option value="all">전체 플랫폼</option>
+                  {viralPlatforms.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
+                onClick={() => setShowConfig({ type: "viral", source: "excel" })}>
+                <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
+              </Button>
+              <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0b7a45] text-white border-0"
+                onClick={() => setShowConfig({ type: "viral", source: "sheet" })}>
+                <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
+              </Button>
+            </div>
+          </div>
+
+          {showConfig?.type === "viral" && (
+            <GlassCard className="p-4 border-dashed bg-gray-50 animate-in slide-in-from-top-2">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-semibold text-gray-900">바이럴 데이터 소스 연동</span>
+                <div className="flex items-center gap-2">
+                  {viralContents.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={async () => {
+                        if (confirm("모든 바이럴 데이터를 삭제하시겠습니까?")) {
+                          await clearViralContents({ campaignId });
+                          setShowConfig(null);
+                        }
+                      }}
+                      className="text-red-500 hover:text-red-700 hover:bg-red-50 text-xs h-8"
+                    >
+                      <Trash className="w-3.5 h-3.5 mr-1" /> 데이터 삭제
+                    </Button>
+                  )}
+                  <button onClick={() => setShowConfig(null)}><X className="w-4 h-4 text-gray-400" /></button>
+                </div>
+              </div>
+              {showConfig.source === "sheet" ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <Input value={sheetUrl} onChange={e => setSheetUrl(e.target.value)}
+                      placeholder="스프레드시트 URL..." className="bg-white border-gray-200 text-xs text-gray-900" />
+                    <Button size="sm" onClick={() => handleSheetSync("viral")} disabled={isSyncing}
+                      className="bg-white text-black whitespace-nowrap border border-gray-200">
+                      {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : "가져오기"}
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-gray-400">* AI가 컬럼을 자동 감지하고 매핑 미리보기를 생성합니다.</p>
+                </div>
+              ) : (
+                <input type="file" accept=".xlsx,.xls,.csv" ref={fileInputRef}
+                  onChange={e => handleExcelUpload(e, "viral")}
+                  className="text-xs text-gray-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-100 file:text-gray-900" />
+              )}
+            </GlassCard>
+          )}
+
+          <GlassCard className="p-0 overflow-hidden min-h-[120px]">
+            {groupedViral.length === 0 ? (
+              <div className="flex items-center justify-center h-[120px] text-gray-400 text-sm">데이터를 연동해 주세요.</div>
+            ) : (
+              <Table>
+                <TableHeader className="bg-gray-50">
+                  <TableRow className="border-gray-100 hover:bg-transparent">
+                    <TableHead className="text-gray-500 text-xs">업로드</TableHead>
+                    <TableHead className="text-gray-500 text-xs">플랫폼</TableHead>
+                    <TableHead className="text-gray-500 text-xs">크리에이터</TableHead>
+                    <TableHead className="text-gray-500 text-xs">콘텐츠 제목</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">조회수</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">좋아요</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">댓글</TableHead>
+                    <TableHead className="text-right text-gray-500 text-xs">인게이지먼트</TableHead>
+                    <TableHead className="text-gray-500 text-xs text-center">관리</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredViral.map(row => {
+                    const isEditing = editingViralId === row._id;
+                    const eng = row.views > 0 ? ((row.likes + row.comments) / row.views * 100).toFixed(2) : "0.00";
+                    return (
+                      <TableRow key={row._id} className="border-gray-100 hover:bg-gray-50 text-sm">
+                        <TableCell className="text-gray-400 font-mono text-xs">{row.dateLabel}</TableCell>
+                        <TableCell>
+                          <span className="bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-700">{row.platform}</span>
+                        </TableCell>
+                        <TableCell className="font-medium text-gray-900">
+                          {isEditing
+                            ? <Input value={editViralForm.creator} onChange={e => setEditViralForm({ ...editViralForm, creator: e.target.value })} className="h-6 text-xs w-20 bg-transparent border-gray-200" />
+                            : row.creator}
+                        </TableCell>
+                        <TableCell className="max-w-[200px]">
+                          {isEditing ? (
+                            <Input placeholder="URL" value={editViralForm.url || ""} onChange={e => setEditViralForm({ ...editViralForm, url: e.target.value })} className="h-6 text-xs bg-transparent border-gray-200" />
+                          ) : (
+                            <div className="flex items-center gap-3">
+                              {row.thumbnailUrl ? (
+                                <img src={`/api/proxy-image?url=${encodeURIComponent(row.thumbnailUrl)}`} referrerPolicy="no-referrer" alt="thumb" className="w-14 h-14 object-cover rounded-md border border-gray-100 shrink-0" />
+                              ) : (
+                                <div className="w-14 h-14 bg-gray-100 rounded-md shrink-0 border border-gray-100 flex items-center justify-center text-[10px] text-gray-300">No Img</div>
+                              )}
+                              <div className="flex flex-col gap-1 overflow-hidden">
+                                <div className="font-bold text-xs truncate max-w-[130px]" title={row.title !== "-" ? row.title : "제목 없음"}>
+                                  {row.title !== "-" ? row.title : "제목 없음"}
+                                </div>
+                                {row.url ? <a href={row.url} target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline truncate">🔗 컨텐츠 보러가기</a> : null}
+                              </div>
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-gray-900">
+                          {isEditing ? <Input value={editViralForm.views} onChange={e => setEditViralForm({ ...editViralForm, views: e.target.value })} className="h-6 text-xs w-16 text-right bg-transparent border-gray-200 ml-auto" /> : fmt(row.views)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-gray-700">
+                          {isEditing ? <Input placeholder="Likes" value={editViralForm.likes} onChange={e => setEditViralForm({ ...editViralForm, likes: e.target.value })} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200 ml-auto" /> : `👍 ${fmt(row.likes)}`}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-gray-700">
+                          {isEditing ? (
+                            <Input placeholder="Comms" value={editViralForm.comments} onChange={e => setEditViralForm({ ...editViralForm, comments: e.target.value })} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200 ml-auto" />
+                          ) : (
+                            <button
+                              onClick={() => setCommentModal({ type: "viral", id: row._id, title: row.title !== "-" ? row.title : row.creator, url: row.url, commentsList: row.commentsList || [], isLoading: true })}
+                              className="flex items-center gap-1 ml-auto text-gray-700 hover:text-fursys-red transition-colors">
+                              <MessageSquare className="w-3.5 h-3.5" />
+                              {fmt(row.comments)}
+                            </button>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right font-bold text-fursys-red">{eng}%</TableCell>
+                        <TableCell className="text-center w-[110px]">
+                          <div className="flex items-center justify-center gap-1">
+                            {isEditing ? (
+                              <>
+                                <button onClick={async () => { await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url, creator: editViralForm.creator, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } }); setEditingViralId(null); }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
+                                <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
+                              </>
+                            ) : (
+                              <>
+                                {row.url && (
+                                  <button onClick={() => handleFetchSnsStats(row._id, row.url)} className="p-1 rounded hover:bg-gray-100 text-blue-400" title="자동 수집">
+                                    {isFetchingUrl === row._id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
+                                  </button>
+                                )}
+                                <button onClick={() => { setEditingViralId(row._id); setEditViralForm({ ...row }); }} className="p-1 rounded hover:bg-gray-100 text-gray-400"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteViralRow({ viralId: row._id }); }} className="p-1 rounded hover:bg-red-50 text-red-400"><Trash className="w-4 h-4" /></button>
+                              </>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </GlassCard>
+        </div>
+      )}
 
       {/* ── 바이럴 컬럼 매핑 모달 ── */}
       {previewData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-100 backdrop-blur-sm p-4">
-          <div className="bg-white border border-gray-200 rounded-2xl p-6 w-[820px] max-h-[90vh] flex flex-col shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm p-4">
+          <div className="bg-white border border-gray-100 rounded-2xl p-6 w-[820px] max-h-[90vh] flex flex-col shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg text-gray-900 font-bold flex items-center gap-2">
-                <Settings2 className="w-5 h-5" /> 바이럴 컨텐츠 컬럼 매핑
+                <Settings2 className="w-5 h-5 text-fursys-red" /> 바이럴 컨텐츠 컬럼 매핑
               </h3>
               <button onClick={() => { setPreviewData(null); setMapping({}); }}>
-                <X className="w-5 h-5 text-gray-900/50 hover:text-gray-900" />
+                <X className="w-5 h-5 text-gray-400 hover:text-gray-700" />
               </button>
             </div>
-
             {isGuessingCols ? (
               <div className="flex flex-col items-center justify-center py-16 gap-3">
-                <RefreshCw className="w-7 h-7 animate-spin text-indigo-400" />
-                <p className="text-sm text-gray-900/60">AI가 시트 구조를 분석하고 컬럼을 자동 감지 중...</p>
+                <RefreshCw className="w-7 h-7 animate-spin text-fursys-red" />
+                <p className="text-sm text-gray-400">AI가 시트 구조를 분석 중...</p>
               </div>
             ) : (
               <>
-                <p className="text-sm text-gray-900/40 mb-5">
-                  AI가 아래와 같이 열을 자동 감지했습니다. 확인 후 필요 시 수정해주세요.
-                </p>
+                <p className="text-sm text-gray-400 mb-5">AI가 열을 자동 감지했습니다. 확인 후 수정해주세요.</p>
                 <div className="flex gap-6 overflow-hidden flex-1">
-                  {/* 매핑 컨트롤 */}
                   <div className="w-1/2 flex flex-col gap-2 overflow-y-auto pr-2">
-                    {renderMappingSelect("date", "업로드 일자 (Date)", false)}
-                    {renderMappingSelect("platform", "플랫폼/채널 (Platform)", false)}
-                    {renderMappingSelect("creator", "크리에이터 (Creator)", true)}
-                    {renderMappingSelect("url", "게시물 URL (Link)")}
+                    {renderMappingSelect("date", "업로드 일자", false)}
+                    {renderMappingSelect("platform", "플랫폼/채널", false)}
+                    {renderMappingSelect("creator", "크리에이터", true)}
+                    {renderMappingSelect("url", "게시물 URL")}
                   </div>
-
-                  {/* 데이터 미리보기 */}
                   <div className="w-1/2 flex flex-col border-l border-gray-100 pl-6 overflow-y-auto">
-                    <span className="text-gray-900/60 text-xs font-semibold uppercase tracking-wider mb-2">
-                      데이터 미리보기 (상위 5행)
-                    </span>
-                    <div className="bg-gray-100 p-3 rounded-lg border border-white/5 overflow-x-auto">
-                      <table className="text-xs text-gray-900/70 w-full text-left border-collapse">
+                    <span className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-2">미리보기 (상위 5행)</span>
+                    <div className="bg-gray-50 p-3 rounded-lg overflow-x-auto border border-gray-100">
+                      <table className="text-xs text-gray-700 w-full text-left border-collapse">
                         <thead>
-                          <tr>
-                            {Array.from({ length: Math.min(numCols, 12) }).map((_, i) => (
-                              <th key={i} className="border-b border-gray-100 pb-2 px-1 text-gray-900/40 font-mono font-normal whitespace-nowrap">
-                                {i + 1}열({String.fromCharCode(65 + i)})
-                              </th>
-                            ))}
-                          </tr>
+                          <tr>{Array.from({ length: Math.min(numCols, 12) }).map((_, i) => (
+                            <th key={i} className="border-b border-gray-200 pb-2 px-1 text-gray-400 font-mono font-normal whitespace-nowrap">
+                              {i + 1}열({String.fromCharCode(65 + i)})
+                            </th>
+                          ))}</tr>
                         </thead>
                         <tbody>
                           {previewData.slice(0, 5).map((row, rIdx) => (
-                            <tr key={rIdx}>
-                              {Array.from({ length: Math.min(numCols, 12) }).map((_, cIdx) => (
-                                <td key={cIdx} className="py-1.5 px-1 border-b border-white/5 truncate max-w-[80px]">
-                                  {row[cIdx] !== undefined ? String(row[cIdx]) : ""}
-                                </td>
-                              ))}
-                            </tr>
+                            <tr key={rIdx}>{Array.from({ length: Math.min(numCols, 12) }).map((_, cIdx) => (
+                              <td key={cIdx} className="py-1.5 px-1 border-b border-gray-100 truncate max-w-[80px]">
+                                {row[cIdx] !== undefined ? String(row[cIdx]) : ""}
+                              </td>
+                            ))}</tr>
                           ))}
                         </tbody>
                       </table>
-                      {numCols > 12 && (
-                        <div className="text-gray-900/30 text-xs mt-2 text-center">... (이후 열 생략)</div>
-                      )}
+                      {numCols > 12 && <div className="text-gray-300 text-xs mt-2 text-center">... (이후 열 생략)</div>}
                     </div>
                   </div>
                 </div>
-
                 <div className="flex gap-3 justify-end mt-6 pt-4 border-t border-gray-100">
-                  <Button variant="ghost" onClick={() => { setPreviewData(null); setMapping({}); }}
-                    className="text-gray-900/60">취소</Button>
-                  <Button onClick={handleConfirmMapping}
-                    disabled={Object.values(mapping).length === 0 || isSyncing}
-                    className="bg-white text-black hover:bg-gray-800">
-                    {isSyncing
-                      ? <RefreshCw className="w-4 h-4 animate-spin mr-2" />
-                      : <Check className="w-4 h-4 mr-2" />}
-                    매핑 확인 및 데이터 동기화
+                  <Button variant="ghost" onClick={() => { setPreviewData(null); setMapping({}); }} className="text-gray-400">취소</Button>
+                  <Button onClick={handleConfirmMapping} disabled={Object.values(mapping).length === 0 || isSyncing}
+                    className="bg-fursys-red hover:bg-red-700 text-white">
+                    {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />}
+                    매핑 확인 및 동기화
                   </Button>
                 </div>
               </>
             )}
           </div>
         </div>
+      )}
+
+      {/* ── 댓글 모달 ── */}
+      {commentModal && (
+        <CommentsModal
+          title={commentModal.title}
+          commentsList={commentModal.commentsList}
+          isLoading={commentModal.isLoading}
+          errorMsg={commentModal.error}
+          onClose={() => setCommentModal(null)}
+          onFetch={fetchComments}
+        />
       )}
     </div>
   );

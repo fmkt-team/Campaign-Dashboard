@@ -28,6 +28,7 @@ export const syncDigitalKpis = mutation({
         vtr: v.number(),
         date: v.string(),
         recordedAt: v.number(),
+        extraData: v.optional(v.string()),
       })
     ),
   },
@@ -44,6 +45,28 @@ export const syncDigitalKpis = mutation({
         ...row,
       });
     }
+  },
+});
+
+export const clearDigitalKpis = mutation({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("digitalKpis")
+      .withIndex("by_campaign", (q) => q.eq("campaignId", args.campaignId))
+      .collect();
+    for (const row of existing) await ctx.db.delete(row._id);
+  },
+});
+
+export const clearViralContents = mutation({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("viralContents")
+      .withIndex("by_campaign", (q) => q.eq("campaignId", args.campaignId))
+      .collect();
+    for (const row of existing) await ctx.db.delete(row._id);
   },
 });
 
@@ -201,3 +224,4 @@ export const deleteYouTubeVideo = mutation({
     await ctx.db.delete(args.videoId);
   },
 });
+

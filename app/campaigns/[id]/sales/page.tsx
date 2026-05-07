@@ -1,6 +1,8 @@
 "use client";
 
-import { use, useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useParams } from "next/navigation";
+import { useRefresh } from "@/lib/refresh-context";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -105,9 +107,13 @@ function MiniBarChart({ data, max }: { data: { label: string; v2025: number; v20
 }
 
 // ── 메인 페이지 ───────────────────────────────────────────────────
-export default function SalesPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function SalesPage() {
+  const params = useParams();
+  const id = params.id as string;
   const campaignId = id as Id<"campaigns">;
+
+  const { refreshTrigger } = useRefresh();
+  const [lastRefresh, setLastRefresh] = useState(0);
 
   const salesData = useQuery(api.sales.getSalesWeekly, { campaignId }) ?? [];
   const syncSales = useMutation(api.sales.syncSalesWeekly);
@@ -131,6 +137,14 @@ export default function SalesPage({ params }: { params: Promise<{ id: string }> 
     window.addEventListener("paste", handler);
     return () => window.removeEventListener("paste", handler);
   }, []);
+
+  // 새로고침 컨텍스트 리스너
+  useEffect(() => {
+    if (refreshTrigger !== lastRefresh) {
+      setLastRefresh(refreshTrigger);
+      // Show a brief notification or update status
+    }
+  }, [refreshTrigger, lastRefresh]);
 
   // ── 엑셀 파일 업로드 ──
   const handleExcelUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

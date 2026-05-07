@@ -1,6 +1,8 @@
 "use client";
 
-import { use, useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { useParams } from "next/navigation";
+import { useRefresh } from "@/lib/refresh-context";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -19,9 +21,13 @@ import { format, startOfMonth, endOfMonth } from "date-fns";
 const LINE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#38bdf8", "#8b5cf6"];
 
 // ─── 메인 ─────────────────────────────────────────────────────────────────────
-export default function InflowPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function InflowPage() {
+  const params = useParams();
+  const id = params.id as string;
   const campaignId = id as Id<"campaigns">;
+
+  const { refreshTrigger } = useRefresh();
+  const [lastRefresh, setLastRefresh] = useState(0);
 
   // 1. 통합 날짜 범위 상태 (기본값: 이번 달)
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
@@ -188,6 +194,14 @@ export default function InflowPage({ params }: { params: Promise<{ id: string }>
   useEffect(() => { fetchGA4(); }, [fetchGA4]);
   useEffect(() => { fetchGA4Tops(); }, [fetchGA4Tops]);
   useEffect(() => { fetchTrend(); }, [fetchTrend]);
+
+  // 새로고침 컨텍스트 리스너
+  useEffect(() => {
+    if (refreshTrigger !== lastRefresh) {
+      setLastRefresh(refreshTrigger);
+      // Show a brief notification or update status
+    }
+  }, [refreshTrigger, lastRefresh]);
 
   // ─── 차트 데이터 변환 ───────────────────────────────────────────────────────
   const naverChartData = useMemo(() => {
