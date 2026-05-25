@@ -697,14 +697,16 @@ export default function InterestPage() {
   const combinedChartData = useMemo(() => {
     const map = new Map<string, any>();
 
-    // 캠페인 시작일~오늘(최대 종료일)로 날짜 축 채우기
+    // 캠페인 시작일~종료일(또는 오늘)로 날짜 축 채우기
     // T00:00:00 추가로 UTC가 아닌 로컬 시간대로 파싱하여 한국 시간대 버그 방지
     if (campaign?.startDate && campaign?.endDate) {
       const start = new Date(campaign.startDate.includes("T") ? campaign.startDate : campaign.startDate + "T00:00:00");
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const end = new Date(campaign.endDate.includes("T") ? campaign.endDate : campaign.endDate + "T00:00:00");
-      const limit = today <= end ? today : end;
+      // 캠페인이 아직 시작 전(today < start)이면 종료일까지 전체 표시
+      // 진행 중이면 오늘까지, 종료됐으면 종료일까지
+      const limit = today < start ? end : (today <= end ? today : end);
       const cur = new Date(start);
       while (cur <= limit) {
         const key = `${String(cur.getMonth() + 1).padStart(2, "0")}/${String(cur.getDate()).padStart(2, "0")}`;
