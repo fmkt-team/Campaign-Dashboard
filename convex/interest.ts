@@ -18,14 +18,15 @@ export const syncInterestActivities = mutation({
     campaignId: v.id("campaigns"),
     rows: v.array(
       v.object({
-        activityType: v.string(), 
-        title: v.string(),        
-        locationOrTarget: v.string(), 
+        activityType: v.string(),
+        title: v.string(),
+        locationOrTarget: v.string(),
         startDate: v.string(),
         endDate: v.string(),
-        visitors: v.number(),     
-        participants: v.number(), 
-        budget: v.number(),       
+        visitors: v.number(),
+        participants: v.number(),
+        budget: v.number(),
+        vipCount: v.optional(v.number()),
       })
     ),
   },

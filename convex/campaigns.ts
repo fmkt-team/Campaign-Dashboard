@@ -40,6 +40,21 @@ export const createCampaign = mutation({
   },
 });
 
+// 캠페인 기간 수정
+export const updateCampaignDates = mutation({
+  args: {
+    id: v.id("campaigns"),
+    startDate: v.string(),
+    endDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, {
+      startDate: args.startDate,
+      endDate: args.endDate,
+    });
+  },
+});
+
 // KPI 목표 + 탭 설정 업데이트
 export const updateCampaignSettings = mutation({
   args: {

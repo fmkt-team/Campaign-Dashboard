@@ -53,6 +53,9 @@ export default defineSchema({
   digitalKpis: defineTable({
     campaignId: v.id("campaigns"),
     medium: v.string(),
+    mediumDetail: v.optional(v.string()),
+    agenda: v.optional(v.string()),
+    device: v.optional(v.string()),
     spend: v.number(),
     impressions: v.number(),
     views: v.number(),
@@ -60,6 +63,11 @@ export default defineSchema({
     cpv: v.number(),
     ctr: v.number(),
     vtr: v.number(),
+    conversions: v.optional(v.number()),
+    conversionRevenue: v.optional(v.number()),
+    signupCorporate: v.optional(v.number()),
+    signupPersonal: v.optional(v.number()),
+    leadsCollected: v.optional(v.number()),
     date: v.string(),
     recordedAt: v.number(),
     // 시트에서 감지된 추가 컬럼 데이터 (JSON 문자열로 저장, key: 컬럼명, value: 숫자)
@@ -76,6 +84,7 @@ export default defineSchema({
     comments: v.number(),
     likeRate: v.number(),
     uploadDate: v.string(),
+    commentsList: v.optional(v.array(v.any())),
   }).index("by_campaign", ["campaignId"]),
 
   trafficWeekly: defineTable({
@@ -158,14 +167,15 @@ export default defineSchema({
 
   interestActivities: defineTable({
     campaignId: v.id("campaigns"),
-    activityType: v.string(), // e.g., "팝업", "오프라인행사", "온라인이벤트"
-    title: v.string(),        // e.g., "성수동 팝업스토어"
-    locationOrTarget: v.string(), // "성수동", "2030현대인"
+    activityType: v.string(),
+    title: v.string(),
+    locationOrTarget: v.string(),
     startDate: v.string(),
     endDate: v.string(),
-    visitors: v.number(),     // 방문자수 예상/실제
-    participants: v.number(), // 이벤트 참여자수
-    budget: v.number(),       // 진행 예산
+    visitors: v.number(),
+    participants: v.number(),
+    budget: v.number(),
+    vipCount: v.optional(v.number()),
   }).index("by_campaign", ["campaignId"]),
 
   campaignInsights: defineTable({

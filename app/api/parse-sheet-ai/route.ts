@@ -37,7 +37,11 @@ export async function POST(req: Request) {
     const sample = data.slice(0, 15);
     
     const requiredKeys = type === "digital" 
-      ? ["date", "medium", "spend", "impressions", "views", "clicks"]
+      ? [
+          "date", "medium", "mediumDetail", "agenda", "device", 
+          "spend", "impressions", "views", "clicks", 
+          "conversions", "conversionRevenue", "signupCorporate", "signupPersonal", "leadsCollected"
+        ]
       : ["date", "platform", "creator", "url"];
 
     const prompt = `You are a data extraction assistant. I will provide a JSON array representing the first 15 rows of a spreadsheet.
@@ -81,11 +85,19 @@ Instructions:
       
       const DIGITAL_KEYWORDS: Record<string, string[]> = {
         date: ["일자", "날짜", "date", "기간", "일", "월", "week", "주", "업로드"],
-        medium: ["매체", "채널", "media", "channel", "platform", "매체명", "매체상세"],
+        medium: ["매체", "채널", "media", "channel", "platform", "매체명"],
+        mediumDetail: ["매체상세", "상세매체", "세부매체", "detail", "submedium"],
+        agenda: ["아젠다", "캠페인아젠다", "agenda"],
+        device: ["디바이스", "기기", "device", "mo", "pc"],
         spend: ["비용", "비", "spend", "cost", "금액", "집행", "광고비", "예산소진", "소진비용"],
         impressions: ["노출", "impression", "imp", "노출수"],
         views: ["조회", "view", "재생", "vt", "조회수", "영상"],
         clicks: ["클릭", "click", "cl", "클릭수"],
+        conversions: ["전환", "전환수", "conversion", "conversions"],
+        conversionRevenue: ["전환 매출", "전환매출", "매출", "revenue", "sales"],
+        signupCorporate: ["기업회원가입", "기업가입", "기업회원", "기업"],
+        signupPersonal: ["개인회원가입", "개인가입", "개인회원", "개인"],
+        leadsCollected: ["리드수집", "리드", "lead", "leads"],
       };
 
       const VIRAL_KEYWORDS: Record<string, string[]> = {
@@ -119,18 +131,23 @@ Instructions:
         }
       }
 
-      // Fallback Column Mapping
+      // Fallback Column Mapping (Keyword Priority)
       const headers = data[headerRowIndex] || [];
       mapping = {};
       requiredKeys.forEach(k => { mapping[k] = null; });
 
       for (const [field, kws] of Object.entries(keywords)) {
-        for (let col = 0; col < headers.length; col++) {
-          const cell = String(headers[col] || "").toLowerCase().trim();
-          if (kws.some(kw => cell.includes(kw.toLowerCase()))) {
-            mapping[field] = String(col);
-            break;
+        for (const kw of kws) {
+          let found = false;
+          for (let col = 0; col < headers.length; col++) {
+            const cell = String(headers[col] || "").toLowerCase().trim();
+            if (cell.includes(kw.toLowerCase())) {
+              mapping[field] = String(col);
+              found = true;
+              break;
+            }
           }
+          if (found) break; // 가장 높은 우선순위의 키워드를 찾으면 다음 필드로 넘어감
         }
       }
     }
@@ -160,6 +177,9 @@ Instructions:
 
       let lastKnownDate = "1970-01-01";
       let lastKnownMedium = "-";
+      let lastKnownMediumDetail = "-";
+      let lastKnownAgenda = "-";
+      let lastKnownDevice = "-";
 
       const rows = data.slice(headerRowIndex + 1)
         .filter(row => row.some((c: any) => c !== "" && c !== null && c !== undefined))
@@ -169,11 +189,29 @@ Instructions:
           if (medium === "") medium = lastKnownMedium; else lastKnownMedium = medium;
           if (!medium) return null;
 
+          const mdIdx = mapping["mediumDetail"];
+          let mediumDetail = mdIdx !== null && mdIdx !== undefined ? String(row[mdIdx as any] || "").trim() : "";
+          if (mediumDetail === "") mediumDetail = lastKnownMediumDetail; else lastKnownMediumDetail = mediumDetail;
+
+          const agendaIdx = mapping["agenda"];
+          let agenda = agendaIdx !== null && agendaIdx !== undefined ? String(row[agendaIdx as any] || "").trim() : "";
+          if (agenda === "") agenda = lastKnownAgenda; else lastKnownAgenda = agenda;
+
+          const deviceIdx = mapping["device"];
+          let device = deviceIdx !== null && deviceIdx !== undefined ? String(row[deviceIdx as any] || "").trim() : "";
+          if (device === "") device = lastKnownDevice; else lastKnownDevice = device;
+
           const dateIdx   = mapping["date"];
           const spendIdx  = mapping["spend"];
           const impIdx    = mapping["impressions"];
           const viewsIdx  = mapping["views"];
           const clicksIdx = mapping["clicks"];
+
+          const convIdx   = mapping["conversions"];
+          const revIdx    = mapping["conversionRevenue"];
+          const sgCorpIdx = mapping["signupCorporate"];
+          const sgPersIdx = mapping["signupPersonal"];
+          const leadsIdx  = mapping["leadsCollected"];
 
           let parsedDate = parseDate(dateIdx !== null ? row[dateIdx as any] : "1970-01-01");
           if (parsedDate === "1970-01-01" && lastKnownDate !== "1970-01-01") parsedDate = lastKnownDate;
@@ -184,7 +222,13 @@ Instructions:
           const views       = parseNumber(viewsIdx  !== null ? row[viewsIdx as any]  : 0);
           const clicks      = parseNumber(clicksIdx !== null ? row[clicksIdx as any] : 0);
 
-          // 추가 컬럼 데이터
+          const conversions       = convIdx !== null ? parseNumber(row[convIdx as any]) : undefined;
+          const conversionRevenue = revIdx !== null ? parseNumber(row[revIdx as any]) : undefined;
+          const signupCorporate   = sgCorpIdx !== null ? parseNumber(row[sgCorpIdx as any]) : undefined;
+          const signupPersonal    = sgPersIdx !== null ? parseNumber(row[sgPersIdx as any]) : undefined;
+          const leadsCollected    = leadsIdx !== null ? parseNumber(row[leadsIdx as any]) : undefined;
+
+          // 추가 컬럼 데이터 (고정 매핑 외 데이터)
           const extraData: Record<string, number> = {};
           for (const ec of extraColDefs) {
             const val = parseNumber(row[ec.colIdx]);
@@ -194,7 +238,8 @@ Instructions:
           }
 
           return {
-            date: parsedDate, medium, spend, impressions, views, clicks,
+            date: parsedDate, medium, mediumDetail, agenda, device, spend, impressions, views, clicks,
+            conversions, conversionRevenue, signupCorporate, signupPersonal, leadsCollected,
             cpv: views > 0 ? spend / views : 0,
             ctr: impressions > 0 ? (clicks / impressions) * 100 : 0,
             vtr: impressions > 0 ? (views / impressions) * 100 : 0,

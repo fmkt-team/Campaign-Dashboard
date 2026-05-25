@@ -60,7 +60,7 @@ async function fetchYoutubeStats(url: string) {
         views = parseInt(details.viewCount || "0", 10);
         date = details.uploadDate;
 
-        const likeCount = info.microformat?.playerMicroformatRenderer?.likeCount;
+        const likeCount = (info as any).microformat?.playerMicroformatRenderer?.likeCount;
         if (likeCount) {
           likes = parseInt(likeCount, 10);
         }
@@ -108,7 +108,7 @@ async function fetchYoutubeStats(url: string) {
       views = parseInt(details.viewCount || "0", 10);
       date = details.uploadDate;
 
-      const likeCount = info.microformat?.playerMicroformatRenderer?.likeCount;
+      const likeCount = (info as any).microformat?.playerMicroformatRenderer?.likeCount;
       if (likeCount) {
         likes = parseInt(likeCount, 10);
       }

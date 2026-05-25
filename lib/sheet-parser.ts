@@ -200,3 +200,99 @@ export function parseTimelineSheet(
 
   return tasks;
 }
+
+/**
+ * GridData(배경색, 포맷 포함)를 기반으로 GanttTask 배열로 변환
+ */
+export function parseGanttSheetData(
+  sheetData: any, 
+  campaignStartDate: string = ""
+): ParsedGanttTask[] {
+  const gridData = sheetData.data?.[0];
+  const rowData = gridData?.rowData;
+  if (!rowData || rowData.length < 4) return [];
+
+  const campaignYear = campaignStartDate
+    ? campaignStartDate.substring(0, 4)
+    : new Date().getFullYear().toString();
+
+  // 헤더 (Row 3, index 2)
+  const headerRow = rowData[2]?.values || [];
+  const DATE_COL_START = 5; // F열 = index 5
+
+  const dateHeaders: string[] = [];
+  for (let i = DATE_COL_START; i < headerRow.length; i++) {
+    const raw = headerRow[i]?.formattedValue || headerRow[i]?.effectiveValue?.stringValue || "";
+    const parsed = parseDateHeader(raw, campaignYear);
+    dateHeaders.push(parsed);
+  }
+
+  const tasks: ParsedGanttTask[] = [];
+  let lastCategory = "";
+  let sortOrder = 0;
+
+  for (let i = 4; i < rowData.length; i++) {
+    const row = rowData[i]?.values || [];
+    if (row.length < 3) continue;
+
+    const rawCategory = (row[0]?.formattedValue || "").trim();
+    if (rawCategory) lastCategory = rawCategory;
+    const category = lastCategory;
+
+    const subTask = (row[2]?.formattedValue || "").trim();
+    if (!subTask) continue;
+
+    const progressRaw = (row[3]?.formattedValue || "").trim().replace(/[%\s]/g, "");
+    const progress = progressRaw
+      ? Math.min(100, Math.max(0, Math.round(parseFloat(progressRaw) || 0)))
+      : 0;
+
+    const assignee = (row[4]?.formattedValue || "").trim();
+
+    let startDate = "";
+    let endDate = "";
+
+    for (let j = 0; j < dateHeaders.length; j++) {
+      const cell = row[DATE_COL_START + j];
+      if (!cell) continue;
+      
+      const dateStr = dateHeaders[j];
+      if (!dateStr) continue;
+
+      const cellVal = (cell.formattedValue || "").trim();
+      const bg = cell.effectiveFormat?.backgroundColor;
+      
+      let hasColor = false;
+      if (bg) {
+        const r = bg.red ?? 0;
+        const g = bg.green ?? 0;
+        const b = bg.blue ?? 0;
+        // 완전한 흰색(1,1,1)이 아닌 경우 배경색이 있다고 판단
+        if (r < 0.99 || g < 0.99 || b < 0.99) hasColor = true;
+      }
+
+      if (hasColor || (cellVal !== "" && cellVal !== "0")) {
+        if (!startDate) startDate = dateStr;
+        endDate = dateStr;
+      }
+    }
+
+    if (!startDate) {
+      startDate = campaignStartDate || new Date().toISOString().split('T')[0];
+      endDate = startDate;
+    }
+
+    tasks.push({
+      category,
+      subTask,
+      assignee,
+      progress,
+      startDate,
+      endDate,
+      sortOrder: sortOrder++,
+      color: getCategoryColor(category),
+    });
+  }
+
+  return tasks;
+}

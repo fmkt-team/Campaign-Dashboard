@@ -8,7 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { GlassCard } from "@/components/glass-card";
 import { Button } from "@/components/ui/button";
-import { Plus, X, Check, ArrowRight, Trash2, Target, Pencil } from "lucide-react";
+import { Plus, X, Check, ArrowRight, Trash2, Target, Pencil, FileSpreadsheet, Link, Loader2, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── 날짜 유틸 ────────────────────────────────────────────────────────────────
@@ -269,7 +269,7 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
         <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900" />
       </span>
 
-      <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90"
+      <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90 z-20"
         onMouseDown={e => drag(e, "left")}><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
 
       {/* 바 텍스트/날짜 - 클릭하면 팝업 편집 */}
@@ -288,7 +288,7 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
         <div className="absolute left-0 top-0 h-full rounded-lg bg-white/90 pointer-events-none"
           style={{ width: `${task.progress}%` }} />
       )}
-      <div className="absolute right-0 top-0 h-full w-2.5 cursor-ew-resize rounded-r-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90"
+      <div className="absolute right-0 top-0 h-full w-2.5 cursor-ew-resize rounded-r-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90 z-20"
         onMouseDown={e => drag(e, "right")}><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
       {/* X 삭제 버튼 - 막대 위에 호버 시 표시 */}
       <button
@@ -303,9 +303,9 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
 }
 
 // ─── 인라인 편집 ─────────────────────────────────────────────────────────────
-function InlineEdit({ value, onSave, onEnter, placeholder, className }: {
+function InlineEdit({ value, onSave, onEnter, placeholder, className, style }: {
   value: string; onSave: (v: string) => void; onEnter?: (v: string) => void;
-  placeholder?: string; className?: string;
+  placeholder?: string; className?: string; style?: React.CSSProperties;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -343,7 +343,8 @@ function InlineEdit({ value, onSave, onEnter, placeholder, className }: {
   );
   return (
     <span ref={spanRef} onClick={() => { setDraft(value); setEditing(true); }}
-      className={cn("inline-edit-trigger cursor-text block flex-1 rounded px-2 py-0.5 hover:bg-white/10 text-xs truncate min-h-[22px]", !value && "text-gray-900/25 italic", className)}>
+      className={cn("inline-edit-trigger cursor-text block flex-1 rounded px-2 py-0.5 hover:bg-white/10 text-xs truncate min-h-[22px]", !value && "text-gray-900/25 italic", className)}
+      style={style}>
       {value || placeholder}
     </span>
   );
@@ -391,6 +392,7 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
   const viralContents = useQuery(api.awareness.getViralContents, { campaignId }) ?? [];
   const youtubeVideos = useQuery(api.awareness.getYouTubeVideos, { campaignId }) ?? [];
   const interestActivities = useQuery(api.interest.getInterestActivities, { campaignId }) ?? [];
+  const trafficWeekly = useQuery(api.inflow.getTrafficWeekly, { campaignId }) ?? [];
   const updateSettings = useMutation(api.campaigns.updateCampaignSettings);
 
   const [editingKpi, setEditingKpi] = useState(false);
@@ -398,18 +400,25 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
 
   const kpiTargets = campaign?.kpiTargets ?? [];
 
-  // 자동 합산 계산
+  // 자동 합산 계산 — 4개 KPI
   const autoValues: Record<string, number> = {
+    // 1) 캠페인 노출: 매체 조회수 + 바이럴 조회수 + YouTube 조회수
     exposure: (() => {
-      const mediaImpressions = digitalKpis.reduce((s: number, r: any) => s + (r.impressions || 0), 0);
+      const mediaViews = digitalKpis.reduce((s: number, r: any) => s + (r.views || 0), 0);
       const viralViews = viralContents.reduce((s: number, r: any) => s + (r.views || 0), 0);
-      const viralEngagement = viralContents.reduce((s: number, r: any) => s + (r.likes || 0) + (r.comments || 0), 0);
       const ytViews = youtubeVideos.reduce((s: number, r: any) => s + (r.views || 0), 0);
-      const ytEngagement = youtubeVideos.reduce((s: number, r: any) => s + (r.likes || 0) + (r.comments || 0), 0);
-      return mediaImpressions + viralViews + viralEngagement + ytViews + ytEngagement;
+      return mediaViews + viralViews + ytViews;
     })(),
-    event: 0, // 수동 입력
-    popup: interestActivities.reduce((s: number, r: any) => s + (r.visitors || 0), 0),
+    // 2) 이벤트 신청: 흥미 상세 중 팝업이 아닌 활동의 participants 합산
+    event: interestActivities
+      .filter((r: any) => r.activityType !== "팝업")
+      .reduce((s: number, r: any) => s + (r.participants || 0), 0),
+    // 3) 팝업스토어 집객: 흥미 상세 중 팝업 활동의 participants 합산
+    popup: interestActivities
+      .filter((r: any) => r.activityType === "팝업")
+      .reduce((s: number, r: any) => s + (r.participants || 0), 0),
+    // 4) 마이크로사이트 유입: trafficWeekly의 users 합산
+    microsite: trafficWeekly.reduce((s: number, r: any) => s + (r.users || 0), 0),
   };
 
   const getKpiCurrent = (kpi: any) => {
@@ -417,12 +426,13 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
     return auto + (kpi.current || 0);
   };
 
-  // 기본 KPI 초기화
+  // 기본 KPI 초기화 — 4개 항목
   const initDefaultKpis = async () => {
     const defaults = [
-      { label: "캠페인 노출", target: 42000000, current: 0, category: "exposure", description: "매체 노출 + 바이럴 조회수 + 인게이지먼트" },
-      { label: "온라인 이벤트 신청", target: 3000, current: 0, category: "event", description: "목표 페이지 접속자 100,000명의 3%" },
-      { label: "팝업 스토어 집객", target: 6000, current: 0, category: "popup", description: "팝업 스토어 방문자 수" },
+      { label: "캠페인 노출", target: 42000000, current: 0, category: "exposure", description: "매체 조회수 + 바이럴 + YouTube 조회수" },
+      { label: "이벤트 신청", target: 3000, current: 0, category: "event", description: "팝업 외 활동 참여자 수 합산" },
+      { label: "팝업스토어 집객", target: 6000, current: 0, category: "popup", description: "팝업 활동 참여자 수 합산" },
+      { label: "마이크로사이트 유입", target: 100000, current: 0, category: "microsite", description: "주간 트래픽 방문자(users) 합산" },
     ];
     await updateSettings({ id: campaign._id, kpiTargets: defaults });
   };
@@ -471,8 +481,8 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
           <Pencil className="w-3 h-3" /> 목표 수정
         </Button>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {kpiTargets.slice(0, 3).map((kpi: any, idx: number) => {
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {kpiTargets.slice(0, 4).map((kpi: any, idx: number) => {
           const current = getKpiCurrent(kpi);
           const pct = kpi.target > 0 ? Math.min(100, (current / kpi.target) * 100) : 0;
           const colorClass = pct >= 100 ? "text-green-500" : pct >= 60 ? "text-indigo-500" : pct >= 30 ? "text-amber-500" : "text-gray-400";
@@ -540,9 +550,9 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
 }
 
 // ─── 메인 ────────────────────────────────────────────────────────────────────
-const ROW_H   = 44;
-const CAT_H   = 34;
-const LABEL_W = 340;
+const ROW_H   = 40;
+const CAT_H   = 32;
+const LABEL_W = 220;
 
 // ─── 그래프 관리 모달 ──────────────────────────────────────────────────────────
 function GraphManagerModal({
@@ -959,6 +969,7 @@ export default function TimelinePage() {
   const campaign   = useQuery(api.campaigns.getCampaignById, { id: campaignId });
   const ganttTasks = useQuery(api.gantt.getGanttTasks, { campaignId });
   const syncGantt  = useMutation(api.gantt.syncGanttFromSheet);
+  const updateCampaignDates = useMutation(api.campaigns.updateCampaignDates);
   const updateTask = useMutation(api.gantt.updateGanttTask);
   const insertTask = useMutation(api.gantt.insertGanttTask);
   const deleteCategoryMutation = useMutation(api.gantt.deleteGanttCategory);
@@ -972,6 +983,11 @@ export default function TimelinePage() {
   const [editActivity, setEditActivity] = useState<any | null>(null);
   const [editActivityIdx, setEditActivityIdx] = useState<number>(0);
   const [pasteRows, setPasteRows] = useState<PastedRow[] | null>(null);
+
+  // 구글 시트 연동 상태
+  const [showSheetInput, setShowSheetInput] = useState(false);
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [isSyncingSheet, setIsSyncingSheet] = useState(false);
 
   // 월 연장 상태 - localStorage에 저장하여 탭 이동 후에도 유지
   const [extraStartMonths, setExtraStartMonthsRaw] = useState(0);
@@ -1026,6 +1042,22 @@ export default function TimelinePage() {
   const phases = useQuery(api.phases.getPhases, { campaignId });
   const upsertPhase = useMutation(api.phases.upsertPhase);
   const deletePhase = useMutation(api.phases.deletePhase);
+
+  const [showDateEditor, setShowDateEditor] = useState(false);
+  const [dateDraftStart, setDateDraftStart] = useState("");
+  const [dateDraftEnd, setDateDraftEnd] = useState("");
+
+  const openDateEditor = () => {
+    setDateDraftStart(campaign?.startDate || "");
+    setDateDraftEnd(campaign?.endDate || "");
+    setShowDateEditor(true);
+  };
+
+  const handleSaveDates = async () => {
+    if (!campaign || !dateDraftStart || !dateDraftEnd) return;
+    await updateCampaignDates({ id: campaign._id, startDate: dateDraftStart, endDate: dateDraftEnd });
+    setShowDateEditor(false);
+  };
 
   const [isExtracting, setIsExtracting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1092,7 +1124,7 @@ export default function TimelinePage() {
   const chartEnd = toStr(toTs(baseChartEnd) + extraEndMonths * 30 * MS_DAY);
 
   const totalDays  = Math.max(30, diffDays(chartStart, chartEnd) + 1);
-  const dynamicChartMin = Math.max(900, totalDays * 12); // 일당 12px 수준으로 촘촘하게 줄여 한 화면에 약 3개월(90일*12px=1080px) 이상 눈에 들어오도록 조정
+  const dynamicChartMin = Math.max(700, totalDays * 8); // 일당 8px — 3개월(~90일) 기준 약 720px, 한 화면에 전체 일정이 보이도록 축소
 
   // 차트 너비 측정
   useEffect(() => {
@@ -1343,6 +1375,39 @@ export default function TimelinePage() {
     return () => window.removeEventListener("paste", handler);
   }, [year]);
 
+  // 구글 시트 연동 처리
+  const handleSyncFromSheet = async () => {
+    if (!sheetUrl) return;
+    setIsSyncingSheet(true);
+    try {
+      // API 라우트(서비스 계정)를 통해 데이터 패치
+      const res = await fetch('/api/fetch-sheet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sheetUrl, campaignStartDate: campaign?.startDate })
+      });
+      const result = await res.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || "시트 데이터를 가져오지 못했습니다. 서비스 계정 권한을 확인해주세요.");
+      }
+      
+      const parsedData = result.data; // 서버에서 완벽히 파싱된 데이터 반환
+
+      if (parsedData && parsedData.length > 0) {
+        setPasteRows(parsedData);
+      } else {
+        alert("파싱할 데이터가 없습니다.");
+      }
+      setShowSheetInput(false);
+      setSheetUrl("");
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setIsSyncingSheet(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
@@ -1361,7 +1426,13 @@ export default function TimelinePage() {
                 )}
               </div>
             ) : <span className="text-gray-300">로딩 중...</span>}
-            <p className="text-xs text-gray-400 mt-2 font-mono">{campaign?.startDate} ~ {campaign?.endDate || "미정"}</p>
+            <button
+              onClick={openDateEditor}
+              className="flex items-center gap-1.5 mt-2 text-xs text-gray-400 font-mono hover:text-gray-700 hover:bg-gray-100 px-2 py-1 rounded-lg transition-all group"
+            >
+              <CalendarDays className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100" />
+              {campaign?.startDate} ~ {campaign?.endDate || "미정"}
+            </button>
           </div>
           <div className="text-right">
             <p className="text-xs text-gray-400 mb-1">Today</p>
@@ -1378,6 +1449,41 @@ export default function TimelinePage() {
           </GlassCard>
         )}
       </div>
+
+      {/* 캠페인 기간 편집 모달 */}
+      {showDateEditor && campaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm"
+          onClick={() => setShowDateEditor(false)}>
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 w-80 shadow-xl"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-gray-900 text-sm font-semibold">캠페인 기간 수정</h3>
+              <button onClick={() => setShowDateEditor(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">시작일</label>
+                <input type="date" value={dateDraftStart} onChange={e => setDateDraftStart(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-gray-400" />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">종료일</label>
+                <input type="date" value={dateDraftEnd} onChange={e => setDateDraftEnd(e.target.value)}
+                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-gray-400" />
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <Button variant="ghost" size="sm" className="flex-1 text-gray-500 hover:bg-gray-50" onClick={() => setShowDateEditor(false)}>취소</Button>
+              <Button size="sm" className="flex-1 bg-gray-900 text-white hover:bg-gray-800"
+                onClick={handleSaveDates} disabled={!dateDraftStart || !dateDraftEnd}>
+                <Check className="w-3.5 h-3.5 mr-1" />저장
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── KPI 달성률 패널 ── */}
       <KpiAchievementPanel campaignId={campaignId} campaign={campaign} />
@@ -1575,6 +1681,9 @@ export default function TimelinePage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button onClick={() => setShowSheetInput(true)} size="sm" variant="outline" className="text-emerald-600 border-emerald-200 hover:bg-emerald-50 gap-2 font-semibold bg-white">
+              <FileSpreadsheet className="w-4 h-4" /> 구글 시트 연동
+            </Button>
             <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
               <button
                 onClick={() => setTimelineViewMode("gantt")}
@@ -1839,7 +1948,8 @@ export default function TimelinePage() {
                             const actEnd = toTs(activity.endDate);
                             const chartStartTs = toTs(chartStart);
                             const left = ((actStart - chartStartTs) / MS_DAY / totalDays) * 100;
-                            const width = ((actEnd - actStart) / MS_DAY / totalDays) * 100;
+                            // +1 to include end day (consistent with GanttBar widthPx = (diff + 1) * pxDay)
+                            const width = ((actEnd - actStart) / MS_DAY + 1) / totalDays * 100;
                             const pxDay = chartW / totalDays;
 
                             const handleActivityDrag = (e: React.MouseEvent, mode: "move" | "left" | "right") => {
@@ -1892,7 +2002,7 @@ export default function TimelinePage() {
                                   height: ROW_H - 10,
                                   top: 5,
                                   left: `${Math.max(0, left)}%`,
-                                  width: `${Math.max(3, width)}%`,
+                                  width: `${Math.max(1 / totalDays * 100, width)}%`,
                                   backgroundColor: color,
                                 }}
                                 onMouseDown={(e) => console.log("[OUTER BAR mousedown] idx:", idx, "task:", task.subTask)}
@@ -2043,6 +2153,41 @@ export default function TimelinePage() {
 
       {/* 붙여넣기 확인 모달 */}
       {pasteRows && <PasteModal rows={pasteRows} onApply={applyPaste} onClose={() => setPasteRows(null)} />}
+
+      {/* 구글 시트 연동 모달 */}
+      {showSheetInput && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white/90 backdrop-blur-sm" onClick={() => setShowSheetInput(false)}>
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 w-[520px] shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-gray-900 font-bold flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-emerald-600"/> 구글 시트 연동
+              </h3>
+              <button onClick={() => setShowSheetInput(false)} className="text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">
+              구글 시트의 공유 링크를 입력하세요.<br/>
+              (주의: 비공개 시트인 경우 시트 우측 상단 '공유' 버튼을 눌러 <strong>서비스 계정 이메일</strong>을 뷰어로 추가해 주세요.)
+            </p>
+            <div className="mb-6 relative">
+              <Link className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={sheetUrl}
+                onChange={e => setSheetUrl(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                className="w-full bg-gray-50 border border-gray-200 rounded-lg pl-9 pr-3 py-2.5 text-sm text-gray-900 outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400 transition-all"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" className="text-gray-500" onClick={() => setShowSheetInput(false)}>취소</Button>
+              <Button onClick={handleSyncFromSheet} disabled={!sheetUrl || isSyncingSheet} className="bg-emerald-600 text-white hover:bg-emerald-700 w-32 font-semibold">
+                {isSyncingSheet ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />불러오는 중...</> : "데이터 가져오기"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

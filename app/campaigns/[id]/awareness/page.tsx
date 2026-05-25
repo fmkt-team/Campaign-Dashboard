@@ -1,4 +1,5 @@
 "use client";
+import React from "react";
 
 import { useState, useRef, useEffect } from "react";
 import { useParams } from "next/navigation";
@@ -8,12 +9,17 @@ import { Id } from "@/convex/_generated/dataModel";
 import { GlassCard } from "@/components/glass-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { BarChart, Bar, ComposedChart, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend } from "recharts";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar as CalendarIcon } from "lucide-react";
+import { DateRange } from "react-day-picker";
 import { Input } from "@/components/ui/input";
 import {
   Check, X, UploadCloud, FileSpreadsheet, RefreshCw, Settings2,
   Pencil, Trash, Link as LinkIcon, SlidersHorizontal,
   MessageSquare, ThumbsUp, Eye, Target, TrendingUp, ArrowUpDown,
-  ChevronUp, ChevronDown,
+  ChevronUp, ChevronDown, ChevronRight,
 } from "lucide-react";
 import * as xlsx from "xlsx";
 import { format, startOfWeek, parseISO } from "date-fns";
@@ -27,16 +33,24 @@ const VIEW_MODE_LABELS: Record<ViewMode, string> = {
 };
 
 const FIXED_COLS = [
-  { key: "spend",       label: "집행 비용" },
-  { key: "impressions", label: "노출수" },
-  { key: "views",       label: "조회수" },
-  { key: "clicks",      label: "클릭수" },
-  { key: "cpv",         label: "CPV" },
-  { key: "ctrVtr",      label: "CTR / VTR" },
+  { key: "spend",             label: "집행 비용" },
+  { key: "impressions",       label: "노출수" },
+  { key: "views",             label: "조회수" },
+  { key: "clicks",            label: "클릭수" },
+  { key: "cpv",               label: "CPV" },
+  { key: "ctrVtr",            label: "CTR / VTR" },
+  { key: "conversions",       label: "전환수" },
+  { key: "conversionRevenue", label: "전환 매출" },
+  { key: "roas",              label: "ROAS" },
+  { key: "signupCorporate",   label: "기업가입" },
+  { key: "signupPersonal",    label: "개인가입" },
+  { key: "leadsCollected",    label: "리드수집" },
 ];
 
 const DEFAULT_VISIBLE: Record<string, boolean> = {
   spend: true, impressions: true, views: true, clicks: true, cpv: true, ctrVtr: true,
+  conversions: true, conversionRevenue: true, roas: true,
+  signupCorporate: false, signupPersonal: false, leadsCollected: false,
 };
 
 // ── 포맷 헬퍼 ────────────────────────────────────────────────
@@ -71,10 +85,48 @@ function parseExtra(raw: any): Record<string, number> {
   return raw as Record<string, number>;
 }
 
+// ── 날짜 포맷 헬퍼 ──────────────────────────────────────────────
+function formatDateLabel(dateStr: string, viewMode: ViewMode): string {
+  try {
+    if (viewMode === "monthly") {
+      const [year, month] = dateStr.split("-");
+      return `${year}년 ${month}월`;
+    }
+    if (viewMode === "weekly") {
+      return `${dateStr} 주차`;
+    }
+  } catch {}
+  return dateStr;
+}
+
 // ── 그루핑 ───────────────────────────────────────────────────
-function groupDigitalKpis(data: any[], viewMode: ViewMode) {
-  const valid = data.filter(r => r.date && r.date !== "1970-01-01" && VALID_DATE_RE.test(r.date));
-  const groups = new Map<string, any>();
+function groupDigitalKpis(
+  data: any[],
+  viewMode: ViewMode,
+  filterAgenda: string,
+  filterDevice: string,
+  filterMedium: string = "none",
+  filterMediumDetail: string = "none",
+  dateRange: { from: Date | undefined; to?: Date | undefined } | null = null
+) {
+  const valid = data.filter(r => {
+    const dValid = r.date && r.date !== "1970-01-01" && VALID_DATE_RE.test(r.date);
+    if (!dValid) return false;
+    if (filterAgenda !== "all" && r.agenda !== filterAgenda) return false;
+    if (filterDevice !== "all" && r.device !== filterDevice) return false;
+    if (filterMedium !== "none" && filterMedium !== "all" && r.medium !== filterMedium) return false;
+    if (filterMediumDetail !== "none" && filterMediumDetail !== "all" && (r.mediumDetail || "-") !== filterMediumDetail) return false;
+    
+    if (dateRange?.from || dateRange?.to) {
+      const rowDate = new Date(r.date);
+      if (dateRange.from && rowDate < dateRange.from) return false;
+      if (dateRange.to && rowDate > dateRange.to) return false;
+    }
+    return true;
+  });
+
+  const dateGroups = new Map<string, any>();
+
   for (const row of valid) {
     const extra = parseExtra(row.extraData);
     let key = row.date;
@@ -83,24 +135,144 @@ function groupDigitalKpis(data: any[], viewMode: ViewMode) {
       else if (viewMode === "monthly") key = row.date.substring(0, 7);
       else if (viewMode === "total")   key = "전체";
     } catch {}
-    const mapKey = viewMode === "total" ? `total_${row.medium}` : `${key}_${row.medium}`;
-    if (!groups.has(mapKey)) {
-      const baseExtra: Record<string, number> = {};
-      for (const k of Object.keys(extra)) baseExtra[k] = 0;
-      groups.set(mapKey, { dateLabel: key, medium: row.medium, spend: 0, impressions: 0, views: 0, clicks: 0, extra: baseExtra });
+
+    if (!dateGroups.has(key)) {
+      dateGroups.set(key, {
+        isSubtotal: true,
+        dateLabel: formatDateLabel(key, viewMode),
+        medium: "합계",
+        mediumDetail: "-",
+        spend: 0, impressions: 0, views: 0, clicks: 0,
+        conversions: 0, conversionRevenue: 0,
+        signupCorporate: 0, signupPersonal: 0, leadsCollected: 0,
+        extra: {} as Record<string, number>,
+        itemsMap: new Map<string, any>()
+      });
     }
-    const g = groups.get(mapKey)!;
-    g.spend += row.spend; g.impressions += row.impressions; g.views += row.views; g.clicks += row.clicks;
+
+    const dateGroup = dateGroups.get(key)!;
+    
+    // Subtotal 누적
+    dateGroup.spend += row.spend || 0;
+    dateGroup.impressions += row.impressions || 0;
+    dateGroup.views += row.views || 0;
+    dateGroup.clicks += row.clicks || 0;
+    dateGroup.conversions += row.conversions || 0;
+    dateGroup.conversionRevenue += row.conversionRevenue || 0;
+    dateGroup.signupCorporate += row.signupCorporate || 0;
+    dateGroup.signupPersonal += row.signupPersonal || 0;
+    dateGroup.leadsCollected += row.leadsCollected || 0;
     for (const [k, v] of Object.entries(extra)) {
-      g.extra[k] = (g.extra[k] || 0) + (v as number);
+      dateGroup.extra[k] = (dateGroup.extra[k] || 0) + (v as number);
+    }
+
+    // 개별 항목 누적 (필터 조건에 따라 묶는 기준 변경)
+    const groupByDetail = filterMediumDetail !== "none";
+    const detailKey = groupByDetail ? `${row.medium}_${row.mediumDetail || "-"}` : row.medium;
+    if (!dateGroup.itemsMap.has(detailKey)) {
+      dateGroup.itemsMap.set(detailKey, {
+        isSubtotal: false,
+        dateLabel: formatDateLabel(key, viewMode),
+        medium: row.medium,
+        mediumDetail: groupByDetail ? (row.mediumDetail || "-") : "-",
+        spend: 0, impressions: 0, views: 0, clicks: 0,
+        conversions: 0, conversionRevenue: 0,
+        signupCorporate: 0, signupPersonal: 0, leadsCollected: 0,
+        extra: {} as Record<string, number>,
+      });
+    }
+
+    const item = dateGroup.itemsMap.get(detailKey)!;
+    item.spend += row.spend || 0;
+    item.impressions += row.impressions || 0;
+    item.views += row.views || 0;
+    item.clicks += row.clicks || 0;
+    item.conversions += row.conversions || 0;
+    item.conversionRevenue += row.conversionRevenue || 0;
+    item.signupCorporate += row.signupCorporate || 0;
+    item.signupPersonal += row.signupPersonal || 0;
+    item.leadsCollected += row.leadsCollected || 0;
+    for (const [k, v] of Object.entries(extra)) {
+      item.extra[k] = (item.extra[k] || 0) + (v as number);
     }
   }
-  return Array.from(groups.values()).map(g => ({
-    ...g,
-    cpv: g.views > 0 ? Math.round(g.spend / g.views) : 0,
-    ctr: g.impressions > 0 ? Number(((g.clicks / g.impressions) * 100).toFixed(2)) : 0,
-    vtr: g.impressions > 0 ? Number(((g.views / g.impressions) * 100).toFixed(2)) : 0,
-  })).sort((a, b) => a.dateLabel.localeCompare(b.dateLabel));
+
+  const flatResult: any[] = [];
+  const sortedDates = Array.from(dateGroups.keys()).sort((a, b) => a.localeCompare(b));
+
+  // 표시 로직 플래그
+  const showSubtotal = filterMedium === "none" || filterMedium === "all";
+  const showItems = filterMedium !== "none";
+
+  for (const dKey of sortedDates) {
+    const p = dateGroups.get(dKey)!;
+    p.cpv = p.views > 0 ? Math.round(p.spend / p.views) : 0;
+    p.ctr = p.impressions > 0 ? Number(((p.clicks / p.impressions) * 100).toFixed(2)) : 0;
+    p.vtr = p.impressions > 0 ? Number(((p.views / p.impressions) * 100).toFixed(2)) : 0;
+    p.roas = p.spend > 0 ? Number(((p.conversionRevenue / p.spend) * 100).toFixed(1)) : 0;
+
+    const items = Array.from(p.itemsMap.values()) as any[];
+    items.forEach((item: any) => {
+      item.cpv = item.views > 0 ? Math.round(item.spend / item.views) : 0;
+      item.ctr = item.impressions > 0 ? Number(((item.clicks / item.impressions) * 100).toFixed(2)) : 0;
+      item.vtr = item.impressions > 0 ? Number(((item.views / item.impressions) * 100).toFixed(2)) : 0;
+      item.roas = item.spend > 0 ? Number(((item.conversionRevenue / item.spend) * 100).toFixed(1)) : 0;
+    });
+    items.sort((a, b) => b.spend - a.spend); // 광고비 순 정렬
+
+    if (showSubtotal) {
+      flatResult.push(p);
+    }
+    if (showItems) {
+      flatResult.push(...items);
+    }
+  }
+
+  return flatResult;
+}
+
+// ── 차트 전용 데이터 추출 (테이블 필터 독립적 & 무조건 일자별) ───────────
+function getChartData(
+  data: any[],
+  filterAgenda: string = "all",
+  dateRange: { from: Date | undefined; to?: Date | undefined } | null = null
+) {
+  const valid = data.filter(r => {
+    const dValid = r.date && r.date !== "1970-01-01" && VALID_DATE_RE.test(r.date);
+    if (!dValid) return false;
+    if (filterAgenda !== "all" && r.agenda !== filterAgenda) return false;
+    
+    if (dateRange?.from || dateRange?.to) {
+      const rowDate = new Date(r.date);
+      if (dateRange.from && rowDate < dateRange.from) return false;
+      if (dateRange.to && rowDate > dateRange.to) return false;
+    }
+    return true;
+  });
+
+  const dateGroups = new Map<string, any>();
+  for (const row of valid) {
+    const key = row.date; // 항상 일자별
+    if (!dateGroups.has(key)) {
+      dateGroups.set(key, { dateLabel: key, spend: 0, impressions: 0, views: 0, clicks: 0, conversions: 0, conversionRevenue: 0 });
+    }
+    const g = dateGroups.get(key)!;
+    g.spend += row.spend || 0;
+    g.impressions += row.impressions || 0;
+    g.views += row.views || 0;
+    g.clicks += row.clicks || 0;
+    g.conversions += row.conversions || 0;
+    g.conversionRevenue += row.conversionRevenue || 0;
+  }
+
+  const result = Array.from(dateGroups.values()).sort((a, b) => a.dateLabel.localeCompare(b.dateLabel));
+  result.forEach(r => {
+    r.cpv = r.views > 0 ? Math.round(r.spend / r.views) : 0;
+    r.ctr = r.impressions > 0 ? Number(((r.clicks / r.impressions) * 100).toFixed(2)) : 0;
+    r.vtr = r.impressions > 0 ? Number(((r.views / r.impressions) * 100).toFixed(2)) : 0;
+    r.roas = r.spend > 0 ? Number(((r.conversionRevenue / r.spend) * 100).toFixed(1)) : 0;
+  });
+  return result;
 }
 
 function groupViral(data: any[], viewMode: ViewMode) {
@@ -114,21 +286,7 @@ function groupViral(data: any[], viewMode: ViewMode) {
   }).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 }
 
-// Helper to check if a metric improved compared to previous period
-function getMetricComparisonClass(grouped: any[], currentIdx: number, currentRow: any, metricKey: string): string {
-  const prevSameMedium = grouped
-    .slice(0, currentIdx)
-    .reverse()
-    .find(r => r.medium === currentRow.medium);
 
-  if (!prevSameMedium) return "";
-
-  const currentVal = currentRow[metricKey];
-  const prevVal = prevSameMedium[metricKey];
-
-  if (currentVal > prevVal) return "text-fursys-red";
-  return "";
-}
 
 // ── 요약 카드 컴포넌트 ────────────────────────────────────────
 function StatCard({
@@ -255,8 +413,9 @@ export default function AwarenessPage() {
   const clearViralContents = useMutation(api.awareness.clearViralContents);
   const updateViralRow    = useMutation(api.awareness.updateViralRow);
   const deleteViralRow    = useMutation(api.awareness.deleteViralRow);
-  const addYouTubeVideo   = useMutation(api.awareness.addYouTubeVideo);
+  const addYouTubeVideo    = useMutation(api.awareness.addYouTubeVideo);
   const deleteYouTubeVideo = useMutation(api.awareness.deleteYouTubeVideo);
+  const updateYouTubeVideo = useMutation(api.awareness.updateYouTubeVideo);
   const updateCampaign     = useMutation(api.campaigns.updateCampaignSettings);
 
   // ── 탭·뷰 ────────────────────────────────────────────────────
@@ -265,18 +424,52 @@ export default function AwarenessPage() {
   const [showCumulative, setShowCumulative] = useState(true);
 
   // ── 누적 성과 항목 선택 ──────────────────────────────────────
-  const [cumulativeVisibleItems, setCumulativeVisibleItems] = useState<Record<string, boolean>>({
+  const CUMULATIVE_LS_KEY = `awareness-cumulative-${campaignId}`;
+  const DEFAULT_VISIBLE_ITEMS: Record<string, boolean> = {
     spend: true, impressions: true, views: true, clicks: true, cpv: true, ctr: true,
-  });
+    conversions: true, conversionRevenue: true, roas: true,
+    signupCorporate: false, signupPersonal: false, leadsCollected: false,
+  };
+  const DEFAULT_ITEM_ORDER = [
+    "spend", "impressions", "views", "clicks", "cpv", "ctr",
+    "conversions", "conversionRevenue", "roas", "signupCorporate", "signupPersonal", "leadsCollected"
+  ];
+
+  const [cumulativeVisibleItems, setCumulativeVisibleItems] = useState<Record<string, boolean>>(DEFAULT_VISIBLE_ITEMS);
+  const [cumulativeItemOrder, setCumulativeItemOrder] = useState<string[]>(DEFAULT_ITEM_ORDER);
   const [showCumulativeSettings, setShowCumulativeSettings] = useState(false);
 
-  // ── 누적 성과 항목 순서 편집 ──────────────────────────────────
-  const [cumulativeItemOrder, setCumulativeItemOrder] = useState<string[]>(["spend", "impressions", "views", "clicks", "cpv", "ctr"]);
+  // localStorage 초기 로드 (마운트 1회) — 저장은 하지 않음
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(CUMULATIVE_LS_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.visibleItems) setCumulativeVisibleItems(parsed.visibleItems);
+        if (parsed.itemOrder)    setCumulativeItemOrder(parsed.itemOrder);
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
+
+  // 사용자 상호작용 시에만 저장 (effect 타이밍 문제 회피)
+  const persistCumulative = (
+    visibleItems: Record<string, boolean>,
+    itemOrder: string[]
+  ) => {
+    try {
+      localStorage.setItem(CUMULATIVE_LS_KEY, JSON.stringify({ visibleItems, itemOrder }));
+    } catch {}
+  };
+
   const [showItemOrder, setShowItemOrder] = useState(false);
   const [draggedCumulativeItem, setDraggedCumulativeItem] = useState<string | null>(null);
 
   // ── 매디어 퍼포먼스 컬럼 순서 편집 ──────────────────────────
-  const [mediaColOrder, setMediaColOrder] = useState<string[]>(["spend", "impressions", "views", "clicks", "cpv", "ctrVtr"]);
+  const [mediaColOrder, setMediaColOrder] = useState<string[]>([
+    "spend", "impressions", "views", "clicks", "cpv", "ctrVtr",
+    "conversions", "conversionRevenue", "roas", "signupCorporate", "signupPersonal", "leadsCollected"
+  ]);
   const [showMediaColOrder, setShowMediaColOrder] = useState(false);
   const [draggedMediaCol, setDraggedMediaCol] = useState<string | null>(null);
 
@@ -284,6 +477,21 @@ export default function AwarenessPage() {
   const [visibleCols,    setVisibleCols]    = useState<Record<string, boolean>>(DEFAULT_VISIBLE);
   const [extraColLabels, setExtraColLabels] = useState<string[]>([]); // 시트에서 감지된 추가 컬럼
   const [showColSettings, setShowColSettings] = useState(false);
+
+  // ── 아코디언 접기/펼치기 상태 ──────────────────────────────
+  const [expandedMediums, setExpandedMediums] = useState<Record<string, boolean>>({});
+
+  // ── 다차원 필터 상태 ──────────────────────────────────────────
+  const [filterAgenda, setFilterAgenda] = useState("all");
+  const [filterDevice, setFilterDevice] = useState("all");
+  const [filterMedium, setFilterMedium] = useState("none");
+  const [filterMediumDetail, setFilterMediumDetail] = useState("none");
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [chartMetrics, setChartMetrics] = useState<Record<string, boolean>>({
+    views: true,
+    clicks: true,
+    ctr: true
+  });
 
   // ── KPI 카드 ─────────────────────────────────────────────────
   const [showKpiEdit,  setShowKpiEdit]  = useState(false);
@@ -312,6 +520,7 @@ export default function AwarenessPage() {
   // ── 유튜브 ───────────────────────────────────────────────────
   const [newYoutubeUrl,   setNewYoutubeUrl]   = useState("");
   const [isAddingYoutube, setIsAddingYoutube] = useState(false);
+  const [autoFetchingIds, setAutoFetchingIds] = useState<Set<string>>(new Set());
 
   // ── 댓글 모달 ────────────────────────────────────────────────
   const [commentModal, setCommentModal] = useState<{
@@ -335,7 +544,7 @@ export default function AwarenessPage() {
     setIsSyncing(true);
     setSyncStatus("AI가 매체 데이터를 분석 중...");
     try {
-      const payload = rawData.filter(r => r.some(c => c !== "")).slice(0, 200);
+      const payload = rawData.filter(r => r.some(c => c !== ""));
       const res = await fetch("/api/parse-sheet-ai", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ data: payload, type: "digital" }),
@@ -349,12 +558,23 @@ export default function AwarenessPage() {
           const date = processDate(r.date) || "";
           if (!date || date === "1970-01-01" || !VALID_DATE_RE.test(date)) return null;
           return {
-            date, medium: r.medium || "-",
-            spend: processNumber(r.spend), impressions: processNumber(r.impressions),
-            views: processNumber(r.views), clicks: processNumber(r.clicks),
+            date, 
+            medium: r.medium || "-",
+            mediumDetail: r.mediumDetail || undefined,
+            agenda: r.agenda || undefined,
+            device: r.device || undefined,
+            spend: processNumber(r.spend), 
+            impressions: processNumber(r.impressions),
+            views: processNumber(r.views), 
+            clicks: processNumber(r.clicks),
             cpv: processNumber(r.views) > 0 ? processNumber(r.spend) / processNumber(r.views) : 0,
             ctr: processNumber(r.impressions) > 0 ? (processNumber(r.clicks) / processNumber(r.impressions)) * 100 : 0,
             vtr: processNumber(r.impressions) > 0 ? (processNumber(r.views) / processNumber(r.impressions)) * 100 : 0,
+            conversions: r.conversions !== undefined ? Number(r.conversions) : undefined,
+            conversionRevenue: r.conversionRevenue !== undefined ? Number(r.conversionRevenue) : undefined,
+            signupCorporate: r.signupCorporate !== undefined ? Number(r.signupCorporate) : undefined,
+            signupPersonal: r.signupPersonal !== undefined ? Number(r.signupPersonal) : undefined,
+            leadsCollected: r.leadsCollected !== undefined ? Number(r.leadsCollected) : undefined,
             recordedAt: Date.now(),
             // extraData의 키가 한글일 수 있으므로 JSON 문자열로 직렬화
             extraData: r.extraData && Object.keys(r.extraData).length > 0
@@ -519,7 +739,7 @@ export default function AwarenessPage() {
     finally { setIsFetchingUrl(null); }
   };
 
-  // ── 댓글 불러오기 (로컬 상태만 업데이트, Convex 저장 없음) ───
+  // ── 댓글 불러오기 (로컬 상태 + Convex 저장) ───
   const fetchComments = async (modalState?: typeof commentModal) => {
     const modal = modalState || commentModal;
     if (!modal) return;
@@ -532,6 +752,10 @@ export default function AwarenessPage() {
       const data = await res.json();
       if (data.commentsList !== undefined) {
         setCommentModal(prev => prev ? { ...prev, commentsList: data.commentsList, isLoading: false, error: data.error } : null);
+        // YouTube 영상인 경우 댓글을 Convex에 저장
+        if (modal.type === "yt") {
+          await updateYouTubeVideo({ videoId: modal.id as Id<"youtubeVideos">, updates: { commentsList: data.commentsList } });
+        }
       } else {
         setCommentModal(prev => prev ? { ...prev, isLoading: false, error: data.error || "수집 실패" } : null);
       }
@@ -553,6 +777,9 @@ export default function AwarenessPage() {
           const data = await res.json();
           if (data.commentsList !== undefined) {
             setCommentModal(prev => prev ? { ...prev, commentsList: data.commentsList, isLoading: false, error: data.error } : null);
+            if (commentModal.type === "yt") {
+              await updateYouTubeVideo({ videoId: commentModal.id as Id<"youtubeVideos">, updates: { commentsList: data.commentsList } });
+            }
           } else {
             setCommentModal(prev => prev ? { ...prev, isLoading: false, error: data.error || "수집 실패" } : null);
           }
@@ -563,6 +790,38 @@ export default function AwarenessPage() {
       fetchAsync();
     }
   }, [commentModal?.id, commentModal?.url]);
+
+  // ── 영상 탭 진입 시 댓글 자동 수집 ───────────────────────────
+  useEffect(() => {
+    if (activeTab !== "video" || youtubeVideos.length === 0) return;
+    const unFetched = youtubeVideos.filter(
+      (vid: any) => !vid.commentsList?.length && vid.youtubeId !== "-"
+    );
+    if (unFetched.length === 0) return;
+
+    const fetchAll = async () => {
+      for (const vid of unFetched) {
+        setAutoFetchingIds(prev => new Set(prev).add(vid._id));
+        try {
+          const res = await fetch("/api/fetch-comments", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: `https://youtube.com/watch?v=${vid.youtubeId}` }),
+          });
+          const data = await res.json();
+          if (data.commentsList?.length) {
+            await updateYouTubeVideo({
+              videoId: vid._id as Id<"youtubeVideos">,
+              updates: { commentsList: data.commentsList },
+            });
+          }
+        } catch {}
+        setAutoFetchingIds(prev => { const s = new Set(prev); s.delete(vid._id); return s; });
+      }
+    };
+    fetchAll();
+  // youtubeVideos 길이 변경 or 탭 전환 시에만 재실행
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, youtubeVideos.length]);
 
   // ── KPI 저장 ─────────────────────────────────────────────────
   const saveKpiTarget = async () => {
@@ -602,17 +861,34 @@ export default function AwarenessPage() {
   };
 
   // ── 집계 ────────────────────────────────────────────────────
-  const groupedDigital = groupDigitalKpis(digitalKpis, viewMode);
-  const allDigital     = groupDigitalKpis(digitalKpis, "total");
+  // 고유 아젠다 및 디바이스 목록 추출 (필터용)
+  const uniqueAgendas = Array.from(new Set(digitalKpis.map(r => r.agenda).filter(Boolean))).sort() as string[];
+  const uniqueDevices = Array.from(new Set(digitalKpis.map(r => r.device).filter(Boolean))).sort() as string[];
+  const uniqueMediums = Array.from(new Set(digitalKpis.map(r => r.medium).filter(Boolean))).sort() as string[];
+  // 현재 선택된 매체에 해당하는 매체상세만 필터링하거나, 전체를 가져옵니다.
+  const uniqueMediumDetails = Array.from(new Set(digitalKpis.filter(r => filterMedium === "all" || r.medium === filterMedium).map(r => r.mediumDetail).filter(Boolean))).sort() as string[];
+
+  const groupedDigital = groupDigitalKpis(digitalKpis, viewMode, filterAgenda, filterDevice, filterMedium, filterMediumDetail, dateRange || null);
+  const chartData      = getChartData(digitalKpis, filterAgenda, dateRange || null);
+  const allDigital     = groupDigitalKpis(digitalKpis, "total", filterAgenda, filterDevice, filterMedium, filterMediumDetail, dateRange || null);
   const groupedViral   = groupViral(viralContents, "daily");
 
   // 매체 퍼포먼스 누적 합계
-  const totalSpend       = allDigital.reduce((a, r) => a + r.spend, 0);
-  const totalImpressions = allDigital.reduce((a, r) => a + r.impressions, 0);
-  const totalViews       = allDigital.reduce((a, r) => a + r.views, 0);
-  const totalClicks      = allDigital.reduce((a, r) => a + r.clicks, 0);
-  const avgCpv           = totalViews > 0 ? Math.round(totalSpend / totalViews) : 0;
-  const avgCtr           = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+  const totalSpend             = allDigital.reduce((a, r) => a + r.spend, 0);
+  const totalImpressions       = allDigital.reduce((a, r) => a + r.impressions, 0);
+  const totalViews             = allDigital.reduce((a, r) => a + r.views, 0);
+  const totalClicks            = allDigital.reduce((a, r) => a + r.clicks, 0);
+  const totalConversions       = allDigital.reduce((a, r) => a + (r.conversions || 0), 0);
+  const totalConversionRevenue = allDigital.reduce((a, r) => a + (r.conversionRevenue || 0), 0);
+  const totalSignupCorporate   = allDigital.reduce((a, r) => a + (r.signupCorporate || 0), 0);
+  const totalSignupPersonal    = allDigital.reduce((a, r) => a + (r.signupPersonal || 0), 0);
+  const totalLeadsCollected    = allDigital.reduce((a, r) => a + (r.leadsCollected || 0), 0);
+
+  const avgCpv                 = totalViews > 0 ? Math.round(totalSpend / totalViews) : 0;
+  const avgCtr                 = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+  const avgRoas                = totalSpend > 0 ? (totalConversionRevenue / totalSpend) * 100 : 0;
+  const totalSignups           = totalSignupCorporate + totalSignupPersonal;
+  const avgCpa                 = totalSignups > 0 ? Math.round(totalSpend / totalSignups) : 0;
 
   // 추가 컬럼 누적
   const extraTotals: Record<string, number> = {};
@@ -695,16 +971,26 @@ export default function AwarenessPage() {
               {showCumulativeSettings && (
                 <div className="bg-gray-50 p-3 rounded-lg mb-3 flex flex-wrap gap-2 border border-gray-200">
                   {[
-                    { key: "spend", label: "집행 비용" },
-                    { key: "impressions", label: "노출수" },
-                    { key: "views", label: "조회수" },
-                    { key: "clicks", label: "클릭수" },
-                    { key: "cpv", label: "CPV" },
-                    { key: "ctr", label: "CTR" },
+                    { key: "spend",             label: "집행 비용" },
+                    { key: "impressions",        label: "노출수" },
+                    { key: "views",              label: "조회수" },
+                    { key: "clicks",             label: "클릭수" },
+                    { key: "cpv",                label: "CPV" },
+                    { key: "ctr",                label: "CTR" },
+                    { key: "conversions",        label: "전환수" },
+                    { key: "conversionRevenue",  label: "전환 매출" },
+                    { key: "roas",               label: "평균 ROAS" },
+                    { key: "signupCorporate",    label: "기업가입" },
+                    { key: "signupPersonal",     label: "개인가입" },
+                    { key: "leadsCollected",     label: "리드수집" },
                   ].map(item => (
                     <label key={item.key} className="flex items-center gap-2 cursor-pointer text-xs">
                       <input type="checkbox" checked={cumulativeVisibleItems[item.key] ?? true}
-                        onChange={e => setCumulativeVisibleItems(v => ({ ...v, [item.key]: e.target.checked }))}
+                        onChange={e => {
+                          const next = { ...cumulativeVisibleItems, [item.key]: e.target.checked };
+                          setCumulativeVisibleItems(next);
+                          persistCumulative(next, cumulativeItemOrder);
+                        }}
                         className="accent-fursys-red w-3 h-3" />
                       <span>{item.label}</span>
                     </label>
@@ -712,7 +998,11 @@ export default function AwarenessPage() {
                   {detectedExtraCols.map(col => (
                     <label key={col} className="flex items-center gap-2 cursor-pointer text-xs">
                       <input type="checkbox" checked={cumulativeVisibleItems[col] ?? true}
-                        onChange={e => setCumulativeVisibleItems(v => ({ ...v, [col]: e.target.checked }))}
+                        onChange={e => {
+                          const next = { ...cumulativeVisibleItems, [col]: e.target.checked };
+                          setCumulativeVisibleItems(next);
+                          persistCumulative(next, cumulativeItemOrder);
+                        }}
                         className="accent-fursys-red w-3 h-3" />
                       <span className="bg-blue-50 px-1.5 py-0.5 rounded">{col}</span>
                     </label>
@@ -727,7 +1017,9 @@ export default function AwarenessPage() {
                     return allItems.map((item, idx) => {
                       const itemLabels: Record<string, string> = {
                         spend: "집행 비용", impressions: "노출수", views: "조회수",
-                        clicks: "클릭수", cpv: "CPV", ctr: "CTR"
+                        clicks: "클릭수", cpv: "CPV", ctr: "CTR",
+                        conversions: "전환수", conversionRevenue: "전환 매출", roas: "ROAS",
+                        signupCorporate: "기업가입", signupPersonal: "개인가입", leadsCollected: "리드수집"
                       };
                       const itemLabel = itemLabels[item] || item;
                       const isExtra = detectedExtraCols.includes(item);
@@ -752,7 +1044,9 @@ export default function AwarenessPage() {
                               allItems.splice(draggedIdx, 1);
                               allItems.splice(targetIdx, 0, draggedCumulativeItem);
                             }
-                            setCumulativeItemOrder(allItems.filter(i => cumulativeItemOrder.includes(i)));
+                            const nextOrder = allItems.filter(i => cumulativeItemOrder.includes(i));
+                            setCumulativeItemOrder(nextOrder);
+                            persistCumulative(cumulativeVisibleItems, nextOrder);
                             setDraggedCumulativeItem(null);
                           }}
                           onDragEnd={() => setDraggedCumulativeItem(null)}
@@ -780,6 +1074,9 @@ export default function AwarenessPage() {
                   const clicksKpi = kpiTargets.find(t => t.label?.includes("클릭"));
                   const cpvKpi = kpiTargets.find(t => t.label?.includes("CPV"));
                   const ctrKpi = kpiTargets.find(t => t.label?.includes("CTR"));
+                  const conversionsKpi = kpiTargets.find(t => t.label?.includes("전환수") || t.label?.includes("전환"));
+                  const revenueKpi = kpiTargets.find(t => t.label?.includes("매출") || t.label?.includes("수익"));
+                  const roasKpi = kpiTargets.find(t => t.label?.includes("ROAS"));
 
                   if (item === "spend" && cumulativeVisibleItems.spend) {
                     const kpiInfo = spendKpi ? {
@@ -877,6 +1174,64 @@ export default function AwarenessPage() {
                       />
                     );
                   }
+                  if (item === "conversions" && cumulativeVisibleItems.conversions) {
+                    const kpiInfo = conversionsKpi ? {
+                      target: fmt(conversionsKpi.target),
+                      rate: conversionsKpi.target > 0 ? (totalConversions / conversionsKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="conversions"
+                        label="전환수"
+                        value={fmt(totalConversions)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "전환수", target: conversionsKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("전환수") || t.label?.includes("전환")) }); setKpiTargetVal(String(conversionsKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (item === "conversionRevenue" && cumulativeVisibleItems.conversionRevenue) {
+                    const kpiInfo = revenueKpi ? {
+                      target: fmtKrw(revenueKpi.target),
+                      rate: revenueKpi.target > 0 ? (totalConversionRevenue / revenueKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="conversionRevenue"
+                        label="전환 매출"
+                        value={fmtKrw(totalConversionRevenue)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "전환 매출", target: revenueKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("매출") || t.label?.includes("수익")) }); setKpiTargetVal(String(revenueKpi?.target || "")); }}
+                      />
+                    );
+                  }
+                  if (item === "roas" && cumulativeVisibleItems.roas) {
+                    const kpiInfo = roasKpi ? {
+                      target: pct(roasKpi.target),
+                      rate: roasKpi.target > 0 ? (avgRoas / roasKpi.target) * 100 : 0,
+                      isBudget: false
+                    } : undefined;
+                    return (
+                      <StatCard
+                        key="roas"
+                        label="평균 ROAS"
+                        value={pct(avgRoas)}
+                        kpiInfo={kpiInfo}
+                        onKpiEdit={() => { setEditingKpi({ label: "ROAS", target: roasKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("ROAS")) }); setKpiTargetVal(String(roasKpi?.target || "")); }}
+                        isHighlight={avgRoas >= 300}
+                      />
+                    );
+                  }
+                  if (item === "signupCorporate" && cumulativeVisibleItems.signupCorporate) {
+                    return <StatCard key="signupCorporate" label="기업가입" value={fmt(totalSignupCorporate)} />;
+                  }
+                  if (item === "signupPersonal" && cumulativeVisibleItems.signupPersonal) {
+                    return <StatCard key="signupPersonal" label="개인가입" value={fmt(totalSignupPersonal)} />;
+                  }
+                  if (item === "leadsCollected" && cumulativeVisibleItems.leadsCollected) {
+                    return <StatCard key="leadsCollected" label="리드수집" value={fmt(totalLeadsCollected)} />;
+                  }
                   if (detectedExtraCols.includes(item) && cumulativeVisibleItems[item]) return <StatCard key={item} label={item} value={fmt(extraTotals[item] || 0)} />;
                   return null;
                 })}
@@ -926,20 +1281,22 @@ export default function AwarenessPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {digitalKpis.length > 0 && (
+                <div className="flex gap-2 items-center">
+                  <select value={filterAgenda} onChange={e => setFilterAgenda(e.target.value)}
+                    className="bg-white border border-gray-200 text-gray-700 text-[13px] rounded p-1.5 outline-none font-semibold">
+                    <option value="all">전체 아젠다</option>
+                    {uniqueAgendas.map(agenda => <option key={agenda} value={agenda}>{agenda}</option>)}
+                  </select>
+                  <select value={filterDevice} onChange={e => setFilterDevice(e.target.value)}
+                    className="bg-white border border-gray-200 text-gray-700 text-[13px] rounded p-1.5 outline-none font-semibold">
+                    <option value="all">전체 디바이스</option>
+                    {uniqueDevices.map(device => <option key={device} value={device}>{device}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="flex-1" />
               <div className="flex gap-2">
-                {digitalKpis.length > 0 && (
-                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
-                    onClick={() => setShowMediaColOrder(v => !v)}>
-                    <ArrowUpDown className="w-4 h-4 mr-2" /> 컬럼 순서
-                  </Button>
-                )}
-                {digitalKpis.length > 0 && (
-                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
-                    onClick={() => setShowColSettings(v => !v)}>
-                    <SlidersHorizontal className="w-4 h-4 mr-2" /> 컬럼 설정
-                  </Button>
-                )}
                 <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
                   onClick={() => setShowConfig({ type: "digital", source: "excel" })}>
                   <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
@@ -952,101 +1309,6 @@ export default function AwarenessPage() {
             </div>
           </div>
 
-          {/* 컬럼 순서 편집 패널 */}
-          {showMediaColOrder && (
-            <GlassCard className="p-4 bg-gray-50 animate-in slide-in-from-top-2">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                  <ArrowUpDown className="w-4 h-4" /> 테이블 컬럼 순서
-                </span>
-                <button onClick={() => setShowMediaColOrder(false)}><X className="w-4 h-4 text-gray-400" /></button>
-              </div>
-              <p className="text-xs text-gray-400 mb-3">드래그하여 컬럼 순서를 변경할 수 있습니다. (회색 = 숨김 항목)</p>
-              <div className="flex flex-col gap-2">
-                {(() => {
-                  const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
-                  const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                  const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
-
-                  return allCols.map((col) => {
-                    const label = FIXED_COLS.find(fc => fc.key === col)?.label || col;
-                    const isExtra = detectedExtraCols.includes(col);
-                    const isDragging = draggedMediaCol === col;
-                    const isVisible = visibleCols[col];
-
-                    return (
-                      <div
-                        key={col}
-                        draggable
-                        onDragStart={() => setDraggedMediaCol(col)}
-                        onDragOver={(e) => e.preventDefault()}
-                        onDrop={() => {
-                          if (!draggedMediaCol || draggedMediaCol === col) return;
-                          const fixedOrder = mediaColOrder.filter(c => FIXED_COLS.some(fc => fc.key === c));
-                          const extraOrder = mediaColOrder.filter(c => !FIXED_COLS.some(fc => fc.key === c));
-                          const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(c => !mediaColOrder.includes(c))];
-                          const draggedIdx = allCols.indexOf(draggedMediaCol);
-                          const targetIdx = allCols.indexOf(col);
-                          if (draggedIdx < targetIdx) {
-                            allCols.splice(draggedIdx, 1);
-                            allCols.splice(targetIdx - 1, 0, draggedMediaCol);
-                          } else {
-                            allCols.splice(draggedIdx, 1);
-                            allCols.splice(targetIdx, 0, draggedMediaCol);
-                          }
-                          const newOrder = allCols.filter(c => FIXED_COLS.some(fc => fc.key === c) || mediaColOrder.includes(c));
-                          setMediaColOrder(newOrder);
-                          setDraggedMediaCol(null);
-                        }}
-                        onDragEnd={() => setDraggedMediaCol(null)}
-                        className={`flex items-center gap-2 px-3 py-2 rounded cursor-move transition-all ${
-                          isDragging
-                            ? "bg-fursys-red/10 border-fursys-red/30 border"
-                            : "bg-white border border-gray-200 hover:border-fursys-red/50"
-                        } ${!isVisible ? "opacity-40 bg-gray-200" : ""}`}>
-                        <span className="text-lg text-gray-300">⋮⋮</span>
-                        <span className={`text-sm flex-1 ${isExtra ? "bg-blue-50 px-2 py-0.5 rounded" : ""} ${isVisible ? "text-gray-800" : "text-gray-400 line-through"}`}>
-                          {label}
-                          {!isVisible && <span className="ml-1 text-[10px] bg-gray-300 text-white px-1.5 py-0.5 rounded">숨김</span>}
-                        </span>
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
-            </GlassCard>
-          )}
-
-          {/* 컬럼 설정 패널 */}
-          {showColSettings && (
-            <GlassCard className="p-4 bg-gray-50 animate-in slide-in-from-top-2">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                  <SlidersHorizontal className="w-4 h-4" /> 대시보드 노출 항목
-                </span>
-                <button onClick={() => setShowColSettings(false)}><X className="w-4 h-4 text-gray-400" /></button>
-              </div>
-              <p className="text-xs text-gray-400 mb-3">체크한 항목만 테이블에 표시됩니다.</p>
-              <div className="flex flex-wrap gap-3">
-                {FIXED_COLS.map(col => (
-                  <label key={col.key} className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={visibleCols[col.key] ?? true}
-                      onChange={e => setVisibleCols(v => ({ ...v, [col.key]: e.target.checked }))}
-                      className="accent-fursys-red w-4 h-4" />
-                    <span className="text-sm text-gray-800">{col.label}</span>
-                  </label>
-                ))}
-                {detectedExtraCols.map(label => (
-                  <label key={label} className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={visibleCols[label] ?? true}
-                      onChange={e => setVisibleCols(v => ({ ...v, [label]: e.target.checked }))}
-                      className="accent-fursys-red w-4 h-4" />
-                    <span className="text-sm text-gray-800 bg-blue-50 px-2 py-0.5 rounded">{label}</span>
-                  </label>
-                ))}
-              </div>
-            </GlassCard>
-          )}
 
           {/* 업로드 패널 */}
           {showConfig?.type === "digital" && (
@@ -1097,8 +1359,243 @@ export default function AwarenessPage() {
             </GlassCard>
           )}
 
-          {/* 테이블 */}
-          <GlassCard className="p-0 overflow-hidden min-h-[120px]">
+          {/* 상단 트렌드 차트 */}
+          {chartData.length > 0 && (
+            <GlassCard className="p-5">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  <span className="w-2 h-4 bg-fursys-red rounded-sm"></span>
+                  일자별 그래프
+                </h3>
+                <div className="flex items-center gap-3 flex-wrap">
+                  {[
+                    { key: "views", label: "조회수" },
+                    { key: "impressions", label: "노출수" },
+                    { key: "ctr", label: "CTR" },
+                    { key: "vtr", label: "VTR" },
+                    { key: "spend", label: "집행 비용" },
+                    { key: "clicks", label: "클릭수" },
+                    { key: "conversions", label: "전환수" },
+                    { key: "roas", label: "ROAS" }
+                  ].map(metric => (
+                    <label key={metric.key} className="flex items-center gap-1.5 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={!!chartMetrics[metric.key]}
+                        onChange={(e) => setChartMetrics(prev => ({ ...prev, [metric.key]: e.target.checked }))}
+                        className="accent-fursys-red w-3.5 h-3.5"
+                      />
+                      <span className="text-xs text-gray-600 font-medium">{metric.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="h-[280px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                    <XAxis 
+                      dataKey="dateLabel" 
+                      tick={{fontSize: 11, fill: '#9ca3af'}} 
+                      axisLine={false} 
+                      tickLine={false} 
+                      dy={10}
+                    />
+                    
+                    {/* 왼쪽 Y축: 수량 (비용, 조회수, 노출수, 클릭수, 전환수) */}
+                    <YAxis 
+                      yAxisId="left"
+                      orientation="left"
+                      tick={{fontSize: 11, fill: '#9ca3af'}} 
+                      axisLine={false} 
+                      tickLine={false} 
+                      dx={-10}
+                      tickFormatter={(val) => val >= 10000 ? `${(val/10000).toFixed(0)}만` : val.toLocaleString()}
+                    />
+                    
+                    {/* 오른쪽 Y축: 퍼센트 (CTR, VTR, ROAS) */}
+                    <YAxis 
+                      yAxisId="right"
+                      orientation="right"
+                      tick={{fontSize: 11, fill: '#9ca3af'}} 
+                      axisLine={false} 
+                      tickLine={false} 
+                      dx={10}
+                      tickFormatter={(val) => `${val}%`}
+                    />
+                    
+                    <RechartsTooltip 
+                      contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(val: number, name: string) => {
+                        const labels: Record<string, string> = { spend: "집행 비용", views: "조회수", impressions: "노출수", clicks: "클릭수", conversions: "전환수", ctr: "CTR", vtr: "VTR", roas: "ROAS" };
+                        const label = labels[name] || name;
+                        if (name === "spend") return [`${val.toLocaleString()}원`, label];
+                        if (name === "ctr" || name === "vtr" || name === "roas") return [`${val}%`, label];
+                        return [val.toLocaleString(), label];
+                      }}
+                      labelStyle={{ color: '#6b7280', marginBottom: '8px', fontSize: '12px', fontWeight: 600 }}
+                    />
+                    
+                    {/* 조회수 → 막대(Bar) 그래프 */}
+                    {chartMetrics["views"] && <Bar yAxisId="left" dataKey="views" name="views" fill="#DC262633" stroke="#DC2626" strokeWidth={1} radius={[4, 4, 0, 0]} barSize={20} />}
+                    
+                    {/* 수량 계열 → 꺾은선(Line) */}
+                    {chartMetrics["spend"] && <Line yAxisId="left" type="monotone" dataKey="spend" name="spend" stroke="#F59E0B" strokeWidth={2.5} dot={{r: 3, fill: '#F59E0B', strokeWidth: 2, stroke: '#fff'}} />}
+                    {chartMetrics["impressions"] && <Line yAxisId="left" type="monotone" dataKey="impressions" name="impressions" stroke="#2563EB" strokeWidth={2.5} dot={{r: 3, fill: '#2563EB', strokeWidth: 2, stroke: '#fff'}} />}
+                    {chartMetrics["clicks"] && <Line yAxisId="left" type="monotone" dataKey="clicks" name="clicks" stroke="#D97706" strokeWidth={2.5} dot={{r: 3, fill: '#D97706', strokeWidth: 2, stroke: '#fff'}} />}
+                    {chartMetrics["conversions"] && <Line yAxisId="left" type="monotone" dataKey="conversions" name="conversions" stroke="#059669" strokeWidth={2.5} dot={{r: 3, fill: '#059669', strokeWidth: 2, stroke: '#fff'}} />}
+                    
+                    {/* 비율 계열 → 꺾은선(Line) + 점선 */}
+                    {chartMetrics["ctr"] && <Line yAxisId="right" type="monotone" dataKey="ctr" name="ctr" stroke="#EC4899" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#EC4899', strokeWidth: 2, stroke: '#fff'}} />}
+                    {chartMetrics["vtr"] && <Line yAxisId="right" type="monotone" dataKey="vtr" name="vtr" stroke="#8B5CF6" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#8B5CF6', strokeWidth: 2, stroke: '#fff'}} />}
+                    {chartMetrics["roas"] && <Line yAxisId="right" type="monotone" dataKey="roas" name="roas" stroke="#10B981" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#10B981', strokeWidth: 2, stroke: '#fff'}} />}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </GlassCard>
+          )}
+
+          {/* 테이블 – 평탄화된 데이터(합계/개별) 표시 */}
+          <GlassCard className="p-0 overflow-hidden min-h-[120px] bg-white">
+            {groupedDigital.length > 0 && (
+              <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-white">
+                <div className="flex items-center gap-4">
+                  <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                    <span className="w-2 h-4 bg-fursys-red rounded-sm"></span>
+                    상세 데이터
+                  </h3>
+                  <div className="flex gap-2 items-center">
+                    <select value={filterMedium} onChange={e => { setFilterMedium(e.target.value); setFilterMediumDetail("none"); }}
+                      className="bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none font-semibold w-[120px]">
+                      <option value="none">-</option>
+                      <option value="all">전체 매체</option>
+                      {uniqueMediums.map(medium => <option key={medium} value={medium}>{medium}</option>)}
+                    </select>
+                    <select value={filterMediumDetail} onChange={e => setFilterMediumDetail(e.target.value)}
+                      className="bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none font-semibold w-[140px]"
+                      disabled={filterMedium === "none"}
+                    >
+                      <option value="none">-</option>
+                      <option value="all">전체 매체 상세</option>
+                      {uniqueMediumDetails.map(detail => <option key={detail} value={detail}>{detail}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100 h-[32px]"
+                    onClick={() => setShowMediaColOrder(v => !v)}>
+                    <ArrowUpDown className="w-3.5 h-3.5 mr-1.5" /> 컬럼 순서
+                  </Button>
+                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100 h-[32px]"
+                    onClick={() => setShowColSettings(v => !v)}>
+                    <SlidersHorizontal className="w-3.5 h-3.5 mr-1.5" /> 컬럼 설정
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* 컬럼 순서 편집 패널 */}
+            {showMediaColOrder && (
+              <div className="p-4 bg-gray-50 border-b border-gray-100 animate-in slide-in-from-top-2">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                    <ArrowUpDown className="w-4 h-4" /> 테이블 컬럼 순서
+                  </span>
+                  <button onClick={() => setShowMediaColOrder(false)}><X className="w-4 h-4 text-gray-400" /></button>
+                </div>
+                <p className="text-xs text-gray-400 mb-3">드래그하여 컬럼 순서를 변경할 수 있습니다. (회색 = 숨김 항목)</p>
+                <div className="flex flex-col gap-2">
+                  {(() => {
+                    const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
+                    const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
+                    const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
+  
+                    return allCols.map((col) => {
+                      const label = FIXED_COLS.find(fc => fc.key === col)?.label || col;
+                      const isExtra = detectedExtraCols.includes(col);
+                      const isDragging = draggedMediaCol === col;
+                      const isVisible = visibleCols[col];
+  
+                      return (
+                        <div
+                          key={col}
+                          draggable
+                          onDragStart={() => setDraggedMediaCol(col)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (!draggedMediaCol || draggedMediaCol === col) return;
+                            const fixedOrder = mediaColOrder.filter(c => FIXED_COLS.some(fc => fc.key === c));
+                            const extraOrder = mediaColOrder.filter(c => !FIXED_COLS.some(fc => fc.key === c));
+                            const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(c => !mediaColOrder.includes(c))];
+                            const draggedIdx = allCols.indexOf(draggedMediaCol);
+                            const targetIdx = allCols.indexOf(col);
+                            if (draggedIdx < targetIdx) {
+                              allCols.splice(draggedIdx, 1);
+                              allCols.splice(targetIdx - 1, 0, draggedMediaCol);
+                            } else {
+                              allCols.splice(draggedIdx, 1);
+                              allCols.splice(targetIdx, 0, draggedMediaCol);
+                            }
+                            const newOrder = allCols.filter(c => FIXED_COLS.some(fc => fc.key === c) || mediaColOrder.includes(c));
+                            let loadedOrder = [...newOrder];
+                            FIXED_COLS.forEach(fc => {
+                              if (!loadedOrder.includes(fc.key)) {
+                                loadedOrder.push(fc.key);
+                              }
+                            });
+                            setMediaColOrder(loadedOrder);
+                            setDraggedMediaCol(null);
+                          }}
+                          onDragEnd={() => setDraggedMediaCol(null)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded cursor-move transition-all ${
+                            isDragging
+                              ? "bg-fursys-red/10 border-fursys-red/30 border"
+                              : "bg-white border border-gray-200 hover:border-fursys-red/50"
+                          } ${!isVisible ? "opacity-40 bg-gray-200" : ""}`}>
+                          <span className="text-lg text-gray-300">⋮⋮</span>
+                          <span className={`text-sm flex-1 ${isExtra ? "bg-blue-50 px-2 py-0.5 rounded" : ""} ${isVisible ? "text-gray-800" : "text-gray-400 line-through"}`}>
+                            {label}
+                            {!isVisible && <span className="ml-1 text-[10px] bg-gray-300 text-white px-1.5 py-0.5 rounded">숨김</span>}
+                          </span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            )}
+  
+            {/* 컬럼 설정 패널 */}
+            {showColSettings && (
+              <div className="p-4 bg-gray-50 border-b border-gray-100 animate-in slide-in-from-top-2">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                    <SlidersHorizontal className="w-4 h-4" /> 대시보드 노출 항목
+                  </span>
+                  <button onClick={() => setShowColSettings(false)}><X className="w-4 h-4 text-gray-400" /></button>
+                </div>
+                <p className="text-xs text-gray-400 mb-3">체크한 항목만 테이블에 표시됩니다.</p>
+                <div className="flex flex-wrap gap-3">
+                  {FIXED_COLS.map(col => (
+                    <label key={col.key} className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={visibleCols[col.key] ?? true}
+                        onChange={e => setVisibleCols(v => ({ ...v, [col.key]: e.target.checked }))}
+                        className="accent-fursys-red w-4 h-4" />
+                      <span className="text-sm text-gray-800">{col.label}</span>
+                    </label>
+                  ))}
+                  {detectedExtraCols.map(label => (
+                    <label key={label} className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={visibleCols[label] ?? true}
+                        onChange={e => setVisibleCols(v => ({ ...v, [label]: e.target.checked }))}
+                        className="accent-fursys-red w-4 h-4" />
+                      <span className="text-sm text-gray-800 bg-blue-50 px-2 py-0.5 rounded">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {groupedDigital.length === 0 ? (
               <div className="flex items-center justify-center h-[120px] text-gray-400 text-sm">
                 구글 시트 또는 엑셀 파일을 연동하면 AI가 자동으로 분석합니다.
@@ -1107,7 +1604,13 @@ export default function AwarenessPage() {
               <Table>
                 <TableHeader className="bg-gray-50">
                   <TableRow className="border-gray-100 hover:bg-transparent">
-                    <TableHead className="text-gray-500 text-xs">기간 ({VIEW_MODE_LABELS[viewMode]})</TableHead>
+                    <TableHead className="text-gray-500 text-[13px] whitespace-nowrap w-[130px]">기간 ({VIEW_MODE_LABELS[viewMode]})</TableHead>
+                    {filterMedium !== "none" && (
+                      <>
+                        <TableHead className="text-gray-500 text-[13px] whitespace-nowrap w-[130px]">매체</TableHead>
+                        <TableHead className="text-gray-500 text-[13px] whitespace-nowrap w-[130px]">매체 상세</TableHead>
+                      </>
+                    )}
                     {(() => {
                       const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
                       const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
@@ -1115,46 +1618,92 @@ export default function AwarenessPage() {
                       return allCols.map(col => {
                         const isVisible = visibleCols[col];
                         if (!isVisible) return null;
-                        if (col === "spend") return <TableHead key="spend" className="text-gray-500 text-xs text-right">집행 비용</TableHead>;
-                        if (col === "impressions") return <TableHead key="impressions" className="text-gray-500 text-xs text-right">노출수</TableHead>;
-                        if (col === "views") return <TableHead key="views" className="text-gray-500 text-xs text-right">조회수</TableHead>;
-                        if (col === "clicks") return <TableHead key="clicks" className="text-gray-500 text-xs text-right">클릭수</TableHead>;
-                        if (col === "cpv") return <TableHead key="cpv" className="text-gray-500 text-xs text-right">CPV</TableHead>;
-                        if (col === "ctrVtr") return <TableHead key="ctrVtr" className="text-gray-500 text-xs text-right">CTR / VTR</TableHead>;
-                        return <TableHead key={col} className="text-gray-500 text-xs text-right">{col}</TableHead>;
+                        if (col === "spend")       return <TableHead key="spend"       className="text-gray-500 text-[13px] whitespace-nowrap text-right">집행 비용</TableHead>;
+                        if (col === "impressions") return <TableHead key="impressions" className="text-gray-500 text-[13px] whitespace-nowrap text-right">노출수</TableHead>;
+                        if (col === "views")       return <TableHead key="views"       className="text-gray-500 text-[13px] whitespace-nowrap text-right">조회수</TableHead>;
+                        if (col === "clicks")      return <TableHead key="clicks"      className="text-gray-500 text-[13px] whitespace-nowrap text-right">클릭수</TableHead>;
+                        if (col === "cpv")         return <TableHead key="cpv"         className="text-gray-500 text-[13px] whitespace-nowrap text-right">CPV</TableHead>;
+                        if (col === "ctrVtr")      return <TableHead key="ctrVtr"      className="text-gray-500 text-[13px] whitespace-nowrap text-right">CTR / VTR</TableHead>;
+                        if (col === "conversions") return <TableHead key="conversions" className="text-gray-500 text-[13px] whitespace-nowrap text-right">전환수</TableHead>;
+                        if (col === "conversionRevenue") return <TableHead key="conversionRevenue" className="text-gray-500 text-[13px] whitespace-nowrap text-right">전환매출</TableHead>;
+                        if (col === "roas")        return <TableHead key="roas"        className="text-gray-500 text-[13px] whitespace-nowrap text-right">ROAS</TableHead>;
+                        if (col === "signupCorporate")   return <TableHead key="signupCorporate"   className="text-gray-500 text-[13px] whitespace-nowrap text-right">기업가입</TableHead>;
+                        if (col === "signupPersonal")    return <TableHead key="signupPersonal"    className="text-gray-500 text-[13px] whitespace-nowrap text-right">개인가입</TableHead>;
+                        if (col === "leadsCollected")    return <TableHead key="leadsCollected"    className="text-gray-500 text-[13px] whitespace-nowrap text-right">리드수집</TableHead>;
+                        return <TableHead key={col} className="text-gray-500 text-[13px] whitespace-nowrap text-right">{col}</TableHead>;
                       });
                     })()}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {groupedDigital.map((row, i) => (
-                    <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
-                      <TableCell className="font-mono text-gray-500 text-xs">{row.dateLabel}</TableCell>
-                      {(() => {
-                        const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
-                        const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                        const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
-                        return allCols.map(col => {
-                          const isVisible = visibleCols[col];
-                          if (!isVisible) return null;
-                          const compareClass = getMetricComparisonClass(groupedDigital, i, row, col);
-                          if (col === "spend") return <TableCell key="spend" className={`text-right font-bold ${compareClass || "text-gray-700"}`}>{fmt(row.spend)}원</TableCell>;
-                          if (col === "impressions") return <TableCell key="impressions" className={`text-right font-bold ${compareClass || "text-gray-700"}`}>{fmt(row.impressions)}</TableCell>;
-                          if (col === "views") return <TableCell key="views" className={`text-right font-bold ${compareClass || "text-gray-900"}`}>{fmt(row.views)}</TableCell>;
-                          if (col === "clicks") return <TableCell key="clicks" className={`text-right font-bold ${compareClass || "text-gray-900"}`}>{fmt(row.clicks)}</TableCell>;
-                          if (col === "cpv") return <TableCell key="cpv" className={`text-right font-bold ${compareClass || "text-gray-700"}`}>{fmtKrw(row.cpv)}</TableCell>;
-                          if (col === "ctrVtr") {
-                            const ctrCompare = getMetricComparisonClass(groupedDigital, i, row, "ctr");
-                            const vtrCompare = getMetricComparisonClass(groupedDigital, i, row, "vtr");
-                            const anyImproved = ctrCompare || vtrCompare;
-                            return <TableCell key="ctrVtr" className={`text-right font-bold ${anyImproved || "text-gray-700"}`}>{row.ctr}% / {row.vtr}%</TableCell>;
-                          }
-                          const extraCompare = getMetricComparisonClass(groupedDigital, i, row, col);
-                          return <TableCell key={col} className={`text-right font-bold ${extraCompare || "text-gray-700"}`}>{fmt(row.extra?.[col] || 0)}</TableCell>;
-                        });
-                      })()}
-                    </TableRow>
-                  ))}
+                  {groupedDigital.map((row, i) => {
+                    // 컬럼 목록 계산
+                    const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
+                    const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
+                    const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
+
+                    // 셀 렌더 헬퍼
+                    const renderCells = (data: any, isSubtotal: boolean) =>
+                      allCols.map(col => {
+                        if (!visibleCols[col]) return null;
+                        
+                        const roasHighlight = col === "roas" && data.roas >= 300
+                          ? "text-emerald-600 font-extrabold"
+                          : col === "roas" && data.roas > 0
+                          ? "text-gray-700 font-bold"
+                          : "";
+
+                        const baseClass = `text-right ${isSubtotal ? "font-bold text-gray-900 text-[13px]" : "text-[13px] text-gray-700"}`;
+
+                        if (col === "spend")        return <TableCell key="spend"        className={`${baseClass} py-3`}>{fmt(data.spend)}원</TableCell>;
+                        if (col === "impressions")  return <TableCell key="impressions"  className={`${baseClass} py-3`}>{fmt(data.impressions)}</TableCell>;
+                        if (col === "views")        return <TableCell key="views"        className={`${baseClass} py-3`}>{fmt(data.views)}</TableCell>;
+                        if (col === "clicks")       return <TableCell key="clicks"       className={`${baseClass} py-3`}>{fmt(data.clicks)}</TableCell>;
+                        if (col === "cpv")          return <TableCell key="cpv"          className={`${baseClass} py-3`}>{fmtKrw(data.cpv)}</TableCell>;
+                        if (col === "ctrVtr")       return <TableCell key="ctrVtr"       className={`${baseClass} py-3`}>{data.ctr}% / {data.vtr}%</TableCell>;
+                        if (col === "conversions")  return <TableCell key="conversions"  className={`${baseClass} py-3`}>{fmt(data.conversions || 0)}</TableCell>;
+                        if (col === "conversionRevenue") return <TableCell key="conversionRevenue" className={`${baseClass} py-3`}>{fmtKrw(data.conversionRevenue || 0)}</TableCell>;
+                        if (col === "roas")         return <TableCell key="roas"         className={`${baseClass} py-3 ${roasHighlight}`}>
+                          {data.roas > 0 ? `${data.roas}%` : "-"}
+                        </TableCell>;
+                        if (col === "signupCorporate") return <TableCell key="signupCorporate" className={`${baseClass} py-3`}>{fmt(data.signupCorporate || 0)}</TableCell>;
+                        if (col === "signupPersonal")  return <TableCell key="signupPersonal"  className={`${baseClass} py-3`}>{fmt(data.signupPersonal || 0)}</TableCell>;
+                        if (col === "leadsCollected")  return <TableCell key="leadsCollected"  className={`${baseClass} py-3`}>{fmt(data.leadsCollected || 0)}</TableCell>;
+                        return <TableCell key={col} className={`${baseClass} py-3`}>{fmt(data.extra?.[col] || 0)}</TableCell>;
+                      });
+
+                    return (
+                      <TableRow
+                        key={`row_${i}_${row.dateLabel}_${row.medium}_${row.mediumDetail}`}
+                        className={`border-gray-100 text-[13px] hover:bg-gray-50/50 ${row.isSubtotal ? "bg-red-50/40 border-t-2 border-red-100" : ""}`}
+                      >
+                        {row.isSubtotal ? (
+                          filterMedium === "none" ? (
+                            <TableCell className="font-bold text-red-900 text-[13px] align-middle py-3 whitespace-nowrap">
+                              {row.dateLabel}
+                            </TableCell>
+                          ) : (
+                            <>
+                              <TableCell className="font-bold text-red-900 text-[13px] align-middle py-3 whitespace-nowrap">
+                                합계
+                              </TableCell>
+                              <TableCell className="font-bold text-red-900 text-[13px] align-middle py-3 whitespace-nowrap" colSpan={2}>
+                                {row.dateLabel}
+                              </TableCell>
+                            </>
+                          )
+                        ) : (
+                          <>
+                            <TableCell className="text-gray-400 text-[13px] align-middle py-3 whitespace-nowrap">{row.dateLabel}</TableCell>
+                            <TableCell className="text-gray-700 text-[13px] font-medium align-middle py-3 whitespace-nowrap">{row.medium}</TableCell>
+                            <TableCell className="text-gray-600 text-[13px] align-middle py-3 whitespace-nowrap">{row.mediumDetail}</TableCell>
+                          </>
+                        )}
+                        {/* 지표 셀들 */}
+                        {renderCells(row, row.isSubtotal)}
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             )}
@@ -1192,74 +1741,128 @@ export default function AwarenessPage() {
             </div>
           </div>
 
-          <GlassCard className="p-0 overflow-hidden">
-            {youtubeVideos.length === 0 ? (
-              <div className="flex items-center justify-center p-8 text-gray-400 text-sm">
-                유튜브 영상 링크를 입력하여 영상을 추가하세요.
-              </div>
-            ) : (
-              <Table>
-                <TableHeader className="bg-gray-50">
-                  <TableRow className="border-gray-100 hover:bg-transparent">
-                    <TableHead className="text-gray-500 text-xs">업로드</TableHead>
-                    <TableHead className="text-gray-500 text-xs">플랫폼</TableHead>
-                    <TableHead className="text-gray-500 text-xs">콘텐츠 제목</TableHead>
-                    <TableHead className="text-right text-gray-500 text-xs">조회수</TableHead>
-                    <TableHead className="text-right text-gray-500 text-xs">좋아요</TableHead>
-                    <TableHead className="text-right text-gray-500 text-xs">댓글</TableHead>
-                    <TableHead className="text-right text-gray-500 text-xs">인게이지먼트</TableHead>
-                    <TableHead className="text-gray-500 text-xs text-center w-[80px]">관리</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {youtubeVideos.map((vid: any) => {
-                    const eng = vid.views > 0 ? ((vid.likes + vid.comments) / vid.views * 100).toFixed(2) : "0.00";
-                    return (
-                      <TableRow key={vid._id} className="border-gray-100 hover:bg-gray-50 text-sm h-[72px]">
-                        <TableCell className="font-mono text-gray-400 text-xs">{vid.uploadDate}</TableCell>
-                        <TableCell>
-                          <span className="px-2 py-1 bg-red-100 text-fursys-red rounded text-[10px] font-bold">YT</span>
-                        </TableCell>
-                        <TableCell className="max-w-[220px]">
-                          <div className="flex items-center gap-3">
-                            {vid.thumbnailUrl ? (
-                              <img src={`/api/proxy-image?url=${encodeURIComponent(vid.thumbnailUrl)}`}
-                                referrerPolicy="no-referrer" alt="thumb"
-                                className="w-14 h-14 object-cover rounded-md border border-gray-100 shrink-0" />
-                            ) : (
-                              <div className="w-14 h-14 bg-gray-100 rounded-md shrink-0 border border-gray-100 flex items-center justify-center text-[10px] text-gray-300">No Img</div>
-                            )}
-                            <div className="flex flex-col gap-1 overflow-hidden">
-                              <div className="font-bold text-xs truncate max-w-[130px]" title={vid.title}>{vid.title}</div>
-                              {vid.youtubeId !== "-" && (
-                                <a href={`https://youtube.com/watch?v=${vid.youtubeId}`} target="_blank" rel="noreferrer"
-                                  className="text-[10px] text-blue-500 hover:underline truncate">🔗 영상 보러가기</a>
+          {youtubeVideos.length === 0 ? (
+            <GlassCard className="flex items-center justify-center p-8 text-gray-400 text-sm">
+              유튜브 영상 링크를 입력하여 영상을 추가하세요.
+            </GlassCard>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {youtubeVideos.map((vid: any) => {
+                const eng = vid.views > 0 ? ((vid.likes + vid.comments) / vid.views * 100).toFixed(2) : "0.00";
+                const pinnedComments: any[] = vid.commentsList || [];
+                return (
+                  <GlassCard key={vid._id} className="p-0 overflow-hidden flex flex-col">
+                    {/* 상단: 썸네일 + 제목 */}
+                    <div className="flex gap-4 p-4 border-b border-gray-100">
+                      {vid.thumbnailUrl ? (
+                        <img src={`/api/proxy-image?url=${encodeURIComponent(vid.thumbnailUrl)}`}
+                          referrerPolicy="no-referrer" alt="thumb"
+                          className="w-28 h-[63px] object-cover rounded-lg border border-gray-100 shrink-0" />
+                      ) : (
+                        <div className="w-28 h-[63px] bg-gray-100 rounded-lg shrink-0 border border-gray-100 flex items-center justify-center text-[10px] text-gray-300">No Img</div>
+                      )}
+                      <div className="flex flex-col justify-between flex-1 min-w-0">
+                        <div>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="px-1.5 py-0.5 bg-red-100 text-fursys-red rounded text-[10px] font-bold shrink-0">YT</span>
+                            <span className="text-[10px] text-gray-400 font-mono shrink-0">{vid.uploadDate}</span>
+                          </div>
+                          <p className="text-sm font-bold text-gray-900 line-clamp-2 leading-snug">{vid.title}</p>
+                        </div>
+                        {vid.youtubeId !== "-" && (
+                          <a href={`https://youtube.com/watch?v=${vid.youtubeId}`} target="_blank" rel="noreferrer"
+                            className="text-[10px] text-blue-500 hover:underline mt-1">🔗 영상 보러가기</a>
+                        )}
+                      </div>
+                      <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteYouTubeVideo({ videoId: vid._id }); }}
+                        className="shrink-0 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400 self-start">
+                        <Trash className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* 통계 행 */}
+                    <div className="grid grid-cols-4 divide-x divide-gray-100 border-b border-gray-100">
+                      {[
+                        { label: "조회수",        value: fmt(vid.views) },
+                        { label: "좋아요",         value: `👍 ${fmt(vid.likes)}` },
+                        { label: "댓글",           value: fmt(vid.comments) },
+                        { label: "인게이지먼트",   value: `${eng}%`, highlight: true },
+                      ].map(stat => (
+                        <div key={stat.label} className="flex flex-col items-center py-2.5 px-1">
+                          <span className="text-[10px] text-gray-400 mb-0.5">{stat.label}</span>
+                          <span className={`text-sm font-bold font-mono ${stat.highlight ? "text-fursys-red" : "text-gray-900"}`}>{stat.value}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* 주요 댓글 */}
+                    <div className="flex-1 p-4">
+                      {(() => {
+                        const isAutoFetching = autoFetchingIds.has(vid._id);
+                        return (
+                          <>
+                            <div className="flex items-center justify-between mb-2.5">
+                              <span className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+                                <MessageSquare className="w-3.5 h-3.5 text-gray-400" />
+                                주요 댓글
+                                {isAutoFetching && (
+                                  <RefreshCw className="w-3 h-3 animate-spin text-gray-400" />
+                                )}
+                                {!isAutoFetching && pinnedComments.length > 0 && (
+                                  <span className="text-[10px] text-gray-400">({pinnedComments.length}개)</span>
+                                )}
+                              </span>
+                              {!isAutoFetching && (
+                                <button
+                                  onClick={() => setCommentModal({ type: "yt", id: vid._id, title: vid.title, url: `https://youtube.com/watch?v=${vid.youtubeId}`, commentsList: pinnedComments, isLoading: pinnedComments.length === 0 })}
+                                  className="text-[10px] text-fursys-red hover:underline font-medium"
+                                >
+                                  {pinnedComments.length > 0 ? "전체 보기 / 새로고침" : "직접 수집하기"}
+                                </button>
                               )}
                             </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-gray-900">{fmt(vid.views)}</TableCell>
-                        <TableCell className="text-right font-mono text-gray-700">👍 {fmt(vid.likes)}</TableCell>
-                        <TableCell className="text-right font-mono text-gray-700">
-                          <button
-                            onClick={() => setCommentModal({ type: "yt", id: vid._id, title: vid.title, url: `https://youtube.com/watch?v=${vid.youtubeId}`, commentsList: vid.commentsList || [], isLoading: true })}
-                            className="flex items-center gap-1 ml-auto text-gray-700 hover:text-fursys-red transition-colors">
-                            <MessageSquare className="w-3.5 h-3.5" />
-                            {fmt(vid.comments)}
-                          </button>
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-fursys-red">{eng}%</TableCell>
-                        <TableCell className="text-center">
-                          <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteYouTubeVideo({ videoId: vid._id }); }}
-                            className="p-1 rounded hover:bg-red-50 text-red-400"><Trash className="w-4 h-4" /></button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            )}
-          </GlassCard>
+                            {isAutoFetching ? (
+                              <div className="flex items-center justify-center py-5 text-[11px] text-gray-400 bg-gray-50 rounded-lg border border-gray-100 gap-2">
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                댓글을 수집하는 중입니다...
+                              </div>
+                            ) : pinnedComments.length > 0 ? (
+                              <div className="space-y-2">
+                                {pinnedComments.slice(0, 3).map((c: any, i: number) => (
+                                  <div key={i} className="bg-gray-50 rounded-lg px-3 py-2 border border-gray-100">
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-[11px] font-semibold text-gray-700 truncate">{c.author || "익명"}</span>
+                                      <div className="flex items-center gap-2 text-[10px] text-gray-400 shrink-0 ml-2">
+                                        {c.likes !== undefined && <span>👍 {c.likes}</span>}
+                                        {c.date && <span>{c.date}</span>}
+                                      </div>
+                                    </div>
+                                    <p className="text-xs text-gray-600 leading-relaxed line-clamp-2">{c.text}</p>
+                                  </div>
+                                ))}
+                                {pinnedComments.length > 3 && (
+                                  <button
+                                    onClick={() => setCommentModal({ type: "yt", id: vid._id, title: vid.title, url: `https://youtube.com/watch?v=${vid.youtubeId}`, commentsList: pinnedComments, isLoading: false })}
+                                    className="w-full text-[11px] text-gray-400 hover:text-fursys-red transition-colors py-1"
+                                  >
+                                    +{pinnedComments.length - 3}개 댓글 더 보기
+                                  </button>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-center py-4 text-[11px] text-gray-300 bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                                댓글을 가져오지 못했습니다. 직접 수집해 주세요.
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </GlassCard>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 

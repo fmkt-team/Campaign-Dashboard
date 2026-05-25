@@ -63,3 +63,55 @@ export async function fetchSpreadsheetData(sheetUrl: string, range: string = 'A1
     return { success: false, error: error.message || "알 수 없는 오류가 발생했습니다." };
   }
 }
+
+export async function fetchGanttSheetData(sheetUrl: string) {
+  try {
+    const match = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    if (!match) throw new Error("유효하지 않은 구글 스프레드시트 주소입니다.");
+    
+    const spreadsheetId = match[1];
+    const gidMatch = sheetUrl.match(/gid=([0-9]+)/);
+    const targetGid = gidMatch ? parseInt(gidMatch[1]) : null;
+
+    const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    const key = process.env.GOOGLE_SERVICE_ACCOUNT_KEY?.replace(/\\n/g, "\n"); 
+
+    if (!email || !key) {
+      throw new Error("서버 환경 변수에 구글 서비스 계정 인증 정보가 없습니다 (GOOGLE_SERVICE_ACCOUNT_KEY).");
+    }
+
+    const auth = new google.auth.GoogleAuth({
+      credentials: { client_email: email, private_key: key },
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
+
+    const sheets = google.sheets({ version: "v4", auth });
+    
+    const info = await sheets.spreadsheets.get({ spreadsheetId });
+    const allSheets = info.data.sheets || [];
+    let targetSheetTitle = allSheets[0]?.properties?.title || "Sheet1";
+
+    if (targetGid !== null) {
+      const foundSheet = allSheets.find(s => s.properties?.sheetId === targetGid);
+      if (foundSheet && foundSheet.properties?.title) {
+        targetSheetTitle = foundSheet.properties.title;
+      }
+    }
+
+    const response = await sheets.spreadsheets.get({
+      spreadsheetId,
+      ranges: [targetSheetTitle],
+      includeGridData: true,
+    });
+
+    const sheetData = response.data.sheets?.[0];
+    if (!sheetData) {
+      return { success: false, error: `'${targetSheetTitle}' 시트 데이터를 가져오지 못했습니다.` };
+    }
+
+    return { success: true, sheetData, sheetTitle: targetSheetTitle };
+  } catch (error: any) {
+    console.error("fetchGanttSheetData Error:", error);
+    return { success: false, error: error.message || "알 수 없는 오류가 발생했습니다." };
+  }
+}

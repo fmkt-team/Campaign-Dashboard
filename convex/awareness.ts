@@ -19,6 +19,9 @@ export const syncDigitalKpis = mutation({
     rows: v.array(
       v.object({
         medium: v.string(),
+        mediumDetail: v.optional(v.string()),
+        agenda: v.optional(v.string()),
+        device: v.optional(v.string()),
         spend: v.number(),
         impressions: v.number(),
         views: v.number(),
@@ -26,6 +29,11 @@ export const syncDigitalKpis = mutation({
         cpv: v.number(),
         ctr: v.number(),
         vtr: v.number(),
+        conversions: v.optional(v.number()),
+        conversionRevenue: v.optional(v.number()),
+        signupCorporate: v.optional(v.number()),
+        signupPersonal: v.optional(v.number()),
+        leadsCollected: v.optional(v.number()),
         date: v.string(),
         recordedAt: v.number(),
         extraData: v.optional(v.string()),
@@ -211,6 +219,7 @@ export const updateYouTubeVideo = mutation({
       comments: v.optional(v.number()),
       likeRate: v.optional(v.number()),
       thumbnailUrl: v.optional(v.string()),
+      commentsList: v.optional(v.array(v.any())),
     }),
   },
   handler: async (ctx, args) => {
