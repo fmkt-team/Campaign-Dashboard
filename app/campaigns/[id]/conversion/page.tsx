@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { DatePickerWithRange } from "@/components/date-range-picker";
 import { DateRange } from "react-day-picker";
-import { format, startOfMonth, endOfMonth } from "date-fns";
+import { format, startOfMonth, endOfMonth, parseISO } from "date-fns";
 import { Id } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -272,10 +272,20 @@ export default function InflowPage() {
   const { refreshTrigger } = useRefresh();
   const [lastRefresh, setLastRefresh] = useState(0);
 
-  const [dateRange, setDateRange] = useState<DateRange | undefined>({
-    from: startOfMonth(new Date()),
-    to: endOfMonth(new Date()),
-  });
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [dateRangeInitialized, setDateRangeInitialized] = useState(false);
+
+  // 캠페인 데이터 로드 후 기간을 캠페인 시작일 ~ 오늘로 초기화 (최초 1회)
+  useEffect(() => {
+    if (campaignData && !dateRangeInitialized) {
+      const today = new Date();
+      const from = campaignData.startDate
+        ? parseISO(campaignData.startDate)
+        : startOfMonth(today);
+      setDateRange({ from, to: today });
+      setDateRangeInitialized(true);
+    }
+  }, [campaignData, dateRangeInitialized]);
   const [activeTab, setActiveTab] = useState<"ga4" | "naver">("ga4");
   const [sectionOrder, setSectionOrder] = useState<("official" | "micro")[]>(["micro", "official"]);
   const [draggedSection, setDraggedSection] = useState<"official" | "micro" | null>(null);
