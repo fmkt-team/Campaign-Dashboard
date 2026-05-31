@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
-// OpenAI 서버 연동
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 function parseNumber(val: any): number {
   if (val === null || val === undefined || val === "") return 0;
   const n = parseFloat(String(val).replace(/[^0-9.-]+/g, ""));
@@ -26,6 +21,11 @@ function parseDate(val: any): string {
 
 // ── Main Route ──────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
+  // OpenAI 클라이언트는 런타임에만 생성 (빌드 시 env 없는 오류 방지)
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+
   try {
     const { data, type, mode = "extract" } = await req.json();
 
