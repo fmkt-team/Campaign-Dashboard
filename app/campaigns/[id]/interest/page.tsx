@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import {
   Check, X, Settings2, Link2, RefreshCw, Users, CalendarDays, BarChart3, Ticket,
   TrendingUp, MessageSquare, MapPin, PieChart, List, Smile, Frown, MessageCircle,
-  Star, Quote, ArrowUpRight, Crown, Edit2, ExternalLink
+  Star, Quote, ArrowUpRight, Crown, Edit2, ExternalLink, Trash2
 } from "lucide-react";
 import {
   BarChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -865,6 +865,7 @@ export default function InterestPage() {
   const [responseSheetUrl, setResponseSheetUrl] = useState("");
   const [syncing, setSyncing] = useState<"event" | "popup" | "vip" | "response" | null>(null);
   const [syncMessage, setSyncMessage] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState<"event" | "popup" | "vip" | "response" | null>(null);
 
   // ── 편집 가능 카드 타이틀/설명 ──
   const defaultCardLabels = {
@@ -983,6 +984,39 @@ export default function InterestPage() {
     } finally {
       setSyncing(null);
     }
+  }, [activities, syncActivities, campaignId]);
+
+  // ── 데이터 소스 삭제 ────────────────────────────────────────────────────────
+  const clearDataSource = useCallback(async (type: "event" | "popup" | "vip" | "response") => {
+    const mapActivity = (a: any) => ({
+      activityType: a.activityType, title: a.title, locationOrTarget: a.locationOrTarget,
+      startDate: a.startDate, endDate: a.endDate,
+      visitors: a.visitors, participants: a.participants, budget: a.budget, vipCount: a.vipCount,
+    });
+
+    if (type === "event") {
+      setEventSheetUrl("");
+      try { localStorage.removeItem(`interest_event_sheet_${campaignId}`); } catch {}
+      // 이벤트 타입 행만 제거 (팝업 유지)
+      await syncActivities({ campaignId, rows: activities.filter(a => a.activityType !== "이벤트").map(mapActivity) });
+    } else if (type === "popup") {
+      setPopupSheetUrl("");
+      try { localStorage.removeItem(`interest_popup_sheet_${campaignId}`); } catch {}
+      // 팝업 타입 행만 제거 (이벤트 유지)
+      await syncActivities({ campaignId, rows: activities.filter(a => a.activityType !== "팝업").map(mapActivity) });
+    } else if (type === "vip") {
+      setVipSheetUrl("");
+      try { localStorage.removeItem(`interest_vip_sheet_${campaignId}`); } catch {}
+      // 팝업 행의 vipCount만 0으로 초기화
+      await syncActivities({ campaignId, rows: activities.map(a => ({ ...mapActivity(a), vipCount: a.activityType === "팝업" ? 0 : a.vipCount })) });
+    } else if (type === "response") {
+      setResponseSheetUrl("");
+      try { localStorage.removeItem(`interest_response_sheet_${campaignId}`); } catch {}
+    }
+
+    const labels: Record<string, string> = { event: "이벤트", popup: "팝업", vip: "VIP", response: "이벤트 응답" };
+    setSyncMessage(`🗑️ ${labels[type]} 데이터가 삭제되었습니다.`);
+    setConfirmDelete(null);
   }, [activities, syncActivities, campaignId]);
 
   const eventActivities = useMemo(() => activities.filter(a => a.activityType !== "팝업"), [activities]);
@@ -1110,65 +1144,65 @@ export default function InterestPage() {
           <p className="text-xs text-gray-500 mb-4">구글 시트 URL을 입력하면 자동으로 데이터를 파싱합니다. 시트는 <strong>링크가 있는 모든 사용자에게 공개</strong>되어야 합니다.</p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-gray-700">📋 이벤트 신청 데이터</label>
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-indigo-400 placeholder:text-gray-400"
-                  placeholder="구글 시트 URL 입력"
-                  value={eventSheetUrl}
-                  onChange={e => setEventSheetUrl(e.target.value)}
-                />
-                <Button size="sm" disabled={syncing === "event" || !eventSheetUrl} onClick={() => syncFromSheet("event", eventSheetUrl)} className="bg-indigo-600 text-white hover:bg-indigo-700 border-0 gap-1 px-3">
-                  {syncing === "event" ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} 동기화
-                </Button>
+            {([
+              { type: "event"    as const, label: "📋 이벤트 신청 데이터",              url: eventSheetUrl,    setUrl: setEventSheetUrl,    accentClass: "focus:border-indigo-400", btnClass: "bg-indigo-600 hover:bg-indigo-700", action: "동기화" },
+              { type: "response" as const, label: "📝 이벤트 응답 분석 데이터",         url: responseSheetUrl, setUrl: setResponseSheetUrl, accentClass: "focus:border-violet-400", btnClass: "bg-violet-600 hover:bg-violet-700", action: "저장" },
+              { type: "popup"    as const, label: "🏬 팝업 일반 고객 예약/방문 데이터", url: popupSheetUrl,    setUrl: setPopupSheetUrl,    accentClass: "focus:border-amber-400",  btnClass: "bg-amber-600 hover:bg-amber-700",  action: "동기화" },
+              { type: "vip"      as const, label: "👑 팝업 VIP 고객 예약/방문 데이터",  url: vipSheetUrl,      setUrl: setVipSheetUrl,      accentClass: "focus:border-yellow-400", btnClass: "bg-yellow-600 hover:bg-yellow-700", action: "동기화" },
+            ]).map(({ type, label, url, setUrl, accentClass, btnClass, action }) => (
+              <div key={type} className="flex flex-col gap-2">
+                {/* 레이블 행 — 삭제 확인 시 교체 */}
+                <div className="flex items-center justify-between min-h-[18px]">
+                  {confirmDelete === type ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-red-600 font-semibold">정말 삭제하시겠습니까?</span>
+                      <button
+                        onClick={() => clearDataSource(type)}
+                        className="px-2 py-0.5 bg-red-600 text-white rounded text-[11px] font-bold hover:bg-red-700 transition-colors"
+                      >
+                        삭제
+                      </button>
+                      <button
+                        onClick={() => setConfirmDelete(null)}
+                        className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded text-[11px] font-bold hover:bg-gray-200 transition-colors"
+                      >
+                        취소
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="text-xs font-semibold text-gray-700">{label}</label>
+                  )}
+                  {/* URL이 입력된 경우에만 삭제 버튼 표시 */}
+                  {url && confirmDelete !== type && (
+                    <button
+                      onClick={() => { setConfirmDelete(type); setSyncMessage(""); }}
+                      className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors"
+                      title="데이터 삭제"
+                    >
+                      <Trash2 className="w-3 h-3" /> 삭제
+                    </button>
+                  )}
+                </div>
+                {/* URL 입력 + 동기화/저장 버튼 */}
+                <div className="flex gap-2">
+                  <input
+                    className={`flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none ${accentClass} placeholder:text-gray-400`}
+                    placeholder="구글 시트 URL 입력"
+                    value={url}
+                    onChange={e => { setUrl(e.target.value); setConfirmDelete(null); }}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={syncing === type || !url}
+                    onClick={() => syncFromSheet(type, url)}
+                    className={`${btnClass} text-white border-0 gap-1 px-3`}
+                  >
+                    {syncing === type ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                    {action}
+                  </Button>
+                </div>
               </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-gray-700">📝 이벤트 응답 분석 데이터</label>
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-violet-400 placeholder:text-gray-400"
-                  placeholder="구글 시트 URL 입력"
-                  value={responseSheetUrl}
-                  onChange={e => setResponseSheetUrl(e.target.value)}
-                />
-                <Button size="sm" disabled={syncing === "response" || !responseSheetUrl} onClick={() => syncFromSheet("response", responseSheetUrl)} className="bg-violet-600 text-white hover:bg-violet-700 border-0 gap-1 px-3">
-                  {syncing === "response" ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} 저장
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-gray-700">🏬 팝업 일반 고객 예약/방문 데이터</label>
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-amber-400 placeholder:text-gray-400"
-                  placeholder="구글 시트 URL 입력"
-                  value={popupSheetUrl}
-                  onChange={e => setPopupSheetUrl(e.target.value)}
-                />
-                <Button size="sm" disabled={syncing === "popup" || !popupSheetUrl} onClick={() => syncFromSheet("popup", popupSheetUrl)} className="bg-amber-600 text-white hover:bg-amber-700 border-0 gap-1 px-3">
-                  {syncing === "popup" ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} 동기화
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-semibold text-gray-700">👑 팝업 VIP 고객 예약/방문 데이터</label>
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-yellow-400 placeholder:text-gray-400"
-                  placeholder="구글 시트 URL 입력"
-                  value={vipSheetUrl}
-                  onChange={e => setVipSheetUrl(e.target.value)}
-                />
-                <Button size="sm" disabled={syncing === "vip" || !vipSheetUrl} onClick={() => syncFromSheet("vip", vipSheetUrl)} className="bg-yellow-600 text-white hover:bg-yellow-700 border-0 gap-1 px-3">
-                  {syncing === "vip" ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />} 동기화
-                </Button>
-              </div>
-            </div>
+            ))}
           </div>
 
           {syncMessage && (
