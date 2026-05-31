@@ -1172,8 +1172,8 @@ export default function InterestPage() {
                   ) : (
                     <label className="text-xs font-semibold text-gray-700">{label}</label>
                   )}
-                  {/* URL이 입력된 경우에만 삭제 버튼 표시 */}
-                  {url && confirmDelete !== type && (
+                  {/* 항상 삭제 버튼 표시 (URL 없어도 Convex 데이터가 남아있을 수 있음) */}
+                  {confirmDelete !== type && (
                     <button
                       onClick={() => { setConfirmDelete(type); setSyncMessage(""); }}
                       className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors"
