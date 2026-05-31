@@ -56,6 +56,39 @@ function extractSheetId(url: string): string | null {
   return m ? m[1] : null;
 }
 
+// CSV 파싱 (쌍따옴표로 묶인 필드 지원)
+function parseCsv(text: string): string[][] {
+  return text.split("\n").map(line => {
+    const cells: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (const ch of line) {
+      if (ch === '"') { inQuotes = !inQuotes; continue; }
+      if (ch === ',' && !inQuotes) { cells.push(current.trim()); current = ""; continue; }
+      current += ch;
+    }
+    cells.push(current.trim());
+    return cells;
+  }).filter(r => r.some(c => c));
+}
+
+// 날짜 문자열 → YYYY-MM-DD 정규화 (MM/DD, YYYY/MM/DD 등 처리)
+function normalizeDate(raw: string): string {
+  if (!raw) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}\/\d{2}\/\d{2}$/.test(raw)) return raw.replace(/\//g, "-");
+  const mmdd = raw.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (mmdd) {
+    const y = new Date().getFullYear();
+    return `${y}-${mmdd[1].padStart(2, "0")}-${mmdd[2].padStart(2, "0")}`;
+  }
+  try {
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+  } catch {}
+  return "";
+}
+
 // ─── Mock Data ─────────────────────────────────────────────────────────
 const MOCK_QUESTIONS = [
   { id: "q1", text: "참여 동기가 무엇인가요?", type: "choice" },
@@ -878,6 +911,24 @@ export default function InterestPage() {
   const [syncMessage, setSyncMessage] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<"event" | "popup" | "vip" | "response" | null>(null);
 
+  // ── 팝업 예약 신청 시트 (일자별 예약 신청 건 수) ──
+  const [reservationUrl, setReservationUrl] = useState("");
+  const [reservationDateFrom, setReservationDateFrom] = useState("");
+  const [reservationDateTo, setReservationDateTo] = useState("");
+  const [reservationAllRows, setReservationAllRows] = useState<{ date: string; count: number; vipCount: number }[] | null>(null);
+  const [reservationSyncing, setReservationSyncing] = useState(false);
+  const [showReservationUrl, setShowReservationUrl] = useState(false);
+  const [reservationSyncMsg, setReservationSyncMsg] = useState("");
+
+  // ── 팝업 방문자 시트 (일자별 방문자 수) ──
+  const [visitorUrl, setVisitorUrl] = useState("");
+  const [visitorDateFrom, setVisitorDateFrom] = useState("");
+  const [visitorDateTo, setVisitorDateTo] = useState("");
+  const [visitorAllRows, setVisitorAllRows] = useState<{ date: string; actual: number; vipActual: number; rate: string }[] | null>(null);
+  const [visitorSyncing, setVisitorSyncing] = useState(false);
+  const [showVisitorUrl, setShowVisitorUrl] = useState(false);
+  const [visitorSyncMsg, setVisitorSyncMsg] = useState("");
+
   // ── 편집 가능 카드 타이틀/설명 ──
   const defaultCardLabels = {
     totalTitle: "총 참여자 수",
@@ -903,6 +954,26 @@ export default function InterestPage() {
     if (savedVip) setVipSheetUrl(savedVip);
     if (savedResponse) setResponseSheetUrl(savedResponse);
     if (savedLabels) { try { setCardLabels(JSON.parse(savedLabels)); } catch {} }
+
+    // 팝업 예약 신청 시트
+    const savedResUrl  = localStorage.getItem(`popup_reservation_url_${campaignId}`);
+    const savedResFrom = localStorage.getItem(`popup_reservation_from_${campaignId}`);
+    const savedResTo   = localStorage.getItem(`popup_reservation_to_${campaignId}`);
+    const savedResAll  = localStorage.getItem(`popup_reservation_all_${campaignId}`);
+    if (savedResUrl)  setReservationUrl(savedResUrl);
+    if (savedResFrom) setReservationDateFrom(savedResFrom);
+    if (savedResTo)   setReservationDateTo(savedResTo);
+    if (savedResAll)  { try { setReservationAllRows(JSON.parse(savedResAll)); } catch {} }
+
+    // 팝업 방문자 시트
+    const savedVisUrl  = localStorage.getItem(`popup_visitor_url_${campaignId}`);
+    const savedVisFrom = localStorage.getItem(`popup_visitor_from_${campaignId}`);
+    const savedVisTo   = localStorage.getItem(`popup_visitor_to_${campaignId}`);
+    const savedVisAll  = localStorage.getItem(`popup_visitor_all_${campaignId}`);
+    if (savedVisUrl)  setVisitorUrl(savedVisUrl);
+    if (savedVisFrom) setVisitorDateFrom(savedVisFrom);
+    if (savedVisTo)   setVisitorDateTo(savedVisTo);
+    if (savedVisAll)  { try { setVisitorAllRows(JSON.parse(savedVisAll)); } catch {} }
   }, [campaignId]);
 
   const updateCardLabel = (key: keyof typeof defaultCardLabels, value: string) => {
@@ -1030,18 +1101,145 @@ export default function InterestPage() {
     setConfirmDelete(null);
   }, [activities, syncActivities, campaignId]);
 
+  // ── 캠페인 시작일 ~ 오늘을 기간 기본값으로 (localStorage 값이 없을 때만) ──
+  useEffect(() => {
+    if (!campaign) return;
+    const today = new Date().toISOString().split("T")[0];
+    if (!localStorage.getItem(`popup_reservation_from_${campaignId}`)) {
+      const d = campaign.startDate || today;
+      setReservationDateFrom(d);
+    }
+    if (!localStorage.getItem(`popup_reservation_to_${campaignId}`)) {
+      setReservationDateTo(today);
+    }
+    if (!localStorage.getItem(`popup_visitor_from_${campaignId}`)) {
+      const d = campaign.startDate || today;
+      setVisitorDateFrom(d);
+    }
+    if (!localStorage.getItem(`popup_visitor_to_${campaignId}`)) {
+      setVisitorDateTo(today);
+    }
+  }, [campaign, campaignId]);
+
+  // ── 팝업 예약 신청 시트 동기화 ──
+  const syncReservationSheet = useCallback(async () => {
+    if (!reservationUrl) return;
+    const sheetId = extractSheetId(reservationUrl);
+    if (!sheetId) { setReservationSyncMsg("❌ 올바른 구글 시트 URL이 아닙니다."); return; }
+    setReservationSyncing(true);
+    setReservationSyncMsg("");
+    try {
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+      const res = await fetch(csvUrl);
+      if (!res.ok) throw new Error("시트 접근 실패. 공유 설정을 확인하세요.");
+      const text = await res.text();
+      const rows = parseCsv(text);
+      if (rows.length < 2) throw new Error("데이터가 2행 미만입니다.");
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dataRows = rows.slice(1);
+      const findCol = (kws: string[]) => headers.findIndex(h => kws.some(k => h.includes(k)));
+      const dateCol  = findCol(["날짜", "일자", "date"]);
+      const countCol = findCol(["일반", "신청", "건수", "count", "예약"]);
+      const vipCol   = findCol(["vip", "브이아이피"]);
+      const parsed = dataRows.map(r => ({
+        date:     dateCol  >= 0 ? (r[dateCol]  || "") : "",
+        count:    countCol >= 0 ? processNumber(r[countCol]  || "0") : 0,
+        vipCount: vipCol   >= 0 ? processNumber(r[vipCol]    || "0") : 0,
+      })).filter(r => r.date);
+      if (parsed.length === 0) throw new Error("매핑 가능한 데이터가 없습니다. 컬럼 헤더를 확인하세요.");
+      setReservationAllRows(parsed);
+      localStorage.setItem(`popup_reservation_url_${campaignId}`, reservationUrl);
+      localStorage.setItem(`popup_reservation_all_${campaignId}`, JSON.stringify(parsed));
+      setReservationSyncMsg(`✅ ${parsed.length}건 동기화 완료!`);
+    } catch (e: any) {
+      setReservationSyncMsg(`❌ ${e.message}`);
+    } finally {
+      setReservationSyncing(false);
+    }
+  }, [reservationUrl, campaignId]);
+
+  // ── 팝업 방문자 시트 동기화 ──
+  const syncVisitorSheet = useCallback(async () => {
+    if (!visitorUrl) return;
+    const sheetId = extractSheetId(visitorUrl);
+    if (!sheetId) { setVisitorSyncMsg("❌ 올바른 구글 시트 URL이 아닙니다."); return; }
+    setVisitorSyncing(true);
+    setVisitorSyncMsg("");
+    try {
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
+      const res = await fetch(csvUrl);
+      if (!res.ok) throw new Error("시트 접근 실패. 공유 설정을 확인하세요.");
+      const text = await res.text();
+      const rows = parseCsv(text);
+      if (rows.length < 2) throw new Error("데이터가 2행 미만입니다.");
+      const headers = rows[0].map(h => h.toLowerCase());
+      const dataRows = rows.slice(1);
+      const findCol = (kws: string[]) => headers.findIndex(h => kws.some(k => h.includes(k)));
+      const dateCol   = findCol(["날짜", "일자", "date"]);
+      const totalCol  = findCol(["총", "전체", "actual", "방문자"]);
+      const vipCol    = findCol(["vip", "브이아이피"]);
+      const rateCol   = findCol(["방문율", "rate", "비율", "%"]);
+      const parsed = dataRows.map(r => {
+        const total  = totalCol >= 0 ? processNumber(r[totalCol]  || "0") : 0;
+        const vipAct = vipCol   >= 0 ? processNumber(r[vipCol]    || "0") : 0;
+        const rateRaw = rateCol >= 0 ? (r[rateCol] || "") : "";
+        const rate = rateRaw
+          ? (rateRaw.includes("%") ? rateRaw : `${rateRaw}%`)
+          : (total > 0 ? "—" : "0%");
+        return {
+          date:      dateCol >= 0 ? (r[dateCol] || "") : "",
+          actual:    total,
+          vipActual: vipAct,
+          rate,
+        };
+      }).filter(r => r.date);
+      if (parsed.length === 0) throw new Error("매핑 가능한 데이터가 없습니다. 컬럼 헤더를 확인하세요.");
+      setVisitorAllRows(parsed);
+      localStorage.setItem(`popup_visitor_url_${campaignId}`, visitorUrl);
+      localStorage.setItem(`popup_visitor_all_${campaignId}`, JSON.stringify(parsed));
+      setVisitorSyncMsg(`✅ ${parsed.length}건 동기화 완료!`);
+    } catch (e: any) {
+      setVisitorSyncMsg(`❌ ${e.message}`);
+    } finally {
+      setVisitorSyncing(false);
+    }
+  }, [visitorUrl, campaignId]);
+
+  // ── 기간 필터 적용된 행 ──
+  const reservationRows = useMemo(() => {
+    if (!reservationAllRows) return null;
+    return reservationAllRows.filter(r => {
+      const d = normalizeDate(r.date);
+      if (!d) return true;
+      if (reservationDateFrom && d < reservationDateFrom) return false;
+      if (reservationDateTo   && d > reservationDateTo)   return false;
+      return true;
+    });
+  }, [reservationAllRows, reservationDateFrom, reservationDateTo]);
+
+  const visitorRows = useMemo(() => {
+    if (!visitorAllRows) return null;
+    return visitorAllRows.filter(r => {
+      const d = normalizeDate(r.date);
+      if (!d) return true;
+      if (visitorDateFrom && d < visitorDateFrom) return false;
+      if (visitorDateTo   && d > visitorDateTo)   return false;
+      return true;
+    });
+  }, [visitorAllRows, visitorDateFrom, visitorDateTo]);
+
   const eventActivities = useMemo(() => activities.filter(a => a.activityType !== "팝업"), [activities]);
   const popupActivities = useMemo(() => activities.filter(a => a.activityType === "팝업"), [activities]);
 
   const eventStats = useMemo(() => ({
-    participants: eventActivities.reduce((s, a) => s + a.participants, 0) || 1250,
-    traffic: eventActivities.reduce((s, a) => s + a.visitors, 0) || 4500,
+    participants: eventActivities.reduce((s, a) => s + a.participants, 0),
+    traffic: eventActivities.reduce((s, a) => s + a.visitors, 0),
   }), [eventActivities]);
 
   const popupStats = useMemo(() => ({
-    visitors: popupActivities.reduce((s, a) => s + a.participants, 0) || 800,
-    vipVisitors: popupActivities.reduce((s, a) => s + (a.vipCount ?? 0), 0) || 123,
-    reservations: popupActivities.reduce((s, a) => s + a.visitors, 0) || 870,
+    visitors: popupActivities.reduce((s, a) => s + a.participants, 0),
+    vipVisitors: popupActivities.reduce((s, a) => s + (a.vipCount ?? 0), 0),
+    reservations: popupActivities.reduce((s, a) => s + a.visitors, 0),
   }), [popupActivities]);
 
   const combinedChartData = useMemo(() => {
@@ -1079,15 +1277,6 @@ export default function InterestPage() {
     });
 
     const arr = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-    if (arr.length === 0) {
-      return [
-        { name: "05/01", 이벤트참여자: 120, 팝업방문객: 100, VIP방문객: 18 },
-        { name: "05/02", 이벤트참여자: 150, 팝업방문객: 140, VIP방문객: 23 },
-        { name: "05/03", 이벤트참여자: 200, 팝업방문객: 190, VIP방문객: 38 },
-        { name: "05/04", 이벤트참여자: 180, 팝업방문객: 160, VIP방문객: 30 },
-        { name: "05/05", 이벤트참여자: 220, 팝업방문객: 210, VIP방문객: 43 },
-      ];
-    }
     return arr;
   }, [eventActivities, popupActivities, campaign]);
 
@@ -1501,11 +1690,87 @@ export default function InterestPage() {
         {activeTab === "popup" && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+              {/* ── 일자별 예약 신청 건 수 ── */}
               <GlassCard className="p-0 overflow-hidden border-t-4 border-t-gray-900">
-                <div className="p-5 border-b border-gray-100 bg-white">
-                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                    <CalendarDays className="w-4 h-4 text-gray-900" /> 일자별 예약 신청 건 수
-                  </h4>
+                <div className="p-5 border-b border-gray-100 bg-white space-y-3">
+                  {/* 제목 + 기간 설정 */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                      <CalendarDays className="w-4 h-4 text-gray-900" /> 일자별 예약 신청 건 수
+                    </h4>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <input
+                        type="date"
+                        value={reservationDateFrom}
+                        onChange={e => {
+                          setReservationDateFrom(e.target.value);
+                          localStorage.setItem(`popup_reservation_from_${campaignId}`, e.target.value);
+                        }}
+                        className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400 bg-white"
+                      />
+                      <span className="text-xs text-gray-400">~</span>
+                      <input
+                        type="date"
+                        value={reservationDateTo}
+                        onChange={e => {
+                          setReservationDateTo(e.target.value);
+                          localStorage.setItem(`popup_reservation_to_${campaignId}`, e.target.value);
+                        }}
+                        className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400 bg-white"
+                      />
+                      {isAdmin && (
+                        <button
+                          onClick={() => setShowReservationUrl(!showReservationUrl)}
+                          className={`flex items-center gap-1 text-xs border rounded px-2 py-1 transition-colors ${showReservationUrl ? "bg-gray-900 text-white border-gray-900" : "text-gray-500 border-gray-200 hover:border-gray-400"}`}
+                        >
+                          <Link2 className="w-3 h-3" /> 시트 연동
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {/* 시트 URL 입력 (토글) */}
+                  {showReservationUrl && isAdmin && (
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-xs outline-none focus:border-gray-400 placeholder:text-gray-400"
+                          placeholder="구글 시트 URL (링크가 있는 모든 사용자에게 공개 필요)"
+                          value={reservationUrl}
+                          onChange={e => setReservationUrl(e.target.value)}
+                        />
+                        <Button
+                          size="sm"
+                          disabled={reservationSyncing || !reservationUrl}
+                          onClick={syncReservationSheet}
+                          className="bg-gray-900 text-white hover:bg-gray-800 gap-1 text-xs px-3"
+                        >
+                          {reservationSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                          동기화
+                        </Button>
+                        {reservationAllRows && (
+                          <button
+                            onClick={() => {
+                              setReservationAllRows(null);
+                              setReservationUrl("");
+                              setShowReservationUrl(false);
+                              localStorage.removeItem(`popup_reservation_url_${campaignId}`);
+                              localStorage.removeItem(`popup_reservation_all_${campaignId}`);
+                            }}
+                            className="p-1.5 text-gray-400 hover:text-red-500 transition-colors border border-gray-200 rounded"
+                            title="데이터 삭제"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {reservationSyncMsg && (
+                        <p className={`text-xs ${reservationSyncMsg.startsWith("✅") ? "text-green-600" : "text-red-500"}`}>
+                          {reservationSyncMsg}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <Table>
                   <TableHeader className="bg-gray-50/50">
@@ -1519,23 +1784,120 @@ export default function InterestPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {MOCK_POPUP_RESERVATIONS.map((row, i) => (
-                      <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
-                        <TableCell className="text-gray-600 font-mono font-medium">{row.date}</TableCell>
-                        <TableCell className="text-right font-mono text-gray-900 font-bold">{row.count.toLocaleString()}</TableCell>
-                        <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{row.vipCount.toLocaleString()}</TableCell>
-                        <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{(row.count + row.vipCount).toLocaleString()}</TableCell>
+                    {reservationRows && reservationRows.length > 0 ? (
+                      reservationRows.map((row, i) => (
+                        <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
+                          <TableCell className="text-gray-600 font-mono font-medium">{row.date}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900 font-bold">{row.count.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{row.vipCount.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{(row.count + row.vipCount).toLocaleString()}</TableCell>
+                        </TableRow>
+                      ))
+                    ) : reservationRows && reservationRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center text-xs text-gray-400 py-8">
+                          {reservationAllRows ? "해당 기간에 데이터가 없습니다." : ""}
+                        </TableCell>
                       </TableRow>
-                    ))}
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center py-8">
+                          <div className="flex flex-col items-center gap-2 text-gray-400">
+                            <Link2 className="w-5 h-5 opacity-40" />
+                            <p className="text-xs">구글 시트를 연동하면 실제 데이터가 표시됩니다.</p>
+                            {isAdmin && (
+                              <button onClick={() => setShowReservationUrl(true)} className="text-xs text-gray-900 underline">
+                                시트 연동하기
+                              </button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </GlassCard>
 
+              {/* ── 일자별 방문자 수 ── */}
               <GlassCard className="p-0 overflow-hidden border-t-4 border-t-gray-900">
-                <div className="p-5 border-b border-gray-100 bg-white">
-                  <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                    <Users className="w-4 h-4 text-gray-900" /> 일자별 방문자 수
-                  </h4>
+                <div className="p-5 border-b border-gray-100 bg-white space-y-3">
+                  {/* 제목 + 기간 설정 */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                      <Users className="w-4 h-4 text-gray-900" /> 일자별 방문자 수
+                    </h4>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <input
+                        type="date"
+                        value={visitorDateFrom}
+                        onChange={e => {
+                          setVisitorDateFrom(e.target.value);
+                          localStorage.setItem(`popup_visitor_from_${campaignId}`, e.target.value);
+                        }}
+                        className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400 bg-white"
+                      />
+                      <span className="text-xs text-gray-400">~</span>
+                      <input
+                        type="date"
+                        value={visitorDateTo}
+                        onChange={e => {
+                          setVisitorDateTo(e.target.value);
+                          localStorage.setItem(`popup_visitor_to_${campaignId}`, e.target.value);
+                        }}
+                        className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400 bg-white"
+                      />
+                      {isAdmin && (
+                        <button
+                          onClick={() => setShowVisitorUrl(!showVisitorUrl)}
+                          className={`flex items-center gap-1 text-xs border rounded px-2 py-1 transition-colors ${showVisitorUrl ? "bg-gray-900 text-white border-gray-900" : "text-gray-500 border-gray-200 hover:border-gray-400"}`}
+                        >
+                          <Link2 className="w-3 h-3" /> 시트 연동
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {/* 시트 URL 입력 (토글) */}
+                  {showVisitorUrl && isAdmin && (
+                    <div className="space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-xs outline-none focus:border-gray-400 placeholder:text-gray-400"
+                          placeholder="구글 시트 URL (링크가 있는 모든 사용자에게 공개 필요)"
+                          value={visitorUrl}
+                          onChange={e => setVisitorUrl(e.target.value)}
+                        />
+                        <Button
+                          size="sm"
+                          disabled={visitorSyncing || !visitorUrl}
+                          onClick={syncVisitorSheet}
+                          className="bg-gray-900 text-white hover:bg-gray-800 gap-1 text-xs px-3"
+                        >
+                          {visitorSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                          동기화
+                        </Button>
+                        {visitorAllRows && (
+                          <button
+                            onClick={() => {
+                              setVisitorAllRows(null);
+                              setVisitorUrl("");
+                              setShowVisitorUrl(false);
+                              localStorage.removeItem(`popup_visitor_url_${campaignId}`);
+                              localStorage.removeItem(`popup_visitor_all_${campaignId}`);
+                            }}
+                            className="p-1.5 text-gray-400 hover:text-red-500 transition-colors border border-gray-200 rounded"
+                            title="데이터 삭제"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                      {visitorSyncMsg && (
+                        <p className={`text-xs ${visitorSyncMsg.startsWith("✅") ? "text-green-600" : "text-red-500"}`}>
+                          {visitorSyncMsg}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <Table>
                   <TableHeader className="bg-gray-50/50">
@@ -1550,15 +1912,37 @@ export default function InterestPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {MOCK_POPUP_VISITORS.map((row, i) => (
-                      <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
-                        <TableCell className="text-gray-600 font-mono font-medium">{row.date}</TableCell>
-                        <TableCell className="text-right font-mono text-gray-900">{(row.actual - row.vipActual).toLocaleString()}</TableCell>
-                        <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{row.vipActual.toLocaleString()}</TableCell>
-                        <TableCell className="text-right font-mono text-gray-900 font-bold">{row.actual.toLocaleString()}</TableCell>
-                        <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{row.rate}</TableCell>
+                    {visitorRows && visitorRows.length > 0 ? (
+                      visitorRows.map((row, i) => (
+                        <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
+                          <TableCell className="text-gray-600 font-mono font-medium">{row.date}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900">{(row.actual - row.vipActual).toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{row.vipActual.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900 font-bold">{row.actual.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{row.rate}</TableCell>
+                        </TableRow>
+                      ))
+                    ) : visitorRows && visitorRows.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center text-xs text-gray-400 py-8">
+                          {visitorAllRows ? "해당 기간에 데이터가 없습니다." : ""}
+                        </TableCell>
                       </TableRow>
-                    ))}
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-8">
+                          <div className="flex flex-col items-center gap-2 text-gray-400">
+                            <Link2 className="w-5 h-5 opacity-40" />
+                            <p className="text-xs">구글 시트를 연동하면 실제 데이터가 표시됩니다.</p>
+                            {isAdmin && (
+                              <button onClick={() => setShowVisitorUrl(true)} className="text-xs text-gray-900 underline">
+                                시트 연동하기
+                              </button>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )}
                   </TableBody>
                 </Table>
               </GlassCard>
