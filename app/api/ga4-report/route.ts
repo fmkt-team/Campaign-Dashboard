@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     } else {
       // 커스텀 디멘션이 들어오면 정렬은 기본적으로 metrics의 첫 번째 항목(세션수) 내림차순으로 설정 (TOP N 추출 목적)
       ga4OrderBy = [
-        { metric: { metricName: metrics?.[0]?.name || "sessions" }, orderDirection: "DESCENDING" }
+        { metric: { metricName: metrics?.[0]?.name || "sessions" }, desc: true }
       ];
     }
 

@@ -55,6 +55,21 @@ export const updateCampaignDates = mutation({
   },
 });
 
+// GA4 Property ID 저장
+export const updateCampaignGa4Ids = mutation({
+  args: {
+    id: v.id("campaigns"),
+    officialGa4Id: v.optional(v.string()),
+    microGa4Id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const updates: Record<string, any> = {};
+    if (args.officialGa4Id !== undefined) updates.officialGa4Id = args.officialGa4Id;
+    if (args.microGa4Id !== undefined) updates.microGa4Id = args.microGa4Id;
+    await ctx.db.patch(args.id, updates);
+  },
+});
+
 // KPI 목표 + 탭 설정 업데이트
 export const updateCampaignSettings = mutation({
   args: {

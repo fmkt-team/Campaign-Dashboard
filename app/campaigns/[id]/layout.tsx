@@ -1,15 +1,16 @@
 "use client";
 
-import { usePathname, useParams } from "next/navigation";
-import { useState } from "react";
+import { usePathname, useParams, useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { motion } from "framer-motion";
-import { Share2, Settings2, X, LayoutDashboard, Eye, Megaphone, Heart, ArrowDownToLine, ShoppingCart, BarChart3, ChevronLeft, Palette, RefreshCw } from "lucide-react";
+import { Share2, Settings2, X, LayoutDashboard, Eye, Megaphone, Heart, ArrowDownToLine, ShoppingCart, BarChart3, ChevronLeft, Palette, RefreshCw, LogOut, Lock, KeyRound, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRefresh } from "@/lib/refresh-context";
+import { useAuth } from "@/lib/auth-context";
 
 const ALL_TABS = [
   { name: "캠페인 개요", path: "/timeline", icon: LayoutDashboard },
@@ -25,8 +26,21 @@ export default function CampaignLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
-  const params = useParams();
+  const pathname  = usePathname();
+  const params    = useParams();
+  const router    = useRouter();
+  const { isAdmin, isMaster, isViewer, viewerCampaignId, isLoading: authLoading, authEmail, logout } = useAuth();
+  const [showPwChange, setShowPwChange] = useState(false);
+
+  // 인증 가드: 관리자 또는 해당 캠페인의 뷰어만 허용
+  useEffect(() => {
+    if (authLoading) return;
+    const isViewerForThisCampaign = isViewer && viewerCampaignId === params.id;
+    if (!isAdmin && !isViewerForThisCampaign) {
+      router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+    }
+  }, [isAdmin, isViewer, viewerCampaignId, authLoading, pathname, params.id, router]);
+
   const campaign = useQuery(api.campaigns.getCampaignById, { id: params.id as Id<"campaigns"> });
   const updateSettings = useMutation(api.campaigns.updateCampaignSettings);
   const generateLinkMutation = useMutation(api.shareLinks.createShareLink);
@@ -36,6 +50,7 @@ export default function CampaignLayout({
   const [showColorPicker, setShowColorPicker] = useState(false);
   const { triggerRefresh } = useRefresh();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showToast, setShowToast] = useState(false);
 
   const handleShare = async () => {
     if (!campaign) return;
@@ -56,8 +71,13 @@ export default function CampaignLayout({
 
   const handleRefreshAll = async () => {
     setIsRefreshing(true);
+    setShowToast(false);
     triggerRefresh();
-    setTimeout(() => setIsRefreshing(false), 2000);
+    // API 호출이 완료될 때까지 대기 (3초)
+    await new Promise<void>(resolve => setTimeout(resolve, 3000));
+    setIsRefreshing(false);
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 3000);
   };
 
   // 표시할 탭 결정 (visibleTabs가 없으면 전체 표시)
@@ -177,36 +197,44 @@ export default function CampaignLayout({
 
         {/* 하단 액션 버튼들 */}
         {campaign && (
-          <div className="px-3 pb-4 space-y-2 border-t border-gray-50 pt-3">
-            <Button
-              onClick={handleRefreshAll}
-              variant="ghost"
-              size="sm"
-              disabled={isRefreshing}
-              className="w-full justify-start text-gray-400 hover:text-gray-700 hover:bg-gray-50 gap-2 text-xs h-9"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-              모든 데이터 업데이트
-            </Button>
-            <Button
-              onClick={() => setShowTabManager(!showTabManager)}
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start text-gray-400 hover:text-gray-700 hover:bg-gray-50 gap-2 text-xs h-9"
-            >
-              <Settings2 className="w-3.5 h-3.5" />
-              탭 관리
-            </Button>
-            <Button
-              onClick={handleShare}
-              variant="ghost"
-              size="sm"
-              className={`w-full justify-start gap-2 text-xs h-9 transition-all ${
-                shareMsg ? "text-green-600" : "text-gray-400 hover:text-gray-700 hover:bg-gray-50"
-              }`}
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              {shareMsg || "뷰어 링크 복사"}
+          <div className="px-3 pb-4 space-y-1 border-t border-gray-50 pt-3">
+            {/* 관리자 전용 버튼들 */}
+            {isAdmin && (
+              <>
+                <Button onClick={handleRefreshAll} variant="ghost" size="sm" disabled={isRefreshing}
+                  className="w-full justify-start text-gray-400 hover:text-gray-700 hover:bg-gray-50 gap-2 text-xs h-9">
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+                  모든 데이터 업데이트
+                </Button>
+                <Button onClick={() => setShowTabManager(!showTabManager)} variant="ghost" size="sm"
+                  className="w-full justify-start text-gray-400 hover:text-gray-700 hover:bg-gray-50 gap-2 text-xs h-9">
+                  <Settings2 className="w-3.5 h-3.5" /> 탭 관리
+                </Button>
+                <Button onClick={handleShare} variant="ghost" size="sm"
+                  className={`w-full justify-start gap-2 text-xs h-9 transition-all ${shareMsg ? "text-green-600" : "text-gray-400 hover:text-gray-700 hover:bg-gray-50"}`}>
+                  <Share2 className="w-3.5 h-3.5" />
+                  {shareMsg || "뷰어 링크 복사"}
+                </Button>
+                {isMaster && (
+                  <Button onClick={() => router.push("/master")} variant="ghost" size="sm"
+                    className="w-full justify-start text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 gap-2 text-xs h-9">
+                    <Lock className="w-3.5 h-3.5" /> 계정 관리
+                  </Button>
+                )}
+              </>
+            )}
+
+            {/* 공통 (관리자 + 뷰어) */}
+            {authEmail && (
+              <Button onClick={() => setShowPwChange(true)} variant="ghost" size="sm"
+                className="w-full justify-start text-gray-400 hover:text-gray-700 hover:bg-gray-50 gap-2 text-xs h-9">
+                <KeyRound className="w-3.5 h-3.5" /> 비밀번호 변경
+              </Button>
+            )}
+            <Button onClick={() => { logout(); router.push("/login"); }} variant="ghost" size="sm"
+              className="w-full justify-start text-gray-400 hover:text-red-500 hover:bg-red-50 gap-2 text-xs h-9">
+              <LogOut className="w-3.5 h-3.5" />
+              {isViewer ? "뷰어 종료" : "로그아웃"}
             </Button>
           </div>
         )}
@@ -255,8 +283,21 @@ export default function CampaignLayout({
 
       {/* ── 메인 콘텐츠 ── */}
       <main className="flex-1 min-w-0 p-8 lg:py-10 lg:px-10">
-        {children}
+        {/* 인증 로딩 중이면 스피너, 인증 완료 후 콘텐츠 표시 */}
+        {authLoading ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="w-5 h-5 rounded-full border-2 border-gray-200 border-t-gray-900 animate-spin" />
+          </div>
+        ) : children}
       </main>
+
+      {/* ── 업데이트 완료 토스트 ── */}
+      {showToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] bg-gray-900 text-white text-sm px-5 py-2.5 rounded-full shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none">
+          <Check className="w-4 h-4 text-green-400 shrink-0" />
+          업데이트 완료
+        </div>
+      )}
     </div>
   );
 }

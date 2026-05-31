@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { google } from "googleapis";
+
+export const dynamic = "force-dynamic";
 import { parseCsv, parseTimelineSheet } from "@/lib/sheet-parser";
 
 const SHEET_ID = "1p6ILP4rv6NF4u6MaUfhkI4zZtATkuhsfOF0XWlz-DS8";

@@ -19,6 +19,7 @@ import {
   Legend, ComposedChart, Cell, PieChart as RechartsPieChart, Pie
 } from "recharts";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
 
 // ─── 유틸 ──────────────────────────────────────────────────────────────
 function parsePasteText(text: string, colsCount: number) {
@@ -230,21 +231,153 @@ function KeywordBubbles({ keywords }: { keywords: { text: string; weight: number
   );
 }
 
+// ─── 리뷰 키워드 버블 차트 ──────────────────────────────────────────
+function ReviewKeywordBubbles({ keywords }: {
+  keywords: { text: string; count: number; posCount: number; negCount: number; sentiment: "positive" | "negative" }[];
+}) {
+  const max = Math.max(...keywords.map(k => k.count), 1);
+  return (
+    <div className="flex flex-wrap gap-3 justify-center items-center py-4 min-h-[180px]">
+      {[...keywords].sort((a, b) => b.count - a.count).map((kw, i) => {
+        const ratio = kw.count / max;
+        const size = Math.round(64 + ratio * 80);   // 64 – 144px
+        const fs   = Math.round(10 + ratio * 7);    // 10 – 17px
+        // 빈도 높을수록 진한 색 (lightness 낮아짐)
+        const hue  = kw.sentiment === "positive" ? 142 : 0;
+        const sat  = kw.sentiment === "positive" ? "60%" : "70%";
+        const lit  = `${68 - Math.round(ratio * 26)}%`;
+        const bg   = `hsl(${hue},${sat},${lit})`;
+        return (
+          <div
+            key={i}
+            className="rounded-full flex flex-col items-center justify-center text-center
+                       hover:scale-110 active:scale-95 transition-transform cursor-default flex-shrink-0
+                       shadow-sm select-none"
+            style={{ width: size, height: size, backgroundColor: bg }}
+            title={`${kw.text}: 총 ${kw.count}건 (긍정 ${kw.posCount} / 부정 ${kw.negCount})`}
+          >
+            <span className="font-bold text-white leading-tight px-2 w-full text-center break-keep"
+              style={{ fontSize: fs }}>
+              #{kw.text}
+            </span>
+            <span className="text-white/75 font-mono font-semibold mt-0.5"
+              style={{ fontSize: Math.max(9, fs - 2) }}>
+              {kw.count}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── 네이버 리뷰 분석기 ─────────────────────────────────────────────
 // ─── 리뷰 감성 분석 헬퍼 ─────────────────────────────────────────────
-const POS_WORDS = ["좋아", "좋았", "예쁘", "친절", "최고", "대박", "추천", "만족", "훌륭", "깔끔", "편안", "재밌", "즐거", "행복", "완벽", "굿", "좋은", "멋", "감동"];
-const NEG_WORDS = ["불편", "별로", "아쉽", "힘들", "어렵", "복잡", "혼잡", "대기", "주차", "비싸", "실망", "나쁘", "최악", "더러", "불친절", "부족", "없어"];
 
+// 긍정 시그널 단어 (문맥 의존 낮은 것만)
+const POS_WORDS = [
+  "좋아", "좋았", "좋은", "좋습", "예쁘", "친절", "최고", "대박", "추천",
+  "만족", "훌륭", "깔끔", "편안", "편리", "재밌", "즐거", "행복", "완벽",
+  "굿", "멋지", "멋있", "감동", "아늑", "쾌적", "깨끗", "강추",
+  "재방문", "기대이상", "감사", "고마", "설레", "기쁘", "탁월", "뛰어",
+];
+
+// 부정 시그널 단어 (명백한 부정 감정만, 주제어·조사 제외)
+const NEG_WORDS = [
+  "불편", "별로", "아쉽", "실망", "나쁘", "최악", "더럽", "지저분",
+  "불친절", "부족", "불만", "짜증", "불쾌", "후회", "비추", "다시는",
+  "안올", "안 올", "오래 걸", "느리", "시끄럽", "낡은", "노후",
+];
+
+// 감성 점수 기반 분류 (단어 개수 비교)
 function classifySentiment(text: string): "positive" | "negative" {
-  const lower = text.toLowerCase();
-  return NEG_WORDS.some(w => lower.includes(w)) ? "negative" : "positive";
+  const posScore = POS_WORDS.reduce((s, w) => s + (text.includes(w) ? 1 : 0), 0);
+  const negScore = NEG_WORDS.reduce((s, w) => s + (text.includes(w) ? 1 : 0), 0);
+  return negScore > posScore ? "negative" : "positive";
+}
+
+// 한국어 불용어 — 마케팅 인사이트 무관 어휘 제외 기준
+const KR_STOPWORDS = new Set([
+  // ① 대명사
+  "나는","나도","나를","내가","우리","누구","모두","한명","저는","저도","저를",
+  "이분","본인","저희","그분","당신","자신","자기",
+  // ② 지시어·관계어
+  "이런","저런","그런","어떤","이렇게","저렇게","그렇게","이게","저게","그게",
+  "이렇","저렇","그렇","어떻","이것","저것","그것","이때","그때","저때",
+  "여기","거기","저기","이곳","그곳","저곳","뭔가","뭔지","뭔데",
+  // ③ 단순 접속어·접속조사
+  "그리고","하지만","그래서","때문에","그러나","그런데","그러면","그러므로",
+  "또한","따라서","즉","반면","결국",
+  // ④ 단독 감탄사·강조 부사 (수식어 없이 단독)
+  "너무","정말","진짜","매우","아주","조금","가장","항상","자주","거의",
+  "바로","다시","함께","계속","이미","워낙","특히","주로","보통","온전히",
+  "완전히","전혀","확실히","직접","잠깐","그냥","약간","잠시","참으로",
+  // ⑤ 맥락 없는 단독 동사·활용형
+  "있는","없는","하는","되는","같은","보고","해서","하고","하면","되어",
+  "하여","이고","이며","이라","이어","봐서","보니","같이","처럼",
+  "했고","했던","됐고","됐던","있었","없었","했어","됐어",
+  "되고","있고","보면","하면","같고","알고",
+  // ⑥ 추상명사·고빈도 일반명사 (맥락 의존도 높음)
+  "마음","생각","느낌","부분","내용","정도","모습","이후","이전","현재",
+  "다음","오늘","어제","것이","것도","것은","때문","위해","통해","대해",
+  "하나","여러","모든","각각","이번","저번","요즘",
+  "사람","경우","방법","이유","문제","결과","상황","관련","특성",
+  "방향","수준","이상","이하","기준","측면","입장","관계",
+]);
+
+// 조사·어미 제거 (공간을→공간, 한강이→한강)
+function stripParticle(word: string): string {
+  const endings = [
+    "을","를","이","가","은","는","에","의","로","와","과","도","만","서","게","고","며","나","라","야","아","까","으로","상","적",
+  ];
+  for (const e of endings) {
+    if (word.endsWith(e) && word.length > 2) return word.slice(0, -e.length);
+  }
+  return word;
+}
+
+// 동사구·활용형·부정형 패턴 포함 여부 → 마케팅 인사이트 없음
+function isNounLike(word: string): boolean {
+  // [최우선] 부정형 어미로 끝나는 단어
+  const negEnds = [
+    "않는","않아","않고","않네","않죠","않은",
+    "아닌","아니고","아니야","아니죠",
+    "없는","없어","없고","없네","없죠",
+    "못한","못해","못하고","못하는",
+  ];
+  if (negEnds.some(e => word.endsWith(e))) return false;
+  // ~지 로 끝나는 짧은 용언형 (보이지, 알지 등)
+  if (word.endsWith("지") && word.length <= 5) return false;
+  // 단독 이동·상태 동사
+  const standaloneVerbs = ["갑니다","옵니다","됩니다","떠납니다","나옵니다","보이지","느껴지지","들리지"];
+  if (standaloneVerbs.includes(word)) return false;
+  // 기존 동사 어미 패턴
+  const badEndings = [
+    "할때","할수","하여","됩니","됐어","했어","입니","습니",
+    "하며","하면","하지","하니","됩","됐","했","겠","였","었",
+  ];
+  if (badEndings.some(e => word.endsWith(e))) return false;
+  const badInternals = ["할때","할수","수있","하면서","하는데","되는데"];
+  if (badInternals.some(p => word.includes(p))) return false;
+  return true;
 }
 
 function extractKwFromText(text: string): string[] {
-  const words: string[] = [];
-  const m = text.match(/[가-힣]{2,6}/g) || [];
-  words.push(...m.filter(w => w.length >= 2 && w.length <= 7));
-  return [...new Set(words)].slice(0, 5);
+  // 2~5자 한글 시퀀스만 추출 (대부분의 한국어 명사는 2-4자, 복합명사는 5자 이하)
+  const raw = text.match(/[가-힣]{2,5}/g) || [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const w of raw) {
+    const clean = stripParticle(w);
+    if (clean.length < 2) continue;
+    if (KR_STOPWORDS.has(clean)) continue;
+    if (!isNounLike(clean)) continue;
+    if (seen.has(clean)) continue;
+    seen.add(clean);
+    result.push(clean);
+    if (result.length >= 5) break;
+  }
+  return result;
 }
 
 function buildAnalysis(rawReviews: { text: string; date: string; rating: number; keywords: string[] }[]) {
@@ -256,8 +389,9 @@ function buildAnalysis(rawReviews: { text: string; date: string; rating: number;
 
   const kwMap = new Map<string, { count: number; posCount: number }>();
   reviews.forEach(r => {
-    r.keywords.forEach(kw => {
-      if (!kw.trim()) return;
+    r.keywords.forEach(rawKw => {
+      const kw = stripParticle(rawKw.trim());
+      if (!kw || kw.length < 2 || KR_STOPWORDS.has(kw) || !isNounLike(kw)) return;
       const e = kwMap.get(kw) || { count: 0, posCount: 0 };
       e.count++;
       if (r.sentiment === "positive") e.posCount++;
@@ -271,6 +405,8 @@ function buildAnalysis(rawReviews: { text: string; date: string; rating: number;
     .map(([text, v]) => ({
       text,
       count: v.count,
+      posCount: v.posCount,
+      negCount: v.count - v.posCount,
       sentiment: (v.posCount / v.count >= 0.5 ? "positive" : "negative") as "positive" | "negative",
     }));
 
@@ -286,20 +422,91 @@ function buildAnalysis(rawReviews: { text: string; date: string; rating: number;
   };
 }
 
+// ── AI 키워드 추출 헬퍼 ─────────────────────────────────────────
+async function fetchAIKeywords(texts: string[]): Promise<string[][]> {
+  try {
+    const res = await fetch("/api/extract-keywords", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.results) return texts.map(() => []);
+    return data.results as string[][];
+  } catch {
+    return texts.map(() => []);
+  }
+}
+
 function NaverReviewAnalyzer() {
+  const params = useParams();
+  const analyzerCampaignId = params.id as string;
+  const NAVER_URL_LS_KEY  = `naverReviewUrl_${analyzerCampaignId}`;
+  const NAVER_DATA_LS_KEY = `naverReviewData_${analyzerCampaignId}`;
+  const { isAdmin } = useAuth();
+
   const [naverUrl, setNaverUrl] = useState("");
+  const [urlSaved, setUrlSaved] = useState(false);
   const [crawling, setCrawling] = useState(false);
   const [crawlError, setCrawlError] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [showPasteArea, setShowPasteArea] = useState(false);
+  const [extractingKw, setExtractingKw] = useState(false);
   const [analyzed, setAnalyzed] = useState<null | {
     total: number;
     textTotal?: number;
-    keywords: { text: string; count: number; sentiment: "positive" | "negative" }[];
+    keywords: { text: string; count: number; posCount: number; negCount: number; sentiment: "positive" | "negative" }[];
     reviews: { text: string; date: string; rating: number; sentiment: "positive" | "negative"; keywords: string[] }[];
     posRate: number;
     source?: string;
   }>(null);
+
+  // ── URL + 분석 데이터 localStorage 로드 ──
+  useEffect(() => {
+    try {
+      const savedUrl  = localStorage.getItem(NAVER_URL_LS_KEY);
+      if (savedUrl) setNaverUrl(savedUrl);
+      const savedData = localStorage.getItem(NAVER_DATA_LS_KEY);
+      if (savedData) setAnalyzed(JSON.parse(savedData));
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyzerCampaignId]);
+
+  // ── 분석 결과 변경 시 자동 저장 ──
+  useEffect(() => {
+    if (analyzed) {
+      try { localStorage.setItem(NAVER_DATA_LS_KEY, JSON.stringify(analyzed)); } catch {}
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analyzed]);
+
+  const saveNaverUrl = () => {
+    try {
+      localStorage.setItem(NAVER_URL_LS_KEY, naverUrl.trim());
+      setUrlSaved(true);
+      setTimeout(() => setUrlSaved(false), 2000);
+    } catch {}
+  };
+
+  // ── AI 키워드 주입 후 분석 ──
+  const analyzeWithAI = async (
+    rawReviews: { text: string; date: string; rating: number; keywords: string[] }[],
+    extraFields?: Partial<typeof analyzed>
+  ) => {
+    setExtractingKw(true);
+    try {
+      const texts = rawReviews.map(r => r.text);
+      const aiKeywords = await fetchAIKeywords(texts);
+      const enriched = rawReviews.map((r, i) => ({
+        ...r,
+        keywords: aiKeywords[i]?.length ? aiKeywords[i] : r.keywords,
+      }));
+      const result = buildAnalysis(enriched);
+      setAnalyzed({ ...result, ...extraFields });
+    } finally {
+      setExtractingKw(false);
+    }
+  };
 
   // ── 크롤링 ──
   const crawl = async () => {
@@ -317,11 +524,9 @@ function NaverReviewAnalyzer() {
         setCrawlError(data.error || "크롤링 실패");
         return;
       }
-      const result = buildAnalysis(data.reviews || []);
-      setAnalyzed({
-        ...result,
-        total: data.total || result.total,
-        textTotal: data.textTotal ?? result.textTotal,
+      await analyzeWithAI(data.reviews || [], {
+        total: data.total,
+        textTotal: data.textTotal,
         source: data.source,
       });
     } catch (e: any) {
@@ -332,12 +537,17 @@ function NaverReviewAnalyzer() {
   };
 
   // ── 붙여넣기 분석 ──
-  const analyzeFromPaste = () => {
+  const analyzeFromPaste = async () => {
     const lines = pasteText.split(/\r?\n/).filter(l => l.trim().length > 5);
     if (lines.length === 0) return;
-    const raw = lines.map(line => ({ text: line.trim(), date: "", rating: classifySentiment(line) === "positive" ? 5 : 3, keywords: [] }));
-    setAnalyzed({ ...buildAnalysis(raw), source: "paste" });
     setShowPasteArea(false);
+    const raw = lines.map(line => ({
+      text: line.trim(),
+      date: "",
+      rating: classifySentiment(line) === "positive" ? 5 : 3,
+      keywords: [] as string[],
+    }));
+    await analyzeWithAI(raw, { source: "paste" });
   };
 
   const useDemo = () => setAnalyzed({
@@ -346,7 +556,12 @@ function NaverReviewAnalyzer() {
     source: "demo",
   });
 
-  const reset = () => { setAnalyzed(null); setCrawlError(""); setPasteText(""); };
+  const reset = () => {
+    setAnalyzed(null);
+    setCrawlError("");
+    setPasteText("");
+    try { localStorage.removeItem(NAVER_DATA_LS_KEY); } catch {}
+  };
 
   return (
     <GlassCard className="p-6">
@@ -360,7 +575,7 @@ function NaverReviewAnalyzer() {
             <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-bold">
               총 {analyzed.total.toLocaleString()}건
               {analyzed.textTotal !== undefined && analyzed.textTotal < analyzed.total && (
-                <span className="text-gray-400 font-normal ml-1">(텍스트 {analyzed.textTotal}건)</span>
+                <span className="text-gray-400 font-normal ml-1">(글 작성 {analyzed.textTotal}건)</span>
               )}
             </span>
           )}
@@ -384,32 +599,59 @@ function NaverReviewAnalyzer() {
       </div>
 
       {/* URL 입력 + 크롤링 버튼 */}
-      <div className="flex gap-2 mb-3">
-        <input
-          className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-gray-400 placeholder:text-gray-400"
-          placeholder="네이버 지도 URL 붙여넣기 (예: https://map.naver.com/v5/entry/place/12345...)"
-          value={naverUrl}
-          onChange={e => { setNaverUrl(e.target.value); setCrawlError(""); }}
-          onKeyDown={e => e.key === "Enter" && crawl()}
-        />
-        <Button
-          size="sm"
-          disabled={!naverUrl.trim() || crawling}
-          onClick={crawl}
-          className="bg-green-600 text-white hover:bg-green-700 border-0 gap-1.5 px-4 shrink-0"
-        >
-          {crawling
-            ? <><RefreshCw className="w-3 h-3 animate-spin" /> 크롤링 중...</>
-            : <><BarChart3 className="w-3 h-3" /> 리뷰 크롤링</>
-          }
-        </Button>
-        {naverUrl && (
-          <Button size="sm" variant="outline" className="gap-1 text-xs border-gray-200 text-gray-600 shrink-0"
-            onClick={() => window.open(naverUrl, "_blank")}>
-            <ExternalLink className="w-3 h-3" />
-          </Button>
-        )}
-      </div>
+      {isAdmin ? (
+        <>
+          <div className="flex gap-2 mb-1">
+            <input
+              className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-gray-400 placeholder:text-gray-400"
+              placeholder="네이버 지도 URL 붙여넣기 (예: https://map.naver.com/v5/entry/place/12345...)"
+              value={naverUrl}
+              onChange={e => { setNaverUrl(e.target.value); setCrawlError(""); }}
+              onKeyDown={e => e.key === "Enter" && crawl()}
+            />
+            <Button
+              size="sm"
+              disabled={!naverUrl.trim() || crawling || extractingKw}
+              onClick={crawl}
+              className="bg-green-600 text-white hover:bg-green-700 border-0 gap-1.5 px-4 shrink-0"
+            >
+              {crawling
+                ? <><RefreshCw className="w-3 h-3 animate-spin" /> 크롤링 중...</>
+                : extractingKw
+                ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI 분석 중...</>
+                : <><BarChart3 className="w-3 h-3" /> 리뷰 크롤링</>
+              }
+            </Button>
+            {naverUrl && (
+              <Button size="sm" variant="outline" className="gap-1 text-xs border-gray-200 text-gray-600 shrink-0"
+                onClick={() => window.open(naverUrl, "_blank")}>
+                <ExternalLink className="w-3 h-3" />
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-2 mb-3">
+            {urlSaved && (
+              <span className="text-[10px] text-green-500 font-medium">✓ URL 저장됨</span>
+            )}
+            <button
+              onClick={saveNaverUrl}
+              disabled={!naverUrl.trim()}
+              className="text-[10px] font-medium text-gray-500 hover:text-gray-900 disabled:opacity-40 transition-colors underline underline-offset-2">
+              URL 저장
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="mb-3 text-xs text-gray-400 flex items-center gap-2">
+          <span>분석 URL: {naverUrl || "미설정"}</span>
+          {naverUrl && (
+            <Button size="sm" variant="outline" className="gap-1 text-xs border-gray-200 text-gray-600 h-6"
+              onClick={() => window.open(naverUrl, "_blank")}>
+              <ExternalLink className="w-3 h-3" />
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* 크롤링 에러 */}
       {crawlError && (
@@ -454,8 +696,11 @@ function NaverReviewAnalyzer() {
             <Button size="sm" variant="ghost" className="text-xs text-gray-500"
               onClick={() => { setShowPasteArea(false); setPasteText(""); }}>취소</Button>
             <Button size="sm" className="bg-gray-900 text-white hover:bg-gray-800 text-xs gap-1"
-              onClick={analyzeFromPaste} disabled={!pasteText.trim()}>
-              <BarChart3 className="w-3 h-3" /> 분석하기
+              onClick={analyzeFromPaste} disabled={!pasteText.trim() || extractingKw}>
+              {extractingKw
+                ? <><RefreshCw className="w-3 h-3 animate-spin" /> AI 분석 중...</>
+                : <><BarChart3 className="w-3 h-3" /> AI 키워드 분석</>
+              }
             </Button>
           </div>
         </div>
@@ -477,23 +722,77 @@ function NaverReviewAnalyzer() {
       {/* 분석 결과 */}
       {analyzed && (
         <>
-          <div className="mb-6">
-            <h5 className="text-xs font-bold text-gray-700 mb-3">주요 언급 키워드</h5>
-            <div className="flex flex-wrap gap-2">
-              {analyzed.keywords.map((kw, i) => (
-                <div
-                  key={i}
-                  className={cn("px-3 py-1.5 rounded-full text-xs font-medium border flex items-center gap-1.5",
-                    kw.sentiment === "positive" ? "bg-green-50 text-green-700 border-green-100" : "bg-red-50 text-red-700 border-red-100"
-                  )}
-                  style={{ fontSize: `${Math.max(10, 10 + Math.min(kw.count, 8))}px` }}
-                >
-                  #{kw.text} <span className="font-mono bg-white px-1.5 py-0.5 rounded-full opacity-80">{kw.count}</span>
+          {/* ── 감성 분포 + 키워드 바 차트 ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-5 mb-6 items-start">
+
+            {/* 감성 도넛 차트 */}
+            <div className="flex flex-col gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100">
+              <h5 className="text-xs font-bold text-gray-700">리뷰 감성 분포</h5>
+              <div className="relative">
+                <div style={{ height: 150 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RechartsPieChart>
+                      <Pie
+                        data={[
+                          { name: "긍정", value: analyzed.posRate },
+                          { name: "부정", value: 100 - analyzed.posRate },
+                        ]}
+                        cx="50%" cy="50%"
+                        innerRadius={44} outerRadius={65}
+                        startAngle={90} endAngle={-270}
+                        dataKey="value" paddingAngle={3}
+                      >
+                        <Cell fill="#4ade80" stroke="white" strokeWidth={2} />
+                        <Cell fill="#f87171" stroke="white" strokeWidth={2} />
+                      </Pie>
+                    </RechartsPieChart>
+                  </ResponsiveContainer>
                 </div>
-              ))}
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                  <span className="text-2xl font-bold text-gray-900">{analyzed.posRate}%</span>
+                  <span className="text-[10px] text-gray-400">긍정률</span>
+                </div>
+              </div>
+              <div className="h-2 rounded-full bg-red-200 overflow-hidden">
+                <div className="h-full bg-green-400 rounded-full transition-all duration-700" style={{ width: `${analyzed.posRate}%` }} />
+              </div>
+              <div className="flex justify-between text-[11px] font-semibold">
+                <span className="flex items-center gap-1 text-green-700">
+                  <Smile className="w-3.5 h-3.5" /> 긍정 {analyzed.posRate}%
+                </span>
+                <span className="flex items-center gap-1 text-red-500">
+                  {100 - analyzed.posRate}% 부정 <Frown className="w-3.5 h-3.5" />
+                </span>
+              </div>
+              {analyzed.textTotal !== undefined && (
+                <p className="text-[10px] text-gray-400 text-center border-t border-gray-100 pt-2">
+                  분석 대상 {analyzed.textTotal.toLocaleString()}건
+                </p>
+              )}
+            </div>
+
+            {/* 키워드 버블 차트 */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <h5 className="text-xs font-bold text-gray-700">
+                  주요 언급 키워드
+                  <span className="text-gray-400 font-normal ml-1">({analyzed.keywords.length}개)</span>
+                </h5>
+                <div className="flex items-center gap-3 text-[10px] text-gray-500">
+                  <span className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-green-400 inline-block" />긍정
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-400 inline-block" />부정
+                  </span>
+                  <span className="text-gray-300">· 크기 = 언급 빈도</span>
+                </div>
+              </div>
+              <ReviewKeywordBubbles keywords={analyzed.keywords} />
             </div>
           </div>
 
+          {/* 리뷰 목록 */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <h5 className="text-xs font-bold text-gray-700">리뷰 목록</h5>
@@ -511,7 +810,14 @@ function NaverReviewAnalyzer() {
                           <Star key={j} className={cn("w-3.5 h-3.5", j < review.rating ? "text-yellow-400 fill-yellow-400" : "text-gray-200 fill-gray-200")} />
                         ))}
                       </div>
-                      {review.date && <span className="text-[10px] font-mono text-gray-400">{review.date}</span>}
+                      <div className="flex items-center gap-2">
+                        {review.date && <span className="text-[10px] font-mono text-gray-400">{review.date}</span>}
+                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                          review.sentiment === "positive" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600"
+                        )}>
+                          {review.sentiment === "positive" ? "😊 긍정" : "😞 부정"}
+                        </span>
+                      </div>
                     </div>
                     <p className="text-sm text-gray-800 leading-snug mb-3">{review.text}</p>
                   </div>
@@ -519,9 +825,7 @@ function NaverReviewAnalyzer() {
                     {review.keywords.map(kw => (
                       <span key={kw} className={cn("text-[10px] px-2 py-0.5 rounded-full font-medium",
                         review.sentiment === "positive" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600"
-                      )}>
-                        {kw}
-                      </span>
+                      )}>#{kw}</span>
                     ))}
                   </div>
                 </div>
@@ -540,6 +844,7 @@ export default function InterestPage() {
   const id = params.id as string;
   const campaignId = id as Id<"campaigns">;
 
+  const { isAdmin } = useAuth();
   const { refreshTrigger } = useRefresh();
   const [lastRefresh, setLastRefresh] = useState(0);
 
@@ -775,24 +1080,26 @@ export default function InterestPage() {
           <h2 className="text-xl font-bold text-gray-900">흥미 상세</h2>
           <p className="text-xs text-gray-400 mt-1">캠페인 내 이벤트 참여 성과와 오프라인 팝업 방문 성과를 종합적으로 확인합니다.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline" size="sm"
-            onClick={() => setIsCardEditMode(!isCardEditMode)}
-            className={`gap-2 ${isCardEditMode ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700" : "text-gray-600 border-gray-200"}`}
-          >
-            <Edit2 className="w-4 h-4" />
-            {isCardEditMode ? "편집 완료" : "카드 편집"}
-          </Button>
-          <Button
-            variant="outline" size="sm"
-            onClick={() => setShowSettings(!showSettings)}
-            className={`gap-2 ${showSettings ? "bg-gray-900 text-white border-gray-900" : "text-gray-600 border-gray-200"}`}
-          >
-            <Settings2 className="w-4 h-4" />
-            데이터 소스 관리
-          </Button>
-        </div>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline" size="sm"
+              onClick={() => setIsCardEditMode(!isCardEditMode)}
+              className={`gap-2 ${isCardEditMode ? "bg-blue-600 text-white border-blue-600 hover:bg-blue-700" : "text-gray-600 border-gray-200"}`}
+            >
+              <Edit2 className="w-4 h-4" />
+              {isCardEditMode ? "편집 완료" : "카드 편집"}
+            </Button>
+            <Button
+              variant="outline" size="sm"
+              onClick={() => setShowSettings(!showSettings)}
+              className={`gap-2 ${showSettings ? "bg-gray-900 text-white border-gray-900" : "text-gray-600 border-gray-200"}`}
+            >
+              <Settings2 className="w-4 h-4" />
+              데이터 소스 관리
+            </Button>
+          </div>
+        )}
       </div>
 
       {showSettings && (

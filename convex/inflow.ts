@@ -13,6 +13,8 @@ export const getTrafficWeekly = query({
   },
 });
 
+// weekStart 기준 upsert — 기존 레코드는 업데이트, 없으면 삽입
+// 다른 기간 데이터는 건드리지 않아 안전함
 export const syncTrafficWeekly = mutation({
   args: {
     campaignId: v.id("campaigns"),
@@ -27,17 +29,26 @@ export const syncTrafficWeekly = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("trafficWeekly")
-      .withIndex("by_campaign", (q) => q.eq("campaignId", args.campaignId))
-      .collect();
-    for (const row of existing) await ctx.db.delete(row._id);
-
     for (const row of args.rows) {
-      await ctx.db.insert("trafficWeekly", {
-        campaignId: args.campaignId,
-        ...row,
-      });
+      const existing = await ctx.db
+        .query("trafficWeekly")
+        .withIndex("by_campaign_week", (q) =>
+          q.eq("campaignId", args.campaignId).eq("weekStart", row.weekStart)
+        )
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          weekLabel: row.weekLabel,
+          sessions: row.sessions,
+          users: row.users,
+          avgEngagementSec: row.avgEngagementSec,
+        });
+      } else {
+        await ctx.db.insert("trafficWeekly", {
+          campaignId: args.campaignId,
+          ...row,
+        });
+      }
     }
   },
 });

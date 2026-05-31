@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as adminUsers from "../adminUsers.js";
 import type * as awareness from "../awareness.js";
 import type * as campaigns from "../campaigns.js";
 import type * as gantt from "../gantt.js";
@@ -25,6 +26,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  adminUsers: typeof adminUsers;
   awareness: typeof awareness;
   campaigns: typeof campaigns;
   gantt: typeof gantt;

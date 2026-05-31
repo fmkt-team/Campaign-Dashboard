@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -9,7 +9,7 @@ import { Id } from "@/convex/_generated/dataModel";
 import { GlassCard } from "@/components/glass-card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { BarChart, Bar, ComposedChart, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend } from "recharts";
+import { BarChart, Bar, ComposedChart, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, PieChart as RechartsPieChart, Pie, Cell } from "recharts";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar as CalendarIcon } from "lucide-react";
@@ -19,11 +19,13 @@ import {
   Check, X, UploadCloud, FileSpreadsheet, RefreshCw, Settings2,
   Pencil, Trash, Link as LinkIcon, SlidersHorizontal,
   MessageSquare, ThumbsUp, Eye, Target, TrendingUp, ArrowUpDown,
-  ChevronUp, ChevronDown, ChevronRight,
+  ChevronUp, ChevronDown, ChevronRight, Smile, Frown,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import * as xlsx from "xlsx";
 import { format, startOfWeek, parseISO } from "date-fns";
 import { useRefresh } from "@/lib/refresh-context";
+import { useAuth } from "@/lib/auth-context";
 
 type ViewMode  = "daily" | "weekly" | "monthly" | "total";
 type ActiveTab = "media" | "video" | "viral";
@@ -56,6 +58,7 @@ const DEFAULT_VISIBLE: Record<string, boolean> = {
 // ── 포맷 헬퍼 ────────────────────────────────────────────────
 function fmt(n: number)    { return n.toLocaleString(); }
 function pct(n: number)    { return n.toFixed(1) + "%"; }
+function pct2(n: number)   { return n.toFixed(2) + "%"; }  // 인게이지먼트 등 소수점 2자리
 function fmtKrw(n: number) { return "₩" + n.toLocaleString(); }
 
 function processNumber(val: any) {
@@ -83,6 +86,400 @@ function parseExtra(raw: any): Record<string, number> {
     try { return JSON.parse(raw); } catch { return {}; }
   }
   return raw as Record<string, number>;
+}
+
+// ────────────────────────────────────────────────────────────
+// 댓글 감성 분석 NLP 유틸
+// ────────────────────────────────────────────────────────────
+const POS_WORDS_CMT = [
+  "좋아","좋았","좋은","좋습","예쁘","친절","최고","대박","추천",
+  "만족","훌륭","깔끔","편안","편리","재밌","즐거","행복","완벽",
+  "굿","멋지","멋있","감동","아늑","쾌적","깨끗","강추",
+  "재방문","기대이상","감사","고마","설레","기쁘","탁월","뛰어",
+];
+const NEG_WORDS_CMT = [
+  "불편","별로","아쉽","실망","나쁘","최악","더럽","지저분",
+  "불친절","부족","불만","짜증","불쾌","후회","비추","다시는",
+  "안올","안 올","느리","시끄럽","낡은","노후",
+];
+function classifyCommentSentiment(text: string): "positive" | "negative" {
+  const p = POS_WORDS_CMT.reduce((s, w) => s + (text.includes(w) ? 1 : 0), 0);
+  const n = NEG_WORDS_CMT.reduce((s, w) => s + (text.includes(w) ? 1 : 0), 0);
+  return n > p ? "negative" : "positive";
+}
+const CMT_STOPWORDS = new Set([
+  // ① 대명사
+  "나는","나도","나를","내가","우리","누구","모두","한명","저는","저도","저를",
+  "이분","본인","저희","그분","당신","자신","자기",
+  // ② 지시어·관계어
+  "이런","저런","그런","어떤","이렇게","저렇게","그렇게","이게","저게","그게",
+  "이렇","저렇","그렇","어떻","이것","저것","그것","이때","그때","저때",
+  "여기","거기","저기","이곳","그곳","저곳","뭔가","뭔지","뭔데",
+  // ③ 단순 접속어
+  "그리고","하지만","그래서","때문에","그러나","그런데","그러면","그러므로",
+  "또한","따라서","즉","반면","결국",
+  // ④ 단독 강조 부사·감탄사
+  "너무","정말","진짜","매우","아주","조금","가장","항상","자주","거의",
+  "바로","다시","함께","계속","이미","특히","주로","보통","그냥","약간",
+  // ⑤ 맥락 없는 동사·활용형
+  "있는","없는","하는","되는","같은","해서","하고","하면","되어","하여","이고","이며",
+  "했고","됐고","있었","없었","했어","됐어","되고","있고","보고","같고","알고",
+  // ⑥ 고빈도 추상·일반 명사
+  "마음","생각","느낌","부분","내용","정도","모습","이후","이전","현재",
+  "다음","오늘","어제","것이","것도","것은","때문","위해","통해","대해",
+  "하나","여러","모든","이번","요즘","사람","경우","방법","이유","문제",
+]);
+function stripCmtParticle(word: string): string {
+  const endings = ["을","를","이","가","은","는","에","의","로","와","과","도","만","서","게","고","며","나","라","야","아","까","으로","상","적"];
+  for (const e of endings) {
+    if (word.endsWith(e) && word.length > 2) return word.slice(0, -e.length);
+  }
+  return word;
+}
+function isCmtNounLike(word: string): boolean {
+  // [최우선] 부정형 어미·불완전 어미로 끝나는 단어 제거
+  const negEnds = [
+    "않는","않아","않고","않네","않죠","않은",
+    "아닌","아니고","아니야","아니죠",
+    "없는","없어","없고","없네","없죠",
+    "못한","못해","못하고","못하는",
+  ];
+  if (negEnds.some(e => word.endsWith(e))) return false;
+  // ~지 로 끝나면서 앞이 용언인 경우 (보이지, 느껴지지, 알지 등)
+  if (word.endsWith("지") && word.length <= 5) return false;
+  // 단독 이동·상태 동사
+  const standaloneVerbs = ["갑니다","옵니다","됩니다","떠납니다","나옵니다","보이지","느껴지지","들리지"];
+  if (standaloneVerbs.includes(word)) return false;
+  // 기존 동사 어미 필터
+  const badEnd = [
+    "할때","할수","하여","됩니","됐어","했어","입니","습니",
+    "하며","하면","하지","하니","됩","됐","했","겠","였","었",
+  ];
+  if (badEnd.some(e => word.endsWith(e))) return false;
+  const badIn = ["할때","할수","수있","하면서","하는데","되는데"];
+  if (badIn.some(p => word.includes(p))) return false;
+  return true;
+}
+function extractCmtKeywords(text: string): string[] {
+  const raw = text.match(/[가-힣]{2,5}/g) || [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const w of raw) {
+    const clean = stripCmtParticle(w);
+    if (clean.length < 2) continue;
+    if (CMT_STOPWORDS.has(clean)) continue;
+    if (!isCmtNounLike(clean)) continue;
+    if (seen.has(clean)) continue;
+    seen.add(clean);
+    result.push(clean);
+    if (result.length >= 5) break;
+  }
+  return result;
+}
+
+// ─── 댓글 분석: 키워드 버블 차트 ────────────────────────────────────
+function CommentKeywordBubbles({ keywords }: {
+  keywords: { text: string; count: number; sentiment: "positive" | "negative" }[];
+}) {
+  const max = Math.max(...keywords.map(k => k.count), 1);
+  return (
+    <div className="flex flex-wrap gap-3 justify-center items-center py-4 min-h-[160px]">
+      {[...keywords].sort((a, b) => b.count - a.count).map((kw, i) => {
+        const ratio = kw.count / max;
+        const size  = Math.round(58 + ratio * 76);   // 58~134px
+        const fs    = Math.round(10 + ratio * 6);    // 10~16px
+        const hue   = kw.sentiment === "positive" ? 142 : 0;
+        const sat   = kw.sentiment === "positive" ? "60%" : "70%";
+        const lit   = `${68 - Math.round(ratio * 26)}%`;
+        return (
+          <div
+            key={i}
+            className="rounded-full flex flex-col items-center justify-center text-center
+                       hover:scale-110 active:scale-95 transition-transform cursor-default flex-shrink-0
+                       shadow-sm select-none"
+            style={{ width: size, height: size, backgroundColor: `hsl(${hue},${sat},${lit})` }}
+            title={`${kw.text}: ${kw.count}건`}
+          >
+            <span className="font-bold text-white leading-tight px-2 w-full text-center break-keep"
+              style={{ fontSize: fs }}>
+              #{kw.text}
+            </span>
+            <span className="text-white/75 font-mono font-semibold mt-0.5"
+              style={{ fontSize: Math.max(9, fs - 2) }}>
+              {kw.count}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── 댓글 종합 분석 컴포넌트 (AI 기반, 흥미상세 리뷰 분석 동일 디자인) ────
+type CommentAnalysisResult = {
+  total: number;
+  textTotal: number;
+  keywords: { text: string; count: number; sentiment: "positive" | "negative" }[];
+  comments: { text: string; author?: string; date?: string; sentiment: "positive" | "negative"; keywords: string[] }[];
+  posRate: number;
+  posCount: number;
+  negCount: number;
+};
+
+function buildCommentAnalysis(
+  items: { text: string; author?: string; date?: string; sentiment: "positive" | "negative"; keywords: string[] }[]
+): CommentAnalysisResult {
+  const kwMap = new Map<string, { count: number; posCount: number }>();
+  const textItems = items.filter(it => it.text.trim());
+  textItems.forEach(it => {
+    it.keywords.forEach(kw => {
+      const clean = kw.trim();
+      if (!clean || clean.length < 2) return;
+      const e = kwMap.get(clean) || { count: 0, posCount: 0 };
+      e.count++;
+      if (it.sentiment === "positive") e.posCount++;
+      kwMap.set(clean, e);
+    });
+  });
+  const keywords = [...kwMap.entries()]
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 20)
+    .map(([text, v]) => ({
+      text,
+      count: v.count,
+      sentiment: (v.posCount / v.count >= 0.5 ? "positive" : "negative") as "positive" | "negative",
+    }));
+  const posCount = textItems.filter(it => it.sentiment === "positive").length;
+  const negCount = textItems.length - posCount;
+  return {
+    total: items.length,
+    textTotal: textItems.length,
+    keywords,
+    comments: textItems,
+    posRate: textItems.length > 0 ? Math.round((posCount / textItems.length) * 100) : 0,
+    posCount,
+    negCount,
+  };
+}
+
+function CommentAnalysisSection({ comments, title = "종합 댓글 분석" }: {
+  comments: { text: string; author?: string; likes?: number; date?: string }[];
+  title?: string;
+}) {
+  const [analysis, setAnalysis]     = useState<CommentAnalysisResult | null>(null);
+  const [aiRefining, setAiRefining] = useState(false);
+  const [aiDone, setAiDone]         = useState(false);
+  const [showComments, setShowComments] = useState(false);
+
+  // ── 재분석 트리거: 댓글 수가 변할 때만 (텍스트 변경은 무시해 루프 방지) ──
+  const commentCount = comments.length;
+
+  useEffect(() => {
+    if (!commentCount) { setAnalysis(null); setAiDone(false); return; }
+
+    // ① 클라이언트 NLP로 즉시 1차 분석 (로딩 없음)
+    const sentimentItems = comments.map(c => ({
+      text:      c.text || "",
+      author:    c.author,
+      date:      c.date,
+      sentiment: classifyCommentSentiment(c.text || ""),
+      keywords:  extractCmtKeywords(c.text || ""),
+    }));
+    setAnalysis(buildCommentAnalysis(sentimentItems));
+    setAiDone(false);
+
+    // ② AI로 키워드 보강 (배경 실행, 최대 50건 샘플)
+    const MAX = 50;
+    const step = comments.length > MAX ? Math.ceil(comments.length / MAX) : 1;
+    const sample = comments.filter((_, i) => i % step === 0).slice(0, MAX);
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000); // 25초 타임아웃
+    setAiRefining(true);
+
+    fetch("/api/extract-keywords", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ texts: sample.map(c => c.text || "") }),
+      signal:  controller.signal,
+    })
+      .then(r => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data: any) => {
+        if (cancelled || !data?.results) return;
+        const aiResults = data.results as string[][];
+        // 샘플 인덱스로 매핑 (샘플 외 항목은 1차 키워드 그대로 유지)
+        const sampleTexts = sample.map(c => c.text || "");
+        const updated = sentimentItems.map(it => {
+          const si = sampleTexts.indexOf(it.text);
+          return {
+            ...it,
+            keywords: si >= 0 && aiResults[si]?.length
+              ? aiResults[si]
+              : it.keywords,
+          };
+        });
+        setAnalysis(buildCommentAnalysis(updated));
+        setAiDone(true);
+      })
+      .catch(() => { /* 타임아웃/실패 시 1차 분석 유지 */ })
+      .finally(() => {
+        clearTimeout(timer);
+        if (!cancelled) setAiRefining(false);
+      });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timer);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commentCount]);
+
+  if (!analysis) return null;
+
+  return (
+    <GlassCard className="p-6">
+      {/* ── 헤더 ── */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-5 border-b border-gray-100 pb-4 gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-gray-400" /> {title}
+          </h4>
+          {aiRefining && (
+            <span className="flex items-center gap-1 text-[10px] text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full">
+              <RefreshCw className="w-2.5 h-2.5 animate-spin" /> AI 키워드 보강 중...
+            </span>
+          )}
+          {aiDone && !aiRefining && (
+            <span className="text-[10px] text-indigo-400 bg-indigo-50 px-2 py-0.5 rounded-full">
+              ✦ AI 보강 완료
+            </span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-md font-medium border border-green-100 flex items-center gap-1">
+            <Smile className="w-3 h-3" /> 긍정 {analysis.posRate}%
+          </span>
+          <span className="text-xs bg-red-50 text-red-700 px-2 py-1 rounded-md font-medium border border-red-100 flex items-center gap-1">
+            <Frown className="w-3 h-3" /> 부정 {100 - analysis.posRate}%
+          </span>
+        </div>
+      </div>
+
+      {/* ── 분석 결과 ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-5 mb-6 items-start">
+        {/* 감성 도넛 차트 */}
+        <div className="flex flex-col gap-3 bg-gray-50 rounded-xl p-4 border border-gray-100">
+          <h5 className="text-xs font-bold text-gray-700">댓글 감성 분포</h5>
+          <div className="relative">
+            <div style={{ height: 150 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <RechartsPieChart>
+                  <Pie
+                    data={[
+                      { name: "긍정", value: analysis.posRate },
+                      { name: "부정", value: 100 - analysis.posRate },
+                    ]}
+                    cx="50%" cy="50%"
+                    innerRadius={44} outerRadius={65}
+                    startAngle={90} endAngle={-270}
+                    dataKey="value" paddingAngle={3}
+                  >
+                    <Cell fill="#4ade80" stroke="white" strokeWidth={2} />
+                    <Cell fill="#f87171" stroke="white" strokeWidth={2} />
+                  </Pie>
+                </RechartsPieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <span className="text-2xl font-bold text-gray-900">{analysis.posRate}%</span>
+              <span className="text-[10px] text-gray-400">긍정률</span>
+            </div>
+          </div>
+          <div className="h-2 rounded-full bg-red-200 overflow-hidden">
+            <div className="h-full bg-green-400 rounded-full transition-all duration-700" style={{ width: `${analysis.posRate}%` }} />
+          </div>
+          <div className="flex justify-between text-[11px] font-semibold">
+            <span className="flex items-center gap-1 text-green-700">
+              <Smile className="w-3.5 h-3.5" /> 긍정 {analysis.posRate}%
+            </span>
+            <span className="flex items-center gap-1 text-red-500">
+              {100 - analysis.posRate}% 부정 <Frown className="w-3.5 h-3.5" />
+            </span>
+          </div>
+          <p className="text-[10px] text-gray-400 text-center border-t border-gray-100 pt-2">
+            분석 대상 {analysis.textTotal.toLocaleString()}건
+          </p>
+        </div>
+
+        {/* 키워드 버블 차트 */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <h5 className="text-xs font-bold text-gray-700">
+              주요 언급 키워드
+              <span className="text-gray-400 font-normal ml-1">({analysis.keywords.length}개)</span>
+            </h5>
+            <div className="flex items-center gap-3 text-[10px] text-gray-500">
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-green-400 inline-block" />긍정
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-full bg-red-400 inline-block" />부정
+              </span>
+              <span className="text-gray-300">· 크기 = 언급 빈도</span>
+            </div>
+          </div>
+          {analysis.keywords.length > 0
+            ? <CommentKeywordBubbles keywords={analysis.keywords} />
+            : <div className="flex items-center justify-center h-[120px] text-sm text-gray-400">추출된 키워드가 없습니다.</div>
+          }
+        </div>
+      </div>
+
+      {/* 댓글 목록 (토글) */}
+      {analysis.comments.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowComments(p => !p)}
+            className="flex items-center gap-1.5 text-[11px] text-gray-500 hover:text-gray-700 mb-3"
+          >
+            {showComments
+              ? <><ChevronUp className="w-3.5 h-3.5" /> 댓글 목록 접기</>
+              : <><ChevronDown className="w-3.5 h-3.5" /> 댓글 목록 보기 ({analysis.comments.length}건)</>
+            }
+          </button>
+          {showComments && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[320px] overflow-y-auto pr-1">
+              {analysis.comments.map((c, i) => (
+                <div key={i} className="bg-white border border-gray-100 hover:border-gray-200 rounded-xl p-4 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {c.author && <span className="text-[10px] font-medium text-gray-500">{c.author}</span>}
+                      {c.date && <span className="text-[10px] font-mono text-gray-400">{c.date}</span>}
+                    </div>
+                    <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                      c.sentiment === "positive" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"
+                    )}>
+                      {c.sentiment === "positive" ? "😊 긍정" : "😞 부정"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-800 leading-snug">{c.text}</p>
+                  <div className="flex flex-wrap gap-1 pt-2 border-t border-gray-50">
+                    {c.keywords.map((kw, j) => (
+                      <span key={j} className={cn("text-[10px] px-2 py-0.5 rounded-full font-medium",
+                        c.sentiment === "positive" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"
+                      )}>#{kw}</span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </GlassCard>
+  );
 }
 
 // ── 날짜 포맷 헬퍼 ──────────────────────────────────────────────
@@ -399,6 +796,7 @@ function CommentsModal({
 export default function AwarenessPage() {
   const params = useParams();
   const campaignId = params.id as Id<"campaigns">;
+  const { isAdmin } = useAuth();
   const { refreshTrigger } = useRefresh();
   const [lastRefresh, setLastRefresh] = useState(0);
 
@@ -436,6 +834,7 @@ export default function AwarenessPage() {
   ];
 
   const [cumulativeVisibleItems, setCumulativeVisibleItems] = useState<Record<string, boolean>>(DEFAULT_VISIBLE_ITEMS);
+  const [cumulativeSaved, setCumulativeSaved] = useState(false);
   const [cumulativeItemOrder, setCumulativeItemOrder] = useState<string[]>(DEFAULT_ITEM_ORDER);
   const [showCumulativeSettings, setShowCumulativeSettings] = useState(false);
 
@@ -752,9 +1151,11 @@ export default function AwarenessPage() {
       const data = await res.json();
       if (data.commentsList !== undefined) {
         setCommentModal(prev => prev ? { ...prev, commentsList: data.commentsList, isLoading: false, error: data.error } : null);
-        // YouTube 영상인 경우 댓글을 Convex에 저장
+        // 댓글을 Convex에 저장 (YouTube / 바이럴 공통)
         if (modal.type === "yt") {
           await updateYouTubeVideo({ videoId: modal.id as Id<"youtubeVideos">, updates: { commentsList: data.commentsList } });
+        } else if (modal.type === "viral") {
+          await updateViralRow({ viralId: modal.id as Id<"viralContents">, updates: { commentsList: data.commentsList } });
         }
       } else {
         setCommentModal(prev => prev ? { ...prev, isLoading: false, error: data.error || "수집 실패" } : null);
@@ -779,6 +1180,8 @@ export default function AwarenessPage() {
             setCommentModal(prev => prev ? { ...prev, commentsList: data.commentsList, isLoading: false, error: data.error } : null);
             if (commentModal.type === "yt") {
               await updateYouTubeVideo({ videoId: commentModal.id as Id<"youtubeVideos">, updates: { commentsList: data.commentsList } });
+            } else if (commentModal.type === "viral") {
+              await updateViralRow({ viralId: commentModal.id as Id<"viralContents">, updates: { commentsList: data.commentsList } });
             }
           } else {
             setCommentModal(prev => prev ? { ...prev, isLoading: false, error: data.error || "수집 실패" } : null);
@@ -803,10 +1206,14 @@ export default function AwarenessPage() {
       for (const vid of unFetched) {
         setAutoFetchingIds(prev => new Set(prev).add(vid._id));
         try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 12000); // 12초 타임아웃
           const res = await fetch("/api/fetch-comments", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url: `https://youtube.com/watch?v=${vid.youtubeId}` }),
+            signal: ctrl.signal,
           });
+          clearTimeout(t);
           const data = await res.json();
           if (data.commentsList?.length) {
             await updateYouTubeVideo({
@@ -814,7 +1221,7 @@ export default function AwarenessPage() {
               updates: { commentsList: data.commentsList },
             });
           }
-        } catch {}
+        } catch {} // 타임아웃·네트워크 오류 무시
         setAutoFetchingIds(prev => { const s = new Set(prev); s.delete(vid._id); return s; });
       }
     };
@@ -822,6 +1229,42 @@ export default function AwarenessPage() {
   // youtubeVideos 길이 변경 or 탭 전환 시에만 재실행
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, youtubeVideos.length]);
+
+  // ── 바이럴 탭 진입 시 댓글 자동 수집 ───────────────────────
+  useEffect(() => {
+    if (activeTab !== "viral" || viralContents.length === 0) return;
+    const unFetched = (viralContents as any[]).filter(
+      (v: any) => !v.commentsList?.length && v.url
+    );
+    if (unFetched.length === 0) return;
+
+    const fetchAll = async () => {
+      for (const row of unFetched) {
+        setAutoFetchingIds(prev => new Set(prev).add(row._id));
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 12000); // 12초 타임아웃
+          const res = await fetch("/api/fetch-comments", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: row.url }),
+            signal: ctrl.signal,
+          });
+          clearTimeout(t);
+          const data = await res.json();
+          if (data.commentsList?.length) {
+            await updateViralRow({
+              viralId: row._id as Id<"viralContents">,
+              updates: { commentsList: data.commentsList },
+            });
+          }
+        } catch {} // 타임아웃·네트워크 오류 무시, 다음 항목으로 진행
+        setAutoFetchingIds(prev => { const s = new Set(prev); s.delete(row._id); return s; });
+      }
+    };
+    fetchAll();
+  // 바이럴 컨텐츠 길이 변경 or 탭 전환 시에만 재실행
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, viralContents.length]);
 
   // ── KPI 저장 ─────────────────────────────────────────────────
   const saveKpiTarget = async () => {
@@ -957,16 +1400,18 @@ export default function AwarenessPage() {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-bold text-gray-900">전체 누적 성과</h3>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setShowItemOrder(v => !v)}
-                    className="text-xs flex items-center gap-1 text-gray-400 hover:text-fursys-red transition-colors">
-                    <ArrowUpDown className="w-3 h-3" /> 순서 편집
-                  </button>
-                  <button onClick={() => setShowCumulativeSettings(v => !v)}
-                    className="text-xs flex items-center gap-1 text-gray-400 hover:text-fursys-red transition-colors">
-                    <SlidersHorizontal className="w-3 h-3" /> 항목 선택
-                  </button>
-                </div>
+                {isAdmin && (
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setShowItemOrder(v => !v)}
+                      className="text-xs flex items-center gap-1 text-gray-400 hover:text-fursys-red transition-colors">
+                      <ArrowUpDown className="w-3 h-3" /> 순서 편집
+                    </button>
+                    <button onClick={() => setShowCumulativeSettings(v => !v)}
+                      className="text-xs flex items-center gap-1 text-gray-400 hover:text-fursys-red transition-colors">
+                      <SlidersHorizontal className="w-3 h-3" /> 항목 선택
+                    </button>
+                  </div>
+                )}
               </div>
               {showCumulativeSettings && (
                 <div className="bg-gray-50 p-3 rounded-lg mb-3 flex flex-wrap gap-2 border border-gray-200">
@@ -989,7 +1434,6 @@ export default function AwarenessPage() {
                         onChange={e => {
                           const next = { ...cumulativeVisibleItems, [item.key]: e.target.checked };
                           setCumulativeVisibleItems(next);
-                          persistCumulative(next, cumulativeItemOrder);
                         }}
                         className="accent-fursys-red w-3 h-3" />
                       <span>{item.label}</span>
@@ -1001,12 +1445,27 @@ export default function AwarenessPage() {
                         onChange={e => {
                           const next = { ...cumulativeVisibleItems, [col]: e.target.checked };
                           setCumulativeVisibleItems(next);
-                          persistCumulative(next, cumulativeItemOrder);
                         }}
                         className="accent-fursys-red w-3 h-3" />
                       <span className="bg-blue-50 px-1.5 py-0.5 rounded">{col}</span>
                     </label>
                   ))}
+                  <div className="w-full flex items-center justify-end gap-2 pt-1 mt-1 border-t border-gray-200">
+                    {cumulativeSaved && (
+                      <span className="text-[10px] text-green-500 font-medium flex items-center gap-1">
+                        ✓ 저장됨
+                      </span>
+                    )}
+                    <button
+                      onClick={() => {
+                        persistCumulative(cumulativeVisibleItems, cumulativeItemOrder);
+                        setCumulativeSaved(true);
+                        setTimeout(() => setCumulativeSaved(false), 2000);
+                      }}
+                      className="px-3 py-1 text-[11px] font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-all">
+                      저장
+                    </button>
+                  </div>
                 </div>
               )}
               {showItemOrder && (
@@ -1046,7 +1505,6 @@ export default function AwarenessPage() {
                             }
                             const nextOrder = allItems.filter(i => cumulativeItemOrder.includes(i));
                             setCumulativeItemOrder(nextOrder);
-                            persistCumulative(cumulativeVisibleItems, nextOrder);
                             setDraggedCumulativeItem(null);
                           }}
                           onDragEnd={() => setDraggedCumulativeItem(null)}
@@ -1064,6 +1522,22 @@ export default function AwarenessPage() {
                       );
                     });
                   })()}
+                  <div className="flex items-center justify-end gap-2 pt-1 mt-1 border-t border-gray-200">
+                    {cumulativeSaved && (
+                      <span className="text-[10px] text-green-500 font-medium flex items-center gap-1">
+                        ✓ 저장됨
+                      </span>
+                    )}
+                    <button
+                      onClick={() => {
+                        persistCumulative(cumulativeVisibleItems, cumulativeItemOrder);
+                        setCumulativeSaved(true);
+                        setTimeout(() => setCumulativeSaved(false), 2000);
+                      }}
+                      className="px-3 py-1 text-[11px] font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-all">
+                      저장
+                    </button>
+                  </div>
                 </div>
               )}
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -1296,16 +1770,18 @@ export default function AwarenessPage() {
                 </div>
               )}
               <div className="flex-1" />
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
-                  onClick={() => setShowConfig({ type: "digital", source: "excel" })}>
-                  <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
-                </Button>
-                <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0b7a45] text-white border-0"
-                  onClick={() => setShowConfig({ type: "digital", source: "sheet" })}>
-                  <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
-                </Button>
-              </div>
+              {isAdmin && (
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
+                    onClick={() => setShowConfig({ type: "digital", source: "excel" })}>
+                    <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
+                  </Button>
+                  <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0b7a45] text-white border-0"
+                    onClick={() => setShowConfig({ type: "digital", source: "sheet" })}>
+                    <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1481,16 +1957,18 @@ export default function AwarenessPage() {
                     </select>
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100 h-[32px]"
-                    onClick={() => setShowMediaColOrder(v => !v)}>
-                    <ArrowUpDown className="w-3.5 h-3.5 mr-1.5" /> 컬럼 순서
-                  </Button>
-                  <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100 h-[32px]"
-                    onClick={() => setShowColSettings(v => !v)}>
-                    <SlidersHorizontal className="w-3.5 h-3.5 mr-1.5" /> 컬럼 설정
-                  </Button>
-                </div>
+                {isAdmin && (
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100 h-[32px]"
+                      onClick={() => setShowMediaColOrder(v => !v)}>
+                      <ArrowUpDown className="w-3.5 h-3.5 mr-1.5" /> 컬럼 순서
+                    </Button>
+                    <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100 h-[32px]"
+                      onClick={() => setShowColSettings(v => !v)}>
+                      <SlidersHorizontal className="w-3.5 h-3.5 mr-1.5" /> 컬럼 설정
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1722,23 +2200,25 @@ export default function AwarenessPage() {
               <StatCard label="누적 조회수"          value={fmt(ytTotalViews)} />
               <StatCard label="누적 좋아요"           value={fmt(ytTotalLikes)} />
               <StatCard label="누적 댓글"             value={fmt(ytTotalComments)} />
-              <StatCard label="조회 대비 인게이지먼트" value={pct(ytEngagePct)}
+              <StatCard label="조회 대비 인게이지먼트" value={pct2(ytEngagePct)}
                 sub={`(좋아요+댓글) / 조회 × 100`} />
             </div>
           )}
 
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-bold text-gray-900">캠페인 연계 광고 영상</h2>
-            <div className="flex gap-2 items-center">
-              <Input value={newYoutubeUrl} onChange={e => setNewYoutubeUrl(e.target.value)}
-                placeholder="유튜브 영상 URL 입력..."
-                className="h-8 w-64 bg-white border-gray-200 text-xs text-gray-900" />
-              <Button size="sm" onClick={handleAddYoutube} disabled={isAddingYoutube}
-                className="h-8 bg-fursys-red hover:bg-red-700 text-white">
-                {isAddingYoutube ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />}
-                추가/수집
-              </Button>
-            </div>
+            {isAdmin && (
+              <div className="flex gap-2 items-center">
+                <Input value={newYoutubeUrl} onChange={e => setNewYoutubeUrl(e.target.value)}
+                  placeholder="유튜브 영상 URL 입력..."
+                  className="h-8 w-64 bg-white border-gray-200 text-xs text-gray-900" />
+                <Button size="sm" onClick={handleAddYoutube} disabled={isAddingYoutube}
+                  className="h-8 bg-fursys-red hover:bg-red-700 text-white">
+                  {isAddingYoutube ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <LinkIcon className="w-3 h-3 mr-1" />}
+                  추가/수집
+                </Button>
+              </div>
+            )}
           </div>
 
           {youtubeVideos.length === 0 ? (
@@ -1863,6 +2343,14 @@ export default function AwarenessPage() {
               })}
             </div>
           )}
+
+          {/* 댓글 종합 분석 */}
+          {youtubeVideos.some((v: any) => v.commentsList?.length) && (
+            <CommentAnalysisSection
+              title="광고 영상 댓글 종합 분석"
+              comments={youtubeVideos.flatMap((v: any) => v.commentsList || [])}
+            />
+          )}
         </div>
       )}
 
@@ -1877,7 +2365,7 @@ export default function AwarenessPage() {
               <StatCard label="누적 조회수"          value={fmt(viralTotalViews)} />
               <StatCard label="누적 좋아요"           value={fmt(viralTotalLikes)} />
               <StatCard label="누적 댓글"             value={fmt(viralTotalComments)} />
-              <StatCard label="조회 대비 인게이지먼트" value={pct(viralEngagePct)}
+              <StatCard label="조회 대비 인게이지먼트" value={pct2(viralEngagePct)}
                 sub="(좋아요+댓글) / 조회 × 100" />
             </div>
           )}
@@ -1898,16 +2386,18 @@ export default function AwarenessPage() {
                 </select>
               </div>
             </div>
-            <div className="flex gap-2">
-              <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
-                onClick={() => setShowConfig({ type: "viral", source: "excel" })}>
-                <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
-              </Button>
-              <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0b7a45] text-white border-0"
-                onClick={() => setShowConfig({ type: "viral", source: "sheet" })}>
-                <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
-              </Button>
-            </div>
+            {isAdmin && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100"
+                  onClick={() => setShowConfig({ type: "viral", source: "excel" })}>
+                  <UploadCloud className="w-4 h-4 mr-2" /> 엑셀 파일
+                </Button>
+                <Button size="sm" className="bg-[#0F9D58] hover:bg-[#0b7a45] text-white border-0"
+                  onClick={() => setShowConfig({ type: "viral", source: "sheet" })}>
+                  <FileSpreadsheet className="w-4 h-4 mr-2" /> 구글 시트
+                </Button>
+              </div>
+            )}
           </div>
 
           {showConfig?.type === "viral" && (
@@ -1975,6 +2465,8 @@ export default function AwarenessPage() {
                   {filteredViral.map(row => {
                     const isEditing = editingViralId === row._id;
                     const eng = row.views > 0 ? ((row.likes + row.comments) / row.views * 100).toFixed(2) : "0.00";
+                    const isAutoFetchingViral = autoFetchingIds.has(row._id);
+                    const hasComments = (row.commentsList?.length ?? 0) > 0;
                     return (
                       <TableRow key={row._id} className="border-gray-100 hover:bg-gray-50 text-sm">
                         <TableCell className="text-gray-400 font-mono text-xs">{row.dateLabel}</TableCell>
@@ -2014,10 +2506,18 @@ export default function AwarenessPage() {
                         <TableCell className="text-right font-mono text-gray-700">
                           {isEditing ? (
                             <Input placeholder="Comms" value={editViralForm.comments} onChange={e => setEditViralForm({ ...editViralForm, comments: e.target.value })} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200 ml-auto" />
+                          ) : isAutoFetchingViral ? (
+                            <div className="flex items-center gap-1 ml-auto text-gray-400 justify-end">
+                              <RefreshCw className="w-3 h-3 animate-spin" />
+                              <span className="text-[10px]">수집 중</span>
+                            </div>
                           ) : (
                             <button
-                              onClick={() => setCommentModal({ type: "viral", id: row._id, title: row.title !== "-" ? row.title : row.creator, url: row.url, commentsList: row.commentsList || [], isLoading: true })}
-                              className="flex items-center gap-1 ml-auto text-gray-700 hover:text-fursys-red transition-colors">
+                              onClick={() => setCommentModal({ type: "viral", id: row._id, title: row.title !== "-" ? row.title : row.creator, url: row.url, commentsList: row.commentsList || [], isLoading: !hasComments })}
+                              className={cn(
+                                "flex items-center gap-1 ml-auto transition-colors",
+                                hasComments ? "text-indigo-500 hover:text-indigo-700" : "text-gray-700 hover:text-fursys-red"
+                              )}>
                               <MessageSquare className="w-3.5 h-3.5" />
                               {fmt(row.comments)}
                             </button>
@@ -2051,6 +2551,14 @@ export default function AwarenessPage() {
               </Table>
             )}
           </GlassCard>
+
+          {/* 바이럴 댓글 종합 분석 */}
+          {viralContents.some((v: any) => v.commentsList?.length) && (
+            <CommentAnalysisSection
+              title="바이럴 컨텐츠 댓글 종합 분석"
+              comments={viralContents.flatMap((v: any) => v.commentsList || [])}
+            />
+          )}
         </div>
       )}
 

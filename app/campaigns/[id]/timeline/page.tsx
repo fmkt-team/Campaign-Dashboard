@@ -10,6 +10,7 @@ import { GlassCard } from "@/components/glass-card";
 import { Button } from "@/components/ui/button";
 import { Plus, X, Check, ArrowRight, Trash2, Target, Pencil, FileSpreadsheet, Link, Loader2, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
 
 // ─── 날짜 유틸 ────────────────────────────────────────────────────────────────
 const MS_DAY   = 86400000;
@@ -212,7 +213,7 @@ function ActivityEditPopup({ activity, actIdx, onSave, onClose }: {
 }
 
 // ─── 드래그 간트 바 ──────────────────────────────────────────────────────────
-function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, onSave, onClickEdit, onClear, onSaveLabel, isDraggingRef }: {
+function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, onSave, onClickEdit, onClear, onSaveLabel, isDraggingRef, readOnly }: {
   task: any; chartStartTs: number; totalDays: number; containerW: number;
   rowH: number; barColor: string;
   onSave: (id: string, s: string, e: string) => void;
@@ -220,6 +221,7 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
   onClear: (id: string) => void;
   onSaveLabel?: (id: string, label: string) => void;
   isDraggingRef?: React.MutableRefObject<boolean>;
+  readOnly?: boolean;
 }) {
   const pxDay = containerW / totalDays;
   const [ls, setLs] = useState(task.startDate);
@@ -259,9 +261,9 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
   }, [pxDay, task, onSave, onClickEdit, isDraggingRef]);
 
   return (
-    <div className="absolute top-1/2 -translate-y-1/2 rounded-lg cursor-grab select-none group/b pointer-events-auto z-10 hover:z-[60]"
+    <div className={cn("absolute top-1/2 -translate-y-1/2 rounded-lg select-none group/b pointer-events-auto z-10 hover:z-[60]", readOnly ? "cursor-default" : "cursor-grab")}
       style={{ left: leftPx, width: widthPx, height: rowH - 10, backgroundColor: barColor }}
-      onMouseDown={e => drag(e, "move")}
+      onMouseDown={readOnly ? undefined : e => drag(e, "move")}
     >
       {/* 툴팁 */}
       <span className="absolute z-50 invisible opacity-0 group-hover/b:visible group-hover/b:opacity-100 bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-md whitespace-nowrap transition-all pointer-events-none bottom-full mb-1 left-1/2 -translate-x-1/2">
@@ -269,13 +271,15 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
         <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900" />
       </span>
 
-      <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90 z-20"
-        onMouseDown={e => drag(e, "left")}><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+      {!readOnly && (
+        <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90 z-20"
+          onMouseDown={e => drag(e, "left")}><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+      )}
 
-      {/* 바 텍스트/날짜 - 클릭하면 팝업 편집 */}
-      <div className="absolute inset-0 flex items-center justify-center px-2 cursor-pointer"
-        onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
-        onClick={(e) => { e.stopPropagation(); onClickEdit(task); }}>
+      {/* 바 텍스트/날짜 */}
+      <div className={cn("absolute inset-0 flex items-center justify-center px-2", !readOnly && "cursor-pointer")}
+        onMouseDown={readOnly ? undefined : (e) => { e.stopPropagation(); e.preventDefault(); }}
+        onClick={readOnly ? undefined : (e) => { e.stopPropagation(); onClickEdit(task); }}>
         {task.barLabel ? (
           <span className="text-xs text-gray-900 font-semibold truncate">{task.barLabel} | {fmtMD(ls)}{ls !== le ? `~${fmtMD(le)}` : ""}</span>
         ) : (
@@ -288,31 +292,35 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
         <div className="absolute left-0 top-0 h-full rounded-lg bg-white/90 pointer-events-none"
           style={{ width: `${task.progress}%` }} />
       )}
-      <div className="absolute right-0 top-0 h-full w-2.5 cursor-ew-resize rounded-r-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90 z-20"
-        onMouseDown={e => drag(e, "right")}><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+      {!readOnly && (
+        <div className="absolute right-0 top-0 h-full w-2.5 cursor-ew-resize rounded-r-lg flex items-center justify-center opacity-0 group-hover/b:opacity-100 transition-opacity bg-white/90 z-20"
+          onMouseDown={e => drag(e, "right")}><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+      )}
       {/* X 삭제 버튼 - 막대 위에 호버 시 표시 */}
-      <button
-        onMouseDown={e => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); onClear(task._id); }}
-        className="absolute -top-2 -right-2 z-30 opacity-0 group-hover/b:opacity-100 transition-opacity w-4 h-4 rounded-full bg-white/90 border border-white/20 flex items-center justify-center text-gray-900/60 hover:text-red-400 hover:border-red-400/60"
-        title="날짜 초기화">
-        <X className="w-2.5 h-2.5" />
-      </button>
+      {!readOnly && (
+        <button
+          onMouseDown={e => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onClear(task._id); }}
+          className="absolute -top-2 -right-2 z-30 opacity-0 group-hover/b:opacity-100 transition-opacity w-4 h-4 rounded-full bg-white/90 border border-white/20 flex items-center justify-center text-gray-900/60 hover:text-red-400 hover:border-red-400/60"
+          title="날짜 초기화">
+          <X className="w-2.5 h-2.5" />
+        </button>
+      )}
     </div>
   );
 }
 
 // ─── 인라인 편집 ─────────────────────────────────────────────────────────────
-function InlineEdit({ value, onSave, onEnter, placeholder, className, style }: {
+function InlineEdit({ value, onSave, onEnter, placeholder, className, style, readOnly }: {
   value: string; onSave: (v: string) => void; onEnter?: (v: string) => void;
-  placeholder?: string; className?: string; style?: React.CSSProperties;
+  placeholder?: string; className?: string; style?: React.CSSProperties; readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const spanRef = useRef<HTMLSpanElement>(null);
 
   const commit = () => { onSave(draft); setEditing(false); };
-  
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") { commit(); onEnter?.(draft); }
     if (e.key === "Escape") setEditing(false);
@@ -330,7 +338,7 @@ function InlineEdit({ value, onSave, onEnter, placeholder, className, style }: {
     }
   };
 
-  if (editing) return (
+  if (editing && !readOnly) return (
     <div className="w-full relative flex-1">
       <span ref={spanRef} className="inline-edit-trigger hidden" />
       <input autoFocus value={draft}
@@ -342,8 +350,8 @@ function InlineEdit({ value, onSave, onEnter, placeholder, className, style }: {
     </div>
   );
   return (
-    <span ref={spanRef} onClick={() => { setDraft(value); setEditing(true); }}
-      className={cn("inline-edit-trigger cursor-text block flex-1 rounded px-2 py-0.5 hover:bg-white/10 text-xs truncate min-h-[22px]", !value && "text-gray-900/25 italic", className)}
+    <span ref={spanRef} onClick={readOnly ? undefined : () => { setDraft(value); setEditing(true); }}
+      className={cn("inline-edit-trigger block flex-1 rounded px-2 py-0.5 text-xs truncate min-h-[22px]", !readOnly && "cursor-text hover:bg-white/10", !value && "text-gray-900/25 italic", className)}
       style={style}>
       {value || placeholder}
     </span>
@@ -388,12 +396,72 @@ function PasteModal({ rows, onApply, onClose }: {
 
 // ─── KPI 달성률 패널 ─────────────────────────────────────────────────────────
 function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaigns">; campaign: any }) {
-  const digitalKpis = useQuery(api.awareness.getDigitalKpis, { campaignId }) ?? [];
-  const viralContents = useQuery(api.awareness.getViralContents, { campaignId }) ?? [];
-  const youtubeVideos = useQuery(api.awareness.getYouTubeVideos, { campaignId }) ?? [];
-  const interestActivities = useQuery(api.interest.getInterestActivities, { campaignId }) ?? [];
-  const trafficWeekly = useQuery(api.inflow.getTrafficWeekly, { campaignId }) ?? [];
-  const updateSettings = useMutation(api.campaigns.updateCampaignSettings);
+  const digitalKpis        = useQuery(api.awareness.getDigitalKpis,     { campaignId }) ?? [];
+  const viralContents      = useQuery(api.awareness.getViralContents,    { campaignId }) ?? [];
+  const youtubeVideos      = useQuery(api.awareness.getYouTubeVideos,    { campaignId }) ?? [];
+  const interestActivities = useQuery(api.interest.getInterestActivities,{ campaignId }) ?? [];
+  const updateSettings     = useMutation(api.campaigns.updateCampaignSettings);
+  const { isAdmin } = useAuth();
+  const { refreshTrigger } = useRefresh();
+  const [lastKpiRefresh, setLastKpiRefresh] = useState(0);
+
+  // ── GA4 Property ID: Convex 우선 → localStorage fallback ─────────────────
+  const resolvedGa4Id = useMemo(() => {
+    if (campaign?.microGa4Id) return campaign.microGa4Id as string;
+    try { return localStorage.getItem(`microGa4Id_${campaignId}`) ?? ""; } catch { return ""; }
+  }, [campaign?.microGa4Id, campaignId]);
+
+  // ── 마이크로사이트 KPI: 캠페인 전체 기간 세션 수 직접 GA4 호출 ──────────────
+  // 날짜 필터와 완전 독립 — campaignStartDate ~ 오늘 고정
+  const [micrositeKpiSessions, setMicrositeKpiSessions] = useState<number | null>(null);
+  const [kpiSyncing, setKpiSyncing] = useState(false);
+  // useRef로 syncing 여부 추적 → useCallback 클로저 stale 문제 방지
+  const kpiSyncingRef = useRef(false);
+
+  const fetchMicrositeKpi = useCallback(async () => {
+    if (!resolvedGa4Id || !campaign?.startDate || kpiSyncingRef.current) return;
+    kpiSyncingRef.current = true;
+    setKpiSyncing(true);
+    try {
+      const today   = new Date().toISOString().split("T")[0];
+      const endDate = campaign.endDate && campaign.endDate < today ? campaign.endDate : today;
+      const res = await fetch("/api/ga4-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startDate: campaign.startDate,
+          endDate,
+          timeUnit: "month",
+          propertyId: resolvedGa4Id,
+          metrics: [{ name: "sessions" }],
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.rows?.length) {
+        const total = data.rows.reduce((s: number, r: any) => s + (r.sessions || 0), 0);
+        setMicrositeKpiSessions(Math.round(total));
+      } else if (res.ok) {
+        setMicrositeKpiSessions(0);
+      }
+    } catch (e) { console.error("[KPI GA4] fetch 실패:", e); }
+    finally { kpiSyncingRef.current = false; setKpiSyncing(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedGa4Id, campaign?.startDate, campaign?.endDate]);
+
+  // 페이지 최초 진입 시 자동 fetch (GA4 ID 또는 캠페인 시작일이 준비되면)
+  useEffect(() => {
+    fetchMicrositeKpi();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedGa4Id, campaign?.startDate]);
+
+  // "모든 데이터 업데이트" 버튼 클릭 시 KPI GA4 재호출
+  useEffect(() => {
+    if (refreshTrigger !== lastKpiRefresh) {
+      setLastKpiRefresh(refreshTrigger);
+      fetchMicrositeKpi();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTrigger, lastKpiRefresh]);
 
   const [editingKpi, setEditingKpi] = useState(false);
   const [kpiDraft, setKpiDraft] = useState<any[]>([]);
@@ -417,8 +485,8 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
     popup: interestActivities
       .filter((r: any) => r.activityType === "팝업")
       .reduce((s: number, r: any) => s + (r.participants || 0), 0),
-    // 4) 마이크로사이트 유입: trafficWeekly의 users 합산
-    microsite: trafficWeekly.reduce((s: number, r: any) => s + (r.users || 0), 0),
+    // 4) 마이크로사이트 유입: 캠페인 전체 기간 GA4 세션 수 (직접 fetch, 날짜 필터와 독립)
+    microsite: micrositeKpiSessions ?? 0,
   };
 
   const getKpiCurrent = (kpi: any) => {
@@ -432,7 +500,7 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
       { label: "캠페인 노출", target: 42000000, current: 0, category: "exposure", description: "매체 조회수 + 바이럴 + YouTube 조회수" },
       { label: "이벤트 신청", target: 3000, current: 0, category: "event", description: "팝업 외 활동 참여자 수 합산" },
       { label: "팝업스토어 집객", target: 6000, current: 0, category: "popup", description: "팝업 활동 참여자 수 합산" },
-      { label: "마이크로사이트 유입", target: 100000, current: 0, category: "microsite", description: "주간 트래픽 방문자(users) 합산" },
+      { label: "마이크로사이트 유입", target: 100000, current: 0, category: "microsite", description: "캠페인 기간 누적 세션 수 (GA4 직접 연동)" },
     ];
     await updateSettings({ id: campaign._id, kpiTargets: defaults });
   };
@@ -477,9 +545,11 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
           <Target className="w-4 h-4 text-indigo-500" />
           <h2 className="text-lg font-bold text-gray-900">KPI 달성률</h2>
         </div>
-        <Button onClick={startEdit} variant="ghost" size="sm" className="text-gray-400 hover:text-gray-700 gap-1.5 text-xs">
-          <Pencil className="w-3 h-3" /> 목표 수정
-        </Button>
+        {isAdmin && (
+          <Button onClick={startEdit} variant="ghost" size="sm" className="text-gray-400 hover:text-gray-700 gap-1.5 text-xs">
+            <Pencil className="w-3 h-3" /> 목표 수정
+          </Button>
+        )}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {kpiTargets.slice(0, 4).map((kpi: any, idx: number) => {
@@ -487,11 +557,25 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
           const pct = kpi.target > 0 ? Math.min(100, (current / kpi.target) * 100) : 0;
           const colorClass = pct >= 100 ? "text-green-500" : pct >= 60 ? "text-indigo-500" : pct >= 30 ? "text-amber-500" : "text-gray-400";
           const barColor = pct >= 100 ? "bg-green-500" : pct >= 60 ? "bg-indigo-500" : pct >= 30 ? "bg-amber-500" : "bg-gray-300";
+          const isMicrosite = kpi.category === "microsite";
           return (
             <GlassCard key={idx} className="p-5 relative overflow-hidden">
               <div className="flex items-start justify-between mb-2">
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">{kpi.label}</p>
-                <span className={`text-xl font-bold font-mono ${colorClass}`}>{pct.toFixed(1)}%</span>
+                <div className="flex items-center gap-1.5">
+                  {/* 마이크로사이트 카드 전용: GA4 새로고침 버튼 */}
+                  {isMicrosite && resolvedGa4Id && (
+                    <button
+                      onClick={fetchMicrositeKpi}
+                      disabled={kpiSyncing}
+                      title="GA4 데이터 새로고침 (캠페인 전체 기간)"
+                      className="p-1 rounded text-gray-300 hover:text-indigo-400 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <Loader2 className={`w-3 h-3 ${kpiSyncing ? "animate-spin text-indigo-400" : ""}`} />
+                    </button>
+                  )}
+                  <span className={`text-xl font-bold font-mono ${colorClass}`}>{pct.toFixed(1)}%</span>
+                </div>
               </div>
               <div className="flex items-baseline gap-2 mb-1">
                 <span className="text-2xl font-bold font-mono text-gray-900">{formatNum(current)}</span>
@@ -507,7 +591,7 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
       </div>
 
       {/* KPI 수정 모달 */}
-      {editingKpi && (
+      {isAdmin && editingKpi && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm">
           <div className="bg-white border border-gray-200 rounded-2xl p-6 w-[520px] max-h-[80vh] overflow-y-auto shadow-xl">
             <div className="flex items-center justify-between mb-4">
@@ -530,6 +614,22 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
                       <input type="number" value={kpi.current} onChange={e => { const d = [...kpiDraft]; d[i].current = Number(e.target.value); setKpiDraft(d); }}
                         className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 outline-none" />
                     </div>
+                  </div>
+                  {/* 자동 집계 카테고리 — GA4·매체 데이터와 연결 */}
+                  <div>
+                    <label className="text-[10px] text-gray-400 block mb-1">자동 집계 연결 <span className="text-indigo-400">(마이크로사이트 유입은 반드시 microsite 선택)</span></label>
+                    <select
+                      value={kpi.category || ""}
+                      onChange={e => { const d = [...kpiDraft]; d[i].category = e.target.value; setKpiDraft(d); }}
+                      className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 outline-none"
+                    >
+                      <option value="exposure">exposure — 캠페인 노출 (매체+바이럴+YouTube 조회수)</option>
+                      <option value="event">event — 이벤트 신청 (팝업 외 활동 참여자)</option>
+                      <option value="popup">popup — 팝업스토어 집객 (팝업 활동 참여자)</option>
+                      <option value="microsite">microsite — 마이크로사이트 유입 (GA4 세션)</option>
+                      <option value="awareness">awareness — 수동 입력만 사용</option>
+                      <option value="">기타 (수동 입력만 사용)</option>
+                    </select>
                   </div>
                   <input value={kpi.description || ""} onChange={e => { const d = [...kpiDraft]; d[i].description = e.target.value; setKpiDraft(d); }}
                     className="w-full bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-700 outline-none" placeholder="설명 (선택)" />
@@ -963,6 +1063,7 @@ export default function TimelinePage() {
   const id = params.id as string;
   const campaignId = id as Id<"campaigns">;
 
+  const { isAdmin, isViewer } = useAuth();
   const { refreshTrigger } = useRefresh();
   const [lastRefresh, setLastRefresh] = useState(0);
 
@@ -1029,8 +1130,8 @@ export default function TimelinePage() {
   const [dragItem, setDragItem] = useState<{type: "category"|"task", id: string}|null>(null);
   const [dragOverItem, setDragOverItem] = useState<{type: "category"|"task", id: string}|null>(null);
 
-  // 채널별 업무 타임라인 뷰 모드
-  const [timelineViewMode, setTimelineViewMode] = useState<"gantt" | "calendar">("gantt");
+  // 채널별 업무 타임라인 뷰 모드 — 뷰어는 Calendar 우선
+  const [timelineViewMode, setTimelineViewMode] = useState<"gantt" | "calendar">(isViewer ? "calendar" : "gantt");
 
   // 그래프 관리 모달 상태
   const [graphModalTaskId, setGraphModalTaskId] = useState<string | null>(null);
@@ -1148,7 +1249,17 @@ export default function TimelinePage() {
   // 全体 작업 목록을 순서대로 유지
   const allTasks = ganttTasks ?? [];
   const totalTasks  = allTasks.length;
-  const avgProgress = totalTasks ? Math.round(allTasks.reduce((s, t) => s + t.progress, 0) / totalTasks) : 0;
+  const hasTaskProgress = allTasks.some(t => t.progress > 0);
+  const taskAvgProgress = totalTasks ? Math.round(allTasks.reduce((s, t) => s + t.progress, 0) / totalTasks) : 0;
+  // 작업 진행률이 모두 0이면 캠페인 날짜 기반 진행률 사용
+  const dateProgress = (() => {
+    if (!campaign?.startDate) return 0;
+    const start = new Date(campaign.startDate).getTime();
+    const end   = campaign.endDate ? new Date(campaign.endDate).getTime() : start + 90 * 24 * 60 * 60 * 1000;
+    if (end <= start) return 0;
+    return Math.max(0, Math.min(100, Math.round((Date.now() - start) / (end - start) * 100)));
+  })();
+  const avgProgress = hasTaskProgress ? taskAvgProgress : dateProgress;
 
   // 카테고리별 그룹핑 + 순서 보존
   const grouped: { category: string; color: string; tasks: typeof allTasks }[] = [];
@@ -1358,8 +1469,9 @@ export default function TimelinePage() {
     setPasteRows(null);
   };
 
-  // 전역 Ctrl+V 감지 (입력창 제외)
+  // 전역 Ctrl+V 감지 (입력창 제외, 관리자만)
   useEffect(() => {
+    if (!isAdmin) return;
     const handler = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
@@ -1373,7 +1485,7 @@ export default function TimelinePage() {
     };
     window.addEventListener("paste", handler);
     return () => window.removeEventListener("paste", handler);
-  }, [year]);
+  }, [year, isAdmin]);
 
   // 구글 시트 연동 처리
   const handleSyncFromSheet = async () => {
@@ -1426,32 +1538,41 @@ export default function TimelinePage() {
                 )}
               </div>
             ) : <span className="text-gray-300">로딩 중...</span>}
-            <button
-              onClick={openDateEditor}
-              className="flex items-center gap-1.5 mt-2 text-xs text-gray-400 font-mono hover:text-gray-700 hover:bg-gray-100 px-2 py-1 rounded-lg transition-all group"
-            >
-              <CalendarDays className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100" />
-              {campaign?.startDate} ~ {campaign?.endDate || "미정"}
-            </button>
+            {isAdmin ? (
+              <button
+                onClick={openDateEditor}
+                className="flex items-center gap-1.5 mt-2 text-xs text-gray-400 font-mono hover:text-gray-700 hover:bg-gray-100 px-2 py-1 rounded-lg transition-all group"
+              >
+                <CalendarDays className="w-3.5 h-3.5 opacity-50 group-hover:opacity-100" />
+                {campaign?.startDate} ~ {campaign?.endDate || "미정"}
+              </button>
+            ) : (
+              <p className="mt-2 text-xs text-gray-400 font-mono px-2 py-1">
+                {campaign?.startDate} ~ {campaign?.endDate || "미정"}
+              </p>
+            )}
           </div>
           <div className="text-right">
             <p className="text-xs text-gray-400 mb-1">Today</p>
             <p className="text-xl font-mono text-gray-500">{todayStr.replace(/-/g, ".")}</p>
           </div>
         </GlassCard>
-        {totalTasks > 0 && (
-          <GlassCard className="min-w-[180px] flex flex-col justify-center p-6">
-            <p className="text-xs text-gray-400 mb-3">전체 진행률</p>
-            <p className="text-4xl font-bold font-mono text-gray-900 mb-2">{avgProgress}%</p>
-            <div className="w-full h-1.5 rounded-full bg-gray-100">
-              <div className="h-full rounded-full bg-gray-900 transition-all" style={{ width: `${avgProgress}%` }} />
-            </div>
-          </GlassCard>
-        )}
+        <GlassCard className="min-w-[180px] flex flex-col justify-center p-6">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-gray-400">전체 진행률</p>
+            {!hasTaskProgress && (
+              <span className="text-[9px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">일정 기준</span>
+            )}
+          </div>
+          <p className="text-4xl font-bold font-mono text-gray-900 mb-2">{avgProgress}%</p>
+          <div className="w-full h-1.5 rounded-full bg-gray-100">
+            <div className="h-full rounded-full bg-gray-900 transition-all" style={{ width: `${avgProgress}%` }} />
+          </div>
+        </GlassCard>
       </div>
 
       {/* 캠페인 기간 편집 모달 */}
-      {showDateEditor && campaign && (
+      {isAdmin && showDateEditor && campaign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/90 backdrop-blur-sm"
           onClick={() => setShowDateEditor(false)}>
           <div className="bg-white border border-gray-200 rounded-2xl p-6 w-80 shadow-xl"
@@ -1492,35 +1613,37 @@ export default function TimelinePage() {
       <div>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-bold text-gray-900">캠페인 단계 (Phases)</h2>
-          <div className="flex items-center gap-2">
-            <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleExtractPhases} />
-            <Button 
-              onClick={() => fileInputRef.current?.click()} 
-              size="sm" 
-              disabled={isExtracting}
-              className="bg-indigo-600 hover:bg-indigo-700 text-gray-900 gap-2 border-0"
-            >
-              {isExtracting ? (
-                <span className="font-mono animate-pulse">분석 중...</span>
-              ) : (
-                <>✨ 구조도 AI 스캔</>
-              )}
-            </Button>
-            <Button
-              onClick={() => upsertPhase({
-                campaignId,
-                title: `Phase ${((phases?.length || 0) + 1)}`,
-                subtitle: "새로운 단계 목표",
-                sortOrder: phases?.length || 0,
-                color: ["#3b82f6","#8b5cf6","#f59e0b","#10b981","#ec4899","#f97316"][(phases?.length || 0) % 6],
-                items: [{ name: "새 이벤트", description: "주요 내용 입력" }]
-              })}
-              size="sm"
-              className="bg-white/10 text-gray-900 hover:bg-white/20 gap-2 border border-white/20"
-            >
-              <Plus className="w-4 h-4" /> 단계 추가
-            </Button>
-          </div>
+          {isAdmin && (
+            <div className="flex items-center gap-2">
+              <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleExtractPhases} />
+              <Button
+                onClick={() => fileInputRef.current?.click()}
+                size="sm"
+                disabled={isExtracting}
+                className="bg-indigo-600 hover:bg-indigo-700 text-gray-900 gap-2 border-0"
+              >
+                {isExtracting ? (
+                  <span className="font-mono animate-pulse">분석 중...</span>
+                ) : (
+                  <>✨ 구조도 AI 스캔</>
+                )}
+              </Button>
+              <Button
+                onClick={() => upsertPhase({
+                  campaignId,
+                  title: `Phase ${((phases?.length || 0) + 1)}`,
+                  subtitle: "새로운 단계 목표",
+                  sortOrder: phases?.length || 0,
+                  color: ["#3b82f6","#8b5cf6","#f59e0b","#10b981","#ec4899","#f97316"][(phases?.length || 0) % 6],
+                  items: [{ name: "새 이벤트", description: "주요 내용 입력" }]
+                })}
+                size="sm"
+                className="bg-white/10 text-gray-900 hover:bg-white/20 gap-2 border border-white/20"
+              >
+                <Plus className="w-4 h-4" /> 단계 추가
+              </Button>
+            </div>
+          )}
         </div>
 
         <div className="flex gap-4 overflow-x-auto pb-4">
@@ -1528,20 +1651,22 @@ export default function TimelinePage() {
             <React.Fragment key={phase._id}>
               {/* 단계 카드 */}
               <GlassCard
-                className="min-w-[280px] p-6 relative group border transition-all"
+                className="min-w-[220px] p-4 relative group border transition-all"
                 style={{
                   backgroundColor: (phase.color || "#3b82f6") + "15",
                   borderColor: (phase.color || "#3b82f6") + "40"
                 }}
               >
-                <button
-                  onClick={() => deletePhase({ id: phase._id })}
-                  className="absolute top-3 right-3 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  style={{ color: phase.color + "60" }}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-                <div className="text-center mb-6">
+                {isAdmin && (
+                  <button
+                    onClick={() => deletePhase({ id: phase._id })}
+                    className="absolute top-3 right-3 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                    style={{ color: phase.color + "60" }}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+                <div className="text-center mb-3">
                   <InlineEdit
                     value={phase.title}
                     placeholder="Phase 1"
@@ -1550,7 +1675,8 @@ export default function TimelinePage() {
                       subtitle: phase.subtitle, sortOrder: phase.sortOrder,
                       color: phase.color, items: phase.items
                     })}
-                    className="text-sm tracking-widest uppercase font-mono mb-1 text-center"
+                    readOnly={!isAdmin}
+                    className="text-xs tracking-widest uppercase font-mono mb-0.5 text-center"
                     style={{ color: phase.color + "80" }}
                   />
                   <InlineEdit
@@ -1561,12 +1687,13 @@ export default function TimelinePage() {
                       subtitle: v, sortOrder: phase.sortOrder,
                       color: phase.color, items: phase.items
                     })}
-                    className="text-lg font-bold text-center"
+                    readOnly={!isAdmin}
+                    className="text-sm font-bold text-center"
                     style={{ color: phase.color }}
                   />
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {phase.items.map((item, iOffset) => (
                     <div
                       key={iOffset}
@@ -1577,23 +1704,25 @@ export default function TimelinePage() {
                           : "bg-gray-50 border-gray-200"
                       )}
                     >
-                      <button
-                        onClick={() => {
-                          const newItems = [...phase.items];
-                          newItems.splice(iOffset, 1);
-                          upsertPhase({
-                            id: phase._id, campaignId: phase.campaignId, title: phase.title,
-                            subtitle: phase.subtitle, sortOrder: phase.sortOrder,
-                            color: phase.color, items: newItems
-                          });
-                        }}
-                        className="absolute top-2 right-2 text-gray-900/20 hover:text-red-400 opacity-0 group-hover/item:opacity-100"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
+                      {isAdmin && (
+                        <button
+                          onClick={() => {
+                            const newItems = [...phase.items];
+                            newItems.splice(iOffset, 1);
+                            upsertPhase({
+                              id: phase._id, campaignId: phase.campaignId, title: phase.title,
+                              subtitle: phase.subtitle, sortOrder: phase.sortOrder,
+                              color: phase.color, items: newItems
+                            });
+                          }}
+                          className="absolute top-2 right-2 text-gray-900/20 hover:text-red-400 opacity-0 group-hover/item:opacity-100"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
                       <div
-                        className="cursor-pointer mb-1 w-full"
-                        onDoubleClick={() => {
+                        className="mb-1 w-full"
+                        onDoubleClick={isAdmin ? () => {
                           const newItems = [...phase.items];
                           newItems[iOffset].isHighlighted = !newItems[iOffset].isHighlighted;
                           upsertPhase({
@@ -1601,7 +1730,7 @@ export default function TimelinePage() {
                             subtitle: phase.subtitle, sortOrder: phase.sortOrder,
                             color: phase.color, items: newItems
                           });
-                        }}
+                        } : undefined}
                       >
                         <InlineEdit
                           value={item.name}
@@ -1615,6 +1744,7 @@ export default function TimelinePage() {
                               color: phase.color, items: newItems
                             });
                           }}
+                          readOnly={!isAdmin}
                           className={cn(
                             "font-bold text-base",
                             item.isHighlighted ? "text-indigo-400" : "text-gray-900/90"
@@ -1633,24 +1763,27 @@ export default function TimelinePage() {
                             color: phase.color, items: newItems
                           });
                         }}
+                        readOnly={!isAdmin}
                         className="text-sm text-gray-900/50"
                       />
                     </div>
                   ))}
                   
-                  <button
-                    onClick={() => {
-                      const newItems = [...phase.items, { name: "추가 항목", description: "세부 내용" }];
-                      upsertPhase({
-                        id: phase._id, campaignId: phase.campaignId, title: phase.title,
-                        subtitle: phase.subtitle, sortOrder: phase.sortOrder,
-                        color: phase.color, items: newItems
-                      });
-                    }}
-                    className="w-full py-2 flex items-center justify-center border border-dashed border-white/20 rounded-xl text-gray-900/30 hover:text-gray-900/60 hover:bg-white/5 transition-colors text-sm"
-                  >
-                    <Plus className="w-3.5 h-3.5 mr-1" /> 항목 추가
-                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => {
+                        const newItems = [...phase.items, { name: "추가 항목", description: "세부 내용" }];
+                        upsertPhase({
+                          id: phase._id, campaignId: phase.campaignId, title: phase.title,
+                          subtitle: phase.subtitle, sortOrder: phase.sortOrder,
+                          color: phase.color, items: newItems
+                        });
+                      }}
+                      className="w-full py-2 flex items-center justify-center border border-dashed border-white/20 rounded-xl text-gray-900/30 hover:text-gray-900/60 hover:bg-white/5 transition-colors text-sm"
+                    >
+                      <Plus className="w-3.5 h-3.5 mr-1" /> 항목 추가
+                    </button>
+                  )}
                 </div>
               </GlassCard>
 
@@ -1681,37 +1814,34 @@ export default function TimelinePage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button onClick={() => setShowSheetInput(true)} size="sm" variant="outline" className="text-emerald-600 border-emerald-200 hover:bg-emerald-50 gap-2 font-semibold bg-white">
-              <FileSpreadsheet className="w-4 h-4" /> 구글 시트 연동
-            </Button>
+            {isAdmin && (
+              <Button onClick={() => setShowSheetInput(true)} size="sm" variant="outline" className="text-emerald-600 border-emerald-200 hover:bg-emerald-50 gap-2 font-semibold bg-white">
+                <FileSpreadsheet className="w-4 h-4" /> 구글 시트 연동
+              </Button>
+            )}
             <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
-              <button
-                onClick={() => setTimelineViewMode("gantt")}
-                className={cn(
-                  "px-3 py-1.5 rounded text-xs font-medium transition-all",
-                  timelineViewMode === "gantt"
-                    ? "bg-gray-900 text-white"
-                    : "text-gray-600 hover:bg-white"
-                )}
-              >
-                Table
-              </button>
-              <button
-                onClick={() => setTimelineViewMode("calendar")}
-                className={cn(
-                  "px-3 py-1.5 rounded text-xs font-medium transition-all",
-                  timelineViewMode === "calendar"
-                    ? "bg-gray-900 text-white"
-                    : "text-gray-600 hover:bg-white"
-                )}
-              >
-                Calendar
-              </button>
+              {/* 뷰어: Calendar → Table 순서 / 관리자: Table → Calendar 순서 */}
+              {(isViewer ? (["calendar", "gantt"] as const) : (["gantt", "calendar"] as const)).map(mode => (
+                <button
+                  key={mode}
+                  onClick={() => setTimelineViewMode(mode)}
+                  className={cn(
+                    "px-3 py-1.5 rounded text-xs font-medium transition-all",
+                    timelineViewMode === mode
+                      ? "bg-gray-900 text-white"
+                      : "text-gray-600 hover:bg-white"
+                  )}
+                >
+                  {mode === "gantt" ? "Table" : "Calendar"}
+                </button>
+              ))}
             </div>
-            <Button onClick={addCategory} size="sm"
-              className="bg-gray-900 text-white hover:bg-gray-800 gap-2 font-semibold ml-2">
-              <Plus className="w-4 h-4" /> 대분류 추가
-            </Button>
+            {isAdmin && (
+              <Button onClick={addCategory} size="sm"
+                className="bg-gray-900 text-white hover:bg-gray-800 gap-2 font-semibold ml-2">
+                <Plus className="w-4 h-4" /> 대분류 추가
+              </Button>
+            )}
           </div>
         </div>
 
@@ -1794,11 +1924,11 @@ export default function TimelinePage() {
                   <div className={cn("flex items-center border-b border-gray-100 sticky group/cat transition-all select-none bg-gray-100", isDragOverCategory && "border-t-2 border-t-gray-400")}
                     data-cat-group={category}
                     style={{ top: 40, height: CAT_H, zIndex: 15 }}
-                    draggable
-                    onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDragItem({ type: "category", id: category }); }}
-                    onDragOver={(e) => { e.preventDefault(); setDragOverItem({ type: "category", id: category }); }}
-                    onDragEnd={handleDragEnd}
-                    onDrop={(e) => { e.preventDefault(); handleDragEnd(); }}
+                    draggable={isAdmin}
+                    onDragStart={isAdmin ? (e) => { e.dataTransfer.effectAllowed = "move"; setDragItem({ type: "category", id: category }); } : undefined}
+                    onDragOver={isAdmin ? (e) => { e.preventDefault(); setDragOverItem({ type: "category", id: category }); } : undefined}
+                    onDragEnd={isAdmin ? handleDragEnd : undefined}
+                    onDrop={isAdmin ? (e) => { e.preventDefault(); handleDragEnd(); } : undefined}
                   >
                     <div style={{ minWidth: LABEL_W, width: LABEL_W }}
                       className="flex items-center gap-2 px-4 border-r border-white/10 h-full cursor-grab active:cursor-grabbing">
@@ -1824,17 +1954,22 @@ export default function TimelinePage() {
                             }, 500);
                           }
                         }}
+                        readOnly={!isAdmin}
                         className="text-gray-900 font-semibold text-xs flex-1"
                       />
-                      <button onClick={() => handleAddCategoryRelative(catIdx, 0)} className="opacity-0 group-hover/cat:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-indigo-400" title="위에 대분류 추가">
-                        <Plus className="w-3 h-3" />
-                      </button>
-                      <button onClick={() => handleAddCategoryRelative(catIdx, 1)} className="opacity-0 group-hover/cat:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-indigo-400" title="아래에 대분류 추가">
-                        <Plus className="w-3 h-3" />
-                      </button>
-                      <button onClick={() => handleDeleteCategory(category)} className="opacity-0 group-hover/cat:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-red-400" title="대분류 삭제">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
+                      {isAdmin && (
+                        <>
+                          <button onClick={() => handleAddCategoryRelative(catIdx, 0)} className="opacity-0 group-hover/cat:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-indigo-400" title="위에 대분류 추가">
+                            <Plus className="w-3 h-3" />
+                          </button>
+                          <button onClick={() => handleAddCategoryRelative(catIdx, 1)} className="opacity-0 group-hover/cat:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-indigo-400" title="아래에 대분류 추가">
+                            <Plus className="w-3 h-3" />
+                          </button>
+                          <button onClick={() => handleDeleteCategory(category)} className="opacity-0 group-hover/cat:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-red-400" title="대분류 삭제">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
                     </div>
                     {/* 차트 영역 - 대분류 배경 */}
                     <div className="relative flex-1 h-full" style={{ minWidth: dynamicChartMin }}>
@@ -1852,11 +1987,11 @@ export default function TimelinePage() {
                     <div key={task._id} className={cn("flex border-b border-gray-100 hover:bg-gray-50 bg-white group/row transition-all select-none", isDragOverTask && "border-t-2 border-t-gray-400")}
                       data-task-cat={category}
                       style={{ minHeight: ROW_H }}
-                      draggable
-                      onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; setDragItem({ type: "task", id: task._id }); e.stopPropagation(); }}
-                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverItem({ type: "task", id: task._id }); }}
-                      onDragEnd={(e) => { e.stopPropagation(); handleDragEnd(); }}
-                      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDragEnd(); }}
+                      draggable={isAdmin}
+                      onDragStart={isAdmin ? (e) => { e.dataTransfer.effectAllowed = "move"; setDragItem({ type: "task", id: task._id }); e.stopPropagation(); } : undefined}
+                      onDragOver={isAdmin ? (e) => { e.preventDefault(); e.stopPropagation(); setDragOverItem({ type: "task", id: task._id }); } : undefined}
+                      onDragEnd={isAdmin ? (e) => { e.stopPropagation(); handleDragEnd(); } : undefined}
+                      onDrop={isAdmin ? (e) => { e.preventDefault(); e.stopPropagation(); handleDragEnd(); } : undefined}
                     >
 
                       {/* 소분류 라벨 */}
@@ -1879,15 +2014,18 @@ export default function TimelinePage() {
                                 }, 100);
                               }
                             }}
+                            readOnly={!isAdmin}
                             className="text-gray-900/80 flex-1"
                           />
                           {/* 삭제 버튼 */}
-                          <button
-                            onClick={() => handleDelete(task._id)}
-                            className="opacity-0 group-hover/row:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-red-400"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => handleDelete(task._id)}
+                              className="opacity-0 group-hover/row:opacity-100 transition-opacity shrink-0 p-1 rounded text-gray-900/30 hover:text-red-400"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -1895,12 +2033,12 @@ export default function TimelinePage() {
                       <div className="flex-1 min-w-max">
                         {/* 기본 활동 + 추가 활동들 컨테이너 */}
                         <div
-                          onClick={(e) => {
+                          onClick={isAdmin ? (e) => {
                             if (!isDraggingRef.current) {
                               handleAddActivity(task._id, e.clientX, e.currentTarget as HTMLElement);
                             }
-                          }}
-                          className="relative group/activities cursor-crosshair"
+                          } : undefined}
+                          className={cn("relative group/activities", isAdmin ? "cursor-crosshair" : "cursor-default")}
                           style={{
                             height: ROW_H,
                             minWidth: dynamicChartMin,
@@ -1927,18 +2065,21 @@ export default function TimelinePage() {
                                   onClear={handleBarClear}
                                   onSaveLabel={handleSaveBarLabel}
                                   isDraggingRef={isDraggingRef}
+                                  readOnly={!isAdmin}
                                 />
                               </div>
                             ) : (
-                              <div
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEmptyRowClick(task, e);
-                                }}
-                                className="absolute inset-0 flex items-center pl-4 text-xs text-gray-900/0 hover:text-gray-900/30 hover:bg-white/3 transition-colors cursor-crosshair group/empty"
-                              >
-                                <span className="opacity-0 group-hover/empty:opacity-100 transition-opacity select-none">클릭하여 일정 추가</span>
-                              </div>
+                              isAdmin ? (
+                                <div
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEmptyRowClick(task, e);
+                                  }}
+                                  className="absolute inset-0 flex items-center pl-4 text-xs text-gray-900/0 hover:text-gray-900/30 hover:bg-white/3 transition-colors cursor-crosshair group/empty"
+                                >
+                                  <span className="opacity-0 group-hover/empty:opacity-100 transition-opacity select-none">클릭하여 일정 추가</span>
+                                </div>
+                              ) : null
                             )}
                           </div>
 
@@ -1997,7 +2138,7 @@ export default function TimelinePage() {
                             return (
                               <div
                                 key={`${task._id}-act-${idx}`}
-                                className="absolute rounded-lg cursor-move group/activity select-none z-10 hover:z-[60]"
+                                className={cn("absolute rounded-lg select-none z-10 hover:z-[60] group/activity", isAdmin ? "cursor-move" : "cursor-default")}
                                 style={{
                                   height: ROW_H - 10,
                                   top: 5,
@@ -2005,10 +2146,10 @@ export default function TimelinePage() {
                                   width: `${Math.max(1 / totalDays * 100, width)}%`,
                                   backgroundColor: color,
                                 }}
-                                onMouseDown={(e) => console.log("[OUTER BAR mousedown] idx:", idx, "task:", task.subTask)}
+                                onMouseDown={isAdmin ? (e) => console.log("[OUTER BAR mousedown] idx:", idx, "task:", task.subTask) : undefined}
                               >
                                 {/* 왼쪽 리사이징 핸들 */}
-                                <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/activity:opacity-100 transition-opacity bg-white/90 z-20"
+                                {isAdmin && <div className="absolute left-0 top-0 h-full w-2.5 cursor-ew-resize rounded-l-lg flex items-center justify-center opacity-0 group-hover/activity:opacity-100 transition-opacity bg-white/90 z-20"
                                   onMouseDown={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
@@ -2039,11 +2180,11 @@ export default function TimelinePage() {
                                     window.addEventListener("mousemove", mv);
                                     window.addEventListener("mouseup", up);
                                   }}
-                                ><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+                                ><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>}
 
                                 {/* 텍스트 */}
-                                <div className="absolute inset-0 flex items-center justify-center px-2 cursor-pointer"
-                                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); handleActivityDrag(e, "move"); }}>
+                                <div className={cn("absolute inset-0 flex items-center justify-center px-2", isAdmin && "cursor-pointer")}
+                                  onMouseDown={isAdmin ? (e) => { e.stopPropagation(); e.preventDefault(); handleActivityDrag(e, "move"); } : undefined}>
                                   {/* 툴팁 */}
                                   <span className="absolute z-50 invisible opacity-0 group-hover/activity:visible group-hover/activity:opacity-100 bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-md whitespace-nowrap transition-all pointer-events-none bottom-full mb-1 left-1/2 -translate-x-1/2">
                                     {activity.name ? `${activity.name} | ` : ""}{fmtMD(activity.startDate)}{activity.startDate !== activity.endDate ? `~${fmtMD(activity.endDate)}` : ""}
@@ -2058,7 +2199,7 @@ export default function TimelinePage() {
                                 </div>
 
                                 {/* 오른쪽 리사이징 핸들 */}
-                                <div className="absolute right-0 top-0 h-full w-2.5 cursor-ew-resize rounded-r-lg flex items-center justify-center opacity-0 group-hover/activity:opacity-100 transition-opacity bg-white/90 z-20"
+                                {isAdmin && <div className="absolute right-0 top-0 h-full w-2.5 cursor-ew-resize rounded-r-lg flex items-center justify-center opacity-0 group-hover/activity:opacity-100 transition-opacity bg-white/90 z-20"
                                   onMouseDown={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
@@ -2089,19 +2230,21 @@ export default function TimelinePage() {
                                     window.addEventListener("mousemove", mv);
                                     window.addEventListener("mouseup", up);
                                   }}
-                                ><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>
+                                ><div className="w-0.5 h-4 bg-white/70 rounded-full" /></div>}
 
                                 {/* X 삭제 버튼 */}
-                                <button
-                                  onMouseDown={e => e.stopPropagation()}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRemoveActivity(task._id, idx);
-                                  }}
-                                  className="absolute -top-2 -right-2 z-30 opacity-0 group-hover/activity:opacity-100 transition-opacity w-4 h-4 rounded-full bg-white/90 border border-white/20 flex items-center justify-center text-gray-900/60 hover:text-red-400 hover:border-red-400/60"
-                                  title="활동 삭제">
-                                  <X className="w-2.5 h-2.5" />
-                                </button>
+                                {isAdmin && (
+                                  <button
+                                    onMouseDown={e => e.stopPropagation()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveActivity(task._id, idx);
+                                    }}
+                                    className="absolute -top-2 -right-2 z-30 opacity-0 group-hover/activity:opacity-100 transition-opacity w-4 h-4 rounded-full bg-white/90 border border-white/20 flex items-center justify-center text-gray-900/60 hover:text-red-400 hover:border-red-400/60"
+                                    title="활동 삭제">
+                                    <X className="w-2.5 h-2.5" />
+                                  </button>
+                                )}
                               </div>
                             );
                           })}
@@ -2117,21 +2260,23 @@ export default function TimelinePage() {
                   )})}
 
                   {/* 소분류 추가 버튼 */}
-                  <div className="flex border-b border-white/5">
-                    <div style={{ minWidth: LABEL_W, width: LABEL_W }}
-                      className="border-r border-white/5">
-                      <button onClick={() => addSubTask(category)}
-                        className="w-full pl-8 py-2 text-xs text-gray-900/25 hover:text-gray-900/50 hover:bg-white/5 transition-colors text-left flex items-center gap-1">
-                        <Plus className="w-3 h-3" /> 소분류 추가
-                      </button>
+                  {isAdmin && (
+                    <div className="flex border-b border-white/5">
+                      <div style={{ minWidth: LABEL_W, width: LABEL_W }}
+                        className="border-r border-white/5">
+                        <button onClick={() => addSubTask(category)}
+                          className="w-full pl-8 py-2 text-xs text-gray-900/25 hover:text-gray-900/50 hover:bg-white/5 transition-colors text-left flex items-center gap-1">
+                          <Plus className="w-3 h-3" /> 소분류 추가
+                        </button>
+                      </div>
+                      <div className="flex-1" />
                     </div>
-                    <div className="flex-1" />
-                  </div>
+                  )}
                 </React.Fragment>
               )})}
 
               {/* 대분류 추가 */}
-              {totalTasks > 0 && (
+              {isAdmin && totalTasks > 0 && (
                 <button onClick={addCategory}
                   className="w-full py-3 text-sm text-gray-900/25 hover:text-gray-900/50 hover:bg-white/5 transition-colors flex items-center justify-center gap-2">
                   <Plus className="w-4 h-4" /> 대분류 추가

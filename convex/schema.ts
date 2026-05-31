@@ -32,6 +32,9 @@ export default defineSchema({
     }))),
     // 표시할 탭 목록 (없으면 전체 표시)
     visibleTabs: v.optional(v.array(v.string())),
+    // GA4 Property ID (유입 성과 페이지에서 설정)
+    officialGa4Id: v.optional(v.string()),
+    microGa4Id: v.optional(v.string()),
   }),
 
   milestones: defineTable({
@@ -94,7 +97,9 @@ export default defineSchema({
     sessions: v.number(),
     users: v.number(),
     avgEngagementSec: v.number(),
-  }).index("by_campaign", ["campaignId"]),
+  })
+    .index("by_campaign", ["campaignId"])
+    .index("by_campaign_week", ["campaignId", "weekStart"]),
 
   salesWeekly: defineTable({
     campaignId: v.id("campaigns"),
@@ -163,6 +168,7 @@ export default defineSchema({
     comments: v.number(),
     url: v.string(),
     thumbnailUrl: v.optional(v.string()),
+    commentsList: v.optional(v.array(v.any())),
   }).index("by_campaign", ["campaignId"]),
 
   interestActivities: defineTable({

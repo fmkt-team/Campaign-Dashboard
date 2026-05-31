@@ -135,12 +135,13 @@ export const updateViralRow = mutation({
       likes: v.optional(v.number()),
       comments: v.optional(v.number()),
       thumbnailUrl: v.optional(v.string()),
+      commentsList: v.optional(v.array(v.any())),
     }),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.viralId);
     if (!existing) throw new Error("Row not found");
-    
+
     await ctx.db.patch(args.viralId, args.updates);
   },
 });
