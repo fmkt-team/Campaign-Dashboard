@@ -32,6 +32,22 @@ const formatDDay = (start: string) => {
 
 // 카테고리별 색상
 const PALETTE = ["#3b82f6","#8b5cf6","#f59e0b","#10b981","#ec4899","#f97316","#06b6d4","#6366f1","#e50010","#84cc16","#14b8a6"];
+
+// 대분류 필터 칩 전용 — 인접 색상 간 최대 채도·색상 차이 보장
+const CHIP_PALETTE = [
+  "#e50010", // 0 레드 (Fursys)
+  "#f97316", // 1 오렌지
+  "#ca8a04", // 2 앰버
+  "#16a34a", // 3 그린
+  "#0891b2", // 4 사이안
+  "#2563eb", // 5 블루
+  "#7c3aed", // 6 바이올렛
+  "#db2777", // 7 핑크
+  "#0d9488", // 8 틸
+  "#4f46e5", // 9 인디고
+  "#65a30d", // 10 라임
+  "#be185d", // 11 로즈
+];
 const COLOR_MAP: [string, string][] = [
   ["계약","#6366f1"],["제안","#6366f1"],
   ["디지털","#3b82f6"],["온라인","#3b82f6"],
@@ -897,7 +913,7 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
                   : 'opacity-40'
               }`}
               style={{
-                backgroundColor: categoryColors.get(cat) || pickColor(cat),
+                backgroundColor: CHIP_PALETTE[allCategories.indexOf(cat) % CHIP_PALETTE.length],
               }}
             >
               {cat}
