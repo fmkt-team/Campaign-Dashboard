@@ -90,3 +90,18 @@ export const updateCampaignSettings = mutation({
     await ctx.db.patch(args.id, updates);
   },
 });
+
+// 네이버 플레이스 URL + 키워드 그룹 저장
+export const updateCampaignLinks = mutation({
+  args: {
+    id: v.id("campaigns"),
+    naverPlaceUrl: v.optional(v.string()),
+    naverKeywordGroups: v.optional(v.string()), // JSON 문자열
+  },
+  handler: async (ctx, args) => {
+    const updates: Record<string, any> = {};
+    if (args.naverPlaceUrl !== undefined) updates.naverPlaceUrl = args.naverPlaceUrl;
+    if (args.naverKeywordGroups !== undefined) updates.naverKeywordGroups = args.naverKeywordGroups;
+    await ctx.db.patch(args.id, updates);
+  },
+});

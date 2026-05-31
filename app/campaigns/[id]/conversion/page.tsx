@@ -268,6 +268,7 @@ export default function InflowPage() {
   const { isAdmin } = useAuth();
   const syncTrafficWeekly   = useMutation(api.inflow.syncTrafficWeekly);
   const updateGa4Ids        = useMutation(api.campaigns.updateCampaignGa4Ids);
+  const updateCampaignLinks = useMutation(api.campaigns.updateCampaignLinks);
   const campaignData        = useQuery(api.campaigns.getCampaignById, { id: campaignId });
   const { refreshTrigger } = useRefresh();
   const [lastRefresh, setLastRefresh] = useState(0);
@@ -486,7 +487,9 @@ export default function InflowPage() {
     if (officialId) { setOfficialGa4Id(officialId); setOfficialGa4IdInput(officialId); }
 
     const savedOrder    = localStorage.getItem(`sectionOrder_${campaignId}`);
-    const savedKeywords = localStorage.getItem(`naverKeywords_${campaignId}`);
+    // 키워드: Convex 우선 → localStorage fallback
+    const convexKeywords = campaignData?.naverKeywordGroups;
+    const savedKeywords  = convexKeywords || localStorage.getItem(`naverKeywords_${campaignId}`);
     if (savedOrder)    { try { setSectionOrder(JSON.parse(savedOrder)); } catch {} }
     if (savedKeywords) { try { setKeywordGroups(JSON.parse(savedKeywords)); } catch {} }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -494,9 +497,12 @@ export default function InflowPage() {
 
   useEffect(() => { if (microGa4Id) localStorage.setItem(`microGa4Id_${campaignId}`, microGa4Id); }, [microGa4Id, campaignId]);
 
-  const saveKeywords = () => {
+  const saveKeywords = async () => {
     try {
-      localStorage.setItem(`naverKeywords_${campaignId}`, JSON.stringify(keywordGroups));
+      const json = JSON.stringify(keywordGroups);
+      // Convex + localStorage 동시 저장 → 뷰어/다기기 공유
+      await updateCampaignLinks({ id: campaignId, naverKeywordGroups: json });
+      localStorage.setItem(`naverKeywords_${campaignId}`, json);
       setKeywordSaved(true);
       setTimeout(() => setKeywordSaved(false), 2000);
     } catch {}

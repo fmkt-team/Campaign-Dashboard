@@ -445,6 +445,10 @@ function NaverReviewAnalyzer() {
   const NAVER_DATA_LS_KEY = `naverReviewData_${analyzerCampaignId}`;
   const { isAdmin } = useAuth();
 
+  // ── Convex 연동 ──
+  const analyzerCampaignData = useQuery(api.campaigns.getCampaignById, { id: analyzerCampaignId as Id<"campaigns"> });
+  const updateCampaignLinks  = useMutation(api.campaigns.updateCampaignLinks);
+
   const [naverUrl, setNaverUrl] = useState("");
   const [urlSaved, setUrlSaved] = useState(false);
   const [crawling, setCrawling] = useState(false);
@@ -461,18 +465,22 @@ function NaverReviewAnalyzer() {
     source?: string;
   }>(null);
 
-  // ── URL + 분석 데이터 localStorage 로드 ──
+  // ── URL 로드: Convex 우선 → localStorage fallback ──
   useEffect(() => {
+    if (analyzerCampaignData === undefined) return; // 아직 로딩 중
     try {
-      const savedUrl  = localStorage.getItem(NAVER_URL_LS_KEY);
-      if (savedUrl) setNaverUrl(savedUrl);
+      const convexUrl = analyzerCampaignData?.naverPlaceUrl ?? "";
+      const lsUrl     = localStorage.getItem(NAVER_URL_LS_KEY) ?? "";
+      const url = convexUrl || lsUrl;
+      if (url) setNaverUrl(url);
+
       const savedData = localStorage.getItem(NAVER_DATA_LS_KEY);
       if (savedData) setAnalyzed(JSON.parse(savedData));
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analyzerCampaignId]);
+  }, [analyzerCampaignData, analyzerCampaignId]);
 
-  // ── 분석 결과 변경 시 자동 저장 ──
+  // ── 분석 결과 변경 시 localStorage 자동 저장 ──
   useEffect(() => {
     if (analyzed) {
       try { localStorage.setItem(NAVER_DATA_LS_KEY, JSON.stringify(analyzed)); } catch {}
@@ -480,9 +488,12 @@ function NaverReviewAnalyzer() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyzed]);
 
-  const saveNaverUrl = () => {
+  const saveNaverUrl = async () => {
     try {
-      localStorage.setItem(NAVER_URL_LS_KEY, naverUrl.trim());
+      const trimmed = naverUrl.trim();
+      // Convex + localStorage 동시 저장 → 뷰어/다기기 공유
+      await updateCampaignLinks({ id: analyzerCampaignId as Id<"campaigns">, naverPlaceUrl: trimmed });
+      localStorage.setItem(NAVER_URL_LS_KEY, trimmed);
       setUrlSaved(true);
       setTimeout(() => setUrlSaved(false), 2000);
     } catch {}

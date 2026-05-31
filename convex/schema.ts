@@ -35,6 +35,10 @@ export default defineSchema({
     // GA4 Property ID (유입 성과 페이지에서 설정)
     officialGa4Id: v.optional(v.string()),
     microGa4Id: v.optional(v.string()),
+    // 네이버 플레이스 URL (흥미 상세 리뷰 분석)
+    naverPlaceUrl: v.optional(v.string()),
+    // 네이버 키워드 그룹 (유입 상세 브랜드 검색, JSON 문자열)
+    naverKeywordGroups: v.optional(v.string()),
   }),
 
   milestones: defineTable({
