@@ -786,14 +786,11 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
   const allCategories = Array.from(new Set(tasks.map(t => t.category || "미분류")));
   const categoryColors = useMemo(() => {
     const map = new Map<string, string>();
-    for (const t of tasks) {
-      const cat = t.category || "미분류";
-      if (!map.has(cat)) {
-        map.set(cat, t.color || pickColor(cat));
-      }
-    }
+    allCategories.forEach((cat, idx) => {
+      map.set(cat, CHIP_PALETTE[idx % CHIP_PALETTE.length]);
+    });
     return map;
-  }, [tasks]);
+  }, [allCategories]);
   const filteredTasks = selectedCategories.size === 0
     ? tasks
     : tasks.filter(t => selectedCategories.has(t.category));
@@ -1051,7 +1048,7 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
                             width: `calc(${(bar.endCol - bar.startCol + 1) * colW}% - 4px)`,
                             height: 20,
                             backgroundColor: isActivity
-                              ? (bar.task.color || categoryColors.get(bar.task.parentTask?.category || '미분류') || pickColor(bar.task.parentTask?.category || ''))
+                              ? (categoryColors.get(bar.task.parentTask?.category || '미분류') || pickColor(bar.task.parentTask?.category || ''))
                               : (categoryColors.get(bar.task.category || '미분류') || pickColor(bar.task.category || '')),
                           }}
                         >
@@ -1282,7 +1279,11 @@ export default function TimelinePage() {
   const seen = new Map<string, typeof allTasks>();
   for (const t of allTasks) {
     const key = t.category || "미분류";
-    if (!seen.has(key)) { seen.set(key, []); grouped.push({ category: key, color: t.color || pickColor(key), tasks: seen.get(key)! }); }
+    if (!seen.has(key)) {
+      const catIdx = grouped.length; // 삽입 순서 = CHIP_PALETTE 인덱스
+      seen.set(key, []);
+      grouped.push({ category: key, color: CHIP_PALETTE[catIdx % CHIP_PALETTE.length], tasks: seen.get(key)! });
+    }
     seen.get(key)!.push(t);
   }
 
