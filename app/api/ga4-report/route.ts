@@ -68,8 +68,18 @@ export async function POST(req: NextRequest) {
     const targetPropertyId = propertyId || GA4_PROPERTY_ID;
     const accessToken = await getAccessToken();
 
+    // UTC 기준 오늘 날짜 (서버 시간) — 클라이언트와 시차가 있을 수 있음
     const todayStr = new Date().toISOString().split("T")[0];
-    const finalEndDate = (endDate && endDate > todayStr) ? todayStr : (endDate || "today");
+    // endDate가 미래라도 GA4가 알아서 처리하므로 서버에서 강제로 줄이지 않음
+    // 단, start > end 가 되는 경우만 방어: endDate를 최소한 startDate 이상으로 보장
+    let finalEndDate = endDate || "today";
+    if (
+      startDate &&
+      finalEndDate !== "today" &&
+      finalEndDate < startDate
+    ) {
+      finalEndDate = startDate; // 최소한 startDate와 같게
+    }
 
     // 단위에 따른 디멘션 설정
     let ga4Dimensions = dimensions;
