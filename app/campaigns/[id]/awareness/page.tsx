@@ -88,6 +88,21 @@ function parseExtra(raw: any): Record<string, number> {
   return raw as Record<string, number>;
 }
 
+// 집계 후 합산하면 안 되는 비율 지표를 재계산 (CPM/CPV/CPC/CTR/VTR)
+// groupDigitalKpis, getChartData 집계 후 호출
+const RATIO_EXTRA_KEYS: Record<string, (d: any) => number> = {
+  "CPM":  (d) => d.impressions > 0 ? Math.round((d.spend / d.impressions) * 1000) : 0,
+  "CPV":  (d) => d.views > 0       ? Math.round(d.spend / d.views) : 0,
+  "CPC":  (d) => d.clicks > 0      ? Math.round(d.spend / d.clicks) : 0,
+  "CTR":  (d) => d.impressions > 0 ? Number(((d.clicks / d.impressions) * 100).toFixed(2)) : 0,
+  "VTR":  (d) => d.impressions > 0 ? Number(((d.views  / d.impressions) * 100).toFixed(2)) : 0,
+};
+function recalcRatioExtra(obj: any) {
+  for (const [k, fn] of Object.entries(RATIO_EXTRA_KEYS)) {
+    if (k in (obj.extra || {})) obj.extra[k] = fn(obj);
+  }
+}
+
 // ────────────────────────────────────────────────────────────
 // 댓글 감성 분석 NLP 유틸
 // ────────────────────────────────────────────────────────────
@@ -607,6 +622,7 @@ function groupDigitalKpis(
     p.ctr = p.impressions > 0 ? Number(((p.clicks / p.impressions) * 100).toFixed(2)) : 0;
     p.vtr = p.impressions > 0 ? Number(((p.views / p.impressions) * 100).toFixed(2)) : 0;
     p.roas = p.spend > 0 ? Number(((p.conversionRevenue / p.spend) * 100).toFixed(1)) : 0;
+    recalcRatioExtra(p); // Task 5: 합산된 CPM 등 비율 지표 재계산
 
     const items = Array.from(p.itemsMap.values()) as any[];
     items.forEach((item: any) => {
@@ -614,6 +630,7 @@ function groupDigitalKpis(
       item.ctr = item.impressions > 0 ? Number(((item.clicks / item.impressions) * 100).toFixed(2)) : 0;
       item.vtr = item.impressions > 0 ? Number(((item.views / item.impressions) * 100).toFixed(2)) : 0;
       item.roas = item.spend > 0 ? Number(((item.conversionRevenue / item.spend) * 100).toFixed(1)) : 0;
+      recalcRatioExtra(item); // Task 5: 개별 항목도 재계산
     });
     items.sort((a, b) => b.spend - a.spend); // 광고비 순 정렬
 
@@ -679,10 +696,15 @@ function getChartData(
 
   const result = Array.from(dateGroups.values()).sort((a, b) => a.dateLabel.localeCompare(b.dateLabel));
   result.forEach(r => {
-    r.cpv = r.views > 0 ? Math.round(r.spend / r.views) : 0;
-    r.ctr = r.impressions > 0 ? Number(((r.clicks / r.impressions) * 100).toFixed(2)) : 0;
-    r.vtr = r.impressions > 0 ? Number(((r.views / r.impressions) * 100).toFixed(2)) : 0;
-    r.roas = r.spend > 0 ? Number(((r.conversionRevenue / r.spend) * 100).toFixed(1)) : 0;
+    r.cpv  = r.views > 0       ? Math.round(r.spend / r.views) : 0;
+    r.ctr  = r.impressions > 0 ? Number(((r.clicks / r.impressions) * 100).toFixed(2)) : 0;
+    r.vtr  = r.impressions > 0 ? Number(((r.views  / r.impressions) * 100).toFixed(2)) : 0;
+    r.roas = r.spend > 0       ? Number(((r.conversionRevenue / r.spend) * 100).toFixed(1)) : 0;
+    // Task 2: CPM / CPC 계산값 (null = 데이터 없음 → 툴팁에서 "-" 처리)
+    r.cpm_calc = r.impressions > 0 ? Math.round((r.spend / r.impressions) * 1000) : null;
+    r.cpv_calc = r.views > 0       ? Math.round(r.spend / r.views) : null;
+    r.cpc_calc = r.clicks > 0      ? Math.round(r.spend / r.clicks) : null;
+    recalcRatioExtra(r); // Task 5: extra 비율 지표 재계산
   });
   return result;
 }
@@ -866,6 +888,25 @@ export default function AwarenessPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
 
+  // 뷰어 노출 항목 초기 로드 (Task 4)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(VIEWER_ITEMS_LS_KEY);
+      const preset: Record<string, boolean> = saved ? JSON.parse(saved) : { ...DEFAULT_VIEWER_PRESET };
+      setViewerPreset(preset);
+      setItemEditDraft(preset);
+      // 관리자: preset 을 chartMetrics 기본값으로 반영 (extra_ 항목은 유지)
+      setChartMetrics(prev => {
+        const next: Record<string, boolean> = { ...preset };
+        for (const [k, v] of Object.entries(prev)) {
+          if (k.startsWith("extra_")) next[k] = v;
+        }
+        return next;
+      });
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 사용자 상호작용 시에만 저장 (effect 타이밍 문제 회피)
   const persistCumulative = (
     visibleItems: Record<string, boolean>,
@@ -901,11 +942,30 @@ export default function AwarenessPage() {
   const [filterMedium, setFilterMedium] = useState("none");
   const [filterMediumDetail, setFilterMediumDetail] = useState("none");
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  // ── 차트 항목 체크 상태 ──────────────────────────────────────────
+  const VIEWER_ITEMS_LS_KEY = "dashboard_media_viewer_visible_items";
+  const ALL_CHART_ITEMS = [
+    { key: "impressions", label: "노출수" },
+    { key: "views",       label: "조회수" },
+    { key: "clicks",      label: "클릭수" },
+    { key: "conversions", label: "전환수" },
+    { key: "spend",       label: "집행비용" },
+    { key: "vtr",         label: "VTR" },
+    { key: "ctr",         label: "CTR" },
+    { key: "roas",        label: "ROAS" },
+  ] as const;
+  const DEFAULT_VIEWER_PRESET: Record<string, boolean> = {
+    impressions: true, views: true, clicks: true, spend: true,
+  };
   const [chartMetrics, setChartMetrics] = useState<Record<string, boolean>>({
-    views: true,
-    clicks: true,
-    ctr: true
+    impressions: true, views: true, clicks: true, spend: true, ctr: true, vtr: true,
   });
+  const [viewerPreset, setViewerPreset]           = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
+  const [showItemEditPanel, setShowItemEditPanel] = useState(false);
+  const [itemEditDraft, setItemEditDraft]         = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
+  const [itemEditSaved, setItemEditSaved]         = useState(false);
+  // CPM / CPV / CPC 별도 차트 (Task 2)
+  const [cpcMetrics, setCpcMetrics] = useState({ cpm: true, cpv: true, cpc: true });
 
   // ── KPI 카드 ─────────────────────────────────────────────────
   const [showKpiEdit,  setShowKpiEdit]  = useState(false);
@@ -1782,13 +1842,8 @@ export default function AwarenessPage() {
                 <div className="flex gap-2 items-center">
                   <select value={filterAgenda} onChange={e => setFilterAgenda(e.target.value)}
                     className="bg-white border border-gray-200 text-gray-700 text-[13px] rounded p-1.5 outline-none font-semibold">
-                    <option value="all">전체 아젠다</option>
+                    <option value="all">전체 소재</option>
                     {uniqueAgendas.map(agenda => <option key={agenda} value={agenda}>{agenda}</option>)}
-                  </select>
-                  <select value={filterDevice} onChange={e => setFilterDevice(e.target.value)}
-                    className="bg-white border border-gray-200 text-gray-700 text-[13px] rounded p-1.5 outline-none font-semibold">
-                    <option value="all">전체 디바이스</option>
-                    {uniqueDevices.map(device => <option key={device} value={device}>{device}</option>)}
                   </select>
                 </div>
               )}
@@ -1860,35 +1915,46 @@ export default function AwarenessPage() {
 
           {/* 상단 트렌드 차트 */}
           {chartData.length > 0 && (
+            <>
+            {/* ── 일자별 그래프 카드 ── */}
             <GlassCard className="p-5">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-                  <span className="w-2 h-4 bg-fursys-red rounded-sm"></span>
-                  일자별 그래프
-                </h3>
-                <div className="flex items-center gap-3 flex-wrap">
-                  {[
-                    { key: "views", label: "조회수" },
-                    { key: "impressions", label: "노출수" },
-                    { key: "ctr", label: "CTR" },
-                    { key: "vtr", label: "VTR" },
-                    { key: "spend", label: "집행 비용" },
-                    { key: "clicks", label: "클릭수" },
-                    { key: "conversions", label: "전환수" },
-                    { key: "roas", label: "ROAS" }
-                  ].map(metric => (
-                    <label key={metric.key} className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={!!chartMetrics[metric.key]}
-                        onChange={(e) => setChartMetrics(prev => ({ ...prev, [metric.key]: e.target.checked }))}
-                        className="accent-fursys-red w-3.5 h-3.5"
-                      />
-                      <span className="text-xs text-gray-600 font-medium">{metric.label}</span>
-                    </label>
-                  ))}
-                  {/* 시트에서 감지된 추가 컬럼 */}
-                  {detectedExtraCols.map((col, idx) => {
+              <div className="flex justify-between items-start mb-4 gap-3">
+                <div className="flex items-center gap-2 shrink-0">
+                  <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                    <span className="w-2 h-4 bg-fursys-red rounded-sm"></span>
+                    일자별 그래프
+                  </h3>
+                  {/* 항목 편집 버튼 (관리자 전용) — Task 4 */}
+                  {isAdmin && (
+                    <button
+                      onClick={() => { setItemEditDraft({ ...viewerPreset }); setShowItemEditPanel(true); }}
+                      className="flex items-center gap-1 text-xs text-gray-400 hover:text-fursys-red border border-gray-200 rounded px-2 py-1 transition-colors"
+                    >
+                      <SlidersHorizontal className="w-3 h-3" /> 항목 편집
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 flex-wrap flex-1 justify-end">
+                  {/* 체크박스 — 재정렬 + admin/viewer 분기 (Task 1-2, 1-4, 4-2) */}
+                  {ALL_CHART_ITEMS.map(metric => {
+                    const isVisible = isAdmin ? true : !!viewerPreset[metric.key];
+                    if (!isVisible) return null;
+                    const isChecked = isAdmin ? !!chartMetrics[metric.key] : !!viewerPreset[metric.key];
+                    return (
+                      <label key={metric.key} className={`flex items-center gap-1.5 ${isAdmin ? "cursor-pointer" : "cursor-default"}`}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={isAdmin ? (e) => setChartMetrics(prev => ({ ...prev, [metric.key]: e.target.checked })) : undefined}
+                          readOnly={!isAdmin}
+                          className="accent-fursys-red w-3.5 h-3.5"
+                        />
+                        <span className="text-xs text-gray-600 font-medium">{metric.label}</span>
+                      </label>
+                    );
+                  })}
+                  {/* 시트 추가 컬럼 — 관리자만 표시 (Task 1-4 뷰어 버그 수정) */}
+                  {isAdmin && detectedExtraCols.map((col, idx) => {
                     const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
                     return (
                       <label key={`extra_${col}`} className="flex items-center gap-1.5 cursor-pointer">
@@ -1911,40 +1977,37 @@ export default function AwarenessPage() {
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
-                    <XAxis 
-                      dataKey="dateLabel" 
-                      tick={{fontSize: 11, fill: '#9ca3af'}} 
-                      axisLine={false} 
-                      tickLine={false} 
+                    <XAxis
+                      dataKey="dateLabel"
+                      tick={{fontSize: 11, fill: '#9ca3af'}}
+                      axisLine={false}
+                      tickLine={false}
                       dy={10}
                     />
-                    
-                    {/* 왼쪽 Y축: 수량 (비용, 조회수, 노출수, 클릭수, 전환수) */}
-                    <YAxis 
+                    {/* 왼쪽 Y축: 수량 (노출수, 조회수, 클릭수, 전환수, 집행비용) */}
+                    <YAxis
                       yAxisId="left"
                       orientation="left"
-                      tick={{fontSize: 11, fill: '#9ca3af'}} 
-                      axisLine={false} 
-                      tickLine={false} 
+                      tick={{fontSize: 11, fill: '#9ca3af'}}
+                      axisLine={false}
+                      tickLine={false}
                       dx={-10}
                       tickFormatter={(val) => val >= 10000 ? `${(val/10000).toFixed(0)}만` : val.toLocaleString()}
                     />
-                    
-                    {/* 오른쪽 Y축: 퍼센트 (CTR, VTR, ROAS) */}
-                    <YAxis 
+                    {/* 오른쪽 Y축: 비율 (VTR, CTR, ROAS) */}
+                    <YAxis
                       yAxisId="right"
                       orientation="right"
-                      tick={{fontSize: 11, fill: '#9ca3af'}} 
-                      axisLine={false} 
-                      tickLine={false} 
+                      tick={{fontSize: 11, fill: '#9ca3af'}}
+                      axisLine={false}
+                      tickLine={false}
                       dx={10}
                       tickFormatter={(val) => `${val}%`}
                     />
-                    
-                    <RechartsTooltip 
+                    <RechartsTooltip
                       contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', padding: '12px' }}
                       formatter={(val: number, name: string) => {
-                        const labels: Record<string, string> = { spend: "집행 비용", views: "조회수", impressions: "노출수", clicks: "클릭수", conversions: "전환수", ctr: "CTR", vtr: "VTR", roas: "ROAS" };
+                        const labels: Record<string, string> = { spend: "집행비용", views: "조회수", impressions: "노출수", clicks: "클릭수", conversions: "전환수", ctr: "CTR", vtr: "VTR", roas: "ROAS" };
                         const label = labels[name] || name;
                         if (name === "spend") return [`${val.toLocaleString()}원`, label];
                         if (name === "ctr" || name === "vtr" || name === "roas") return [`${val}%`, label];
@@ -1952,23 +2015,37 @@ export default function AwarenessPage() {
                       }}
                       labelStyle={{ color: '#6b7280', marginBottom: '8px', fontSize: '12px', fontWeight: 600 }}
                     />
-                    
-                    {/* 조회수 → 막대(Bar) 그래프 */}
-                    {chartMetrics["views"] && <Bar yAxisId="left" dataKey="views" name="views" fill="#DC262633" stroke="#DC2626" strokeWidth={1} radius={[4, 4, 0, 0]} barSize={20} />}
-                    
-                    {/* 수량 계열 → 꺾은선(Line) */}
-                    {chartMetrics["spend"] && <Line yAxisId="left" type="monotone" dataKey="spend" name="spend" stroke="#F59E0B" strokeWidth={2.5} dot={{r: 3, fill: '#F59E0B', strokeWidth: 2, stroke: '#fff'}} />}
-                    {chartMetrics["impressions"] && <Line yAxisId="left" type="monotone" dataKey="impressions" name="impressions" stroke="#2563EB" strokeWidth={2.5} dot={{r: 3, fill: '#2563EB', strokeWidth: 2, stroke: '#fff'}} />}
-                    {chartMetrics["clicks"] && <Line yAxisId="left" type="monotone" dataKey="clicks" name="clicks" stroke="#D97706" strokeWidth={2.5} dot={{r: 3, fill: '#D97706', strokeWidth: 2, stroke: '#fff'}} />}
-                    {chartMetrics["conversions"] && <Line yAxisId="left" type="monotone" dataKey="conversions" name="conversions" stroke="#059669" strokeWidth={2.5} dot={{r: 3, fill: '#059669', strokeWidth: 2, stroke: '#fff'}} />}
-                    
-                    {/* 비율 계열 → 꺾은선(Line) + 점선 */}
-                    {chartMetrics["ctr"] && <Line yAxisId="right" type="monotone" dataKey="ctr" name="ctr" stroke="#EC4899" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#EC4899', strokeWidth: 2, stroke: '#fff'}} />}
-                    {chartMetrics["vtr"] && <Line yAxisId="right" type="monotone" dataKey="vtr" name="vtr" stroke="#8B5CF6" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#8B5CF6', strokeWidth: 2, stroke: '#fff'}} />}
-                    {chartMetrics["roas"] && <Line yAxisId="right" type="monotone" dataKey="roas" name="roas" stroke="#10B981" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#10B981', strokeWidth: 2, stroke: '#fff'}} />}
 
-                    {/* 시트 추가 컬럼 (extra) */}
-                    {detectedExtraCols.map((col, idx) => {
+                    {/* ── 막대그래프: 수량 지표 (Task 1-3) ── */}
+                    {(isAdmin ? chartMetrics["impressions"] : viewerPreset["impressions"]) && (
+                      <Bar yAxisId="left" dataKey="impressions" name="impressions" fill="#2563EB26" stroke="#2563EB" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
+                    )}
+                    {(isAdmin ? chartMetrics["views"] : viewerPreset["views"]) && (
+                      <Bar yAxisId="left" dataKey="views" name="views" fill="#DC262626" stroke="#DC2626" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
+                    )}
+                    {(isAdmin ? chartMetrics["clicks"] : viewerPreset["clicks"]) && (
+                      <Bar yAxisId="left" dataKey="clicks" name="clicks" fill="#D9770626" stroke="#D97706" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
+                    )}
+                    {(isAdmin ? chartMetrics["conversions"] : viewerPreset["conversions"]) && (
+                      <Bar yAxisId="left" dataKey="conversions" name="conversions" fill="#05966926" stroke="#059669" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
+                    )}
+                    {(isAdmin ? chartMetrics["spend"] : viewerPreset["spend"]) && (
+                      <Bar yAxisId="left" dataKey="spend" name="spend" fill="#F59E0B26" stroke="#F59E0B" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
+                    )}
+
+                    {/* ── 꺾은선그래프: 비율 지표 (Task 1-3) ── */}
+                    {(isAdmin ? chartMetrics["vtr"] : viewerPreset["vtr"]) && (
+                      <Line yAxisId="right" type="monotone" dataKey="vtr" name="vtr" stroke="#8B5CF6" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#8B5CF6', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} />
+                    )}
+                    {(isAdmin ? chartMetrics["ctr"] : viewerPreset["ctr"]) && (
+                      <Line yAxisId="right" type="monotone" dataKey="ctr" name="ctr" stroke="#EC4899" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#EC4899', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} />
+                    )}
+                    {(isAdmin ? chartMetrics["roas"] : viewerPreset["roas"]) && (
+                      <Line yAxisId="right" type="monotone" dataKey="roas" name="roas" stroke="#10B981" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#10B981', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} />
+                    )}
+
+                    {/* ── 시트 추가 컬럼 (관리자만) ── */}
+                    {isAdmin && detectedExtraCols.map((col, idx) => {
                       if (!chartMetrics[`extra_${col}`]) return null;
                       const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
                       return (
@@ -1989,6 +2066,69 @@ export default function AwarenessPage() {
                 </ResponsiveContainer>
               </div>
             </GlassCard>
+
+            {/* ── CPM / CPV / CPC 추이 차트 (Task 2) ── */}
+            <GlassCard className="p-5">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                  <span className="w-2 h-4 bg-blue-400 rounded-sm"></span>
+                  단가 지표 추이 (CPM / CPV / CPC)
+                </h3>
+                <div className="flex items-center gap-3">
+                  {([
+                    { key: "cpm" as const, label: "CPM", color: "#0EA5E9" },
+                    { key: "cpv" as const, label: "CPV", color: "#F97316" },
+                    { key: "cpc" as const, label: "CPC", color: "#A855F7" },
+                  ]).map(m => (
+                    <label key={m.key} className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={cpcMetrics[m.key]}
+                        onChange={e => setCpcMetrics(prev => ({ ...prev, [m.key]: e.target.checked }))}
+                        className="w-3.5 h-3.5"
+                        style={{ accentColor: m.color }}
+                      />
+                      <span className="text-xs font-medium" style={{ color: m.color }}>{m.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="h-[200px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                    <XAxis dataKey="dateLabel" tick={{fontSize: 11, fill: '#9ca3af'}} axisLine={false} tickLine={false} dy={10} />
+                    <YAxis
+                      yAxisId="cost"
+                      orientation="left"
+                      tick={{fontSize: 11, fill: '#9ca3af'}}
+                      axisLine={false}
+                      tickLine={false}
+                      dx={-10}
+                      tickFormatter={(v) => v >= 10000 ? `${(v/10000).toFixed(0)}만` : v.toLocaleString()}
+                    />
+                    <RechartsTooltip
+                      contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', padding: '12px' }}
+                      formatter={(val: any, name: string) => {
+                        if (val === null || val === undefined) return ["-", name.toUpperCase()];
+                        return [`₩${Number(val).toLocaleString()}`, name.toUpperCase()];
+                      }}
+                      labelStyle={{ color: '#6b7280', marginBottom: '8px', fontSize: '12px', fontWeight: 600 }}
+                    />
+                    {cpcMetrics.cpm && (
+                      <Line yAxisId="cost" type="monotone" dataKey="cpm_calc" name="cpm" stroke="#0EA5E9" strokeWidth={2} dot={{r: 3, fill: '#0EA5E9', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} connectNulls={false} />
+                    )}
+                    {cpcMetrics.cpv && (
+                      <Line yAxisId="cost" type="monotone" dataKey="cpv_calc" name="cpv" stroke="#F97316" strokeWidth={2} dot={{r: 3, fill: '#F97316', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} connectNulls={false} />
+                    )}
+                    {cpcMetrics.cpc && (
+                      <Line yAxisId="cost" type="monotone" dataKey="cpc_calc" name="cpc" stroke="#A855F7" strokeWidth={2} dot={{r: 3, fill: '#A855F7', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} connectNulls={false} />
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </GlassCard>
+            </>
           )}
 
           {/* 테이블 – 평탄화된 데이터(합계/개별) 표시 */}
@@ -2619,6 +2759,65 @@ export default function AwarenessPage() {
               comments={viralContents.flatMap((v: any) => v.commentsList || [])}
             />
           )}
+        </div>
+      )}
+
+      {/* ── 항목 편집 모달 (Task 4) ── */}
+      {isAdmin && showItemEditPanel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl p-6 w-[440px] shadow-2xl border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+                <SlidersHorizontal className="w-4 h-4 text-fursys-red" /> 뷰어 노출 항목 편집
+              </h3>
+              <button onClick={() => setShowItemEditPanel(false)}><X className="w-4 h-4 text-gray-400 hover:text-gray-700" /></button>
+            </div>
+            <p className="text-xs text-gray-400 mb-4">
+              체크한 항목만 뷰어 화면에 표시됩니다. 저장 후 뷰어에게 즉시 반영됩니다.
+            </p>
+            <div className="grid grid-cols-2 gap-2 mb-5">
+              {([
+                ...ALL_CHART_ITEMS,
+                { key: "cpm_chart", label: "CPM (단가)" },
+                { key: "cpv_chart", label: "CPV (단가)" },
+                { key: "cpc_chart", label: "CPC (단가)" },
+              ] as { key: string; label: string }[]).map(item => (
+                <label key={item.key} className="flex items-center gap-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-lg px-3 py-2 transition-colors border border-gray-100">
+                  <input
+                    type="checkbox"
+                    checked={!!itemEditDraft[item.key]}
+                    onChange={e => setItemEditDraft(prev => ({ ...prev, [item.key]: e.target.checked }))}
+                    className="accent-fursys-red w-4 h-4"
+                  />
+                  <span className="text-sm font-medium text-gray-800">{item.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
+              {itemEditSaved && (
+                <span className="text-xs text-green-500 font-medium flex items-center gap-1 mr-auto">
+                  <Check className="w-3 h-3" /> 저장됨
+                </span>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => setShowItemEditPanel(false)}>취소</Button>
+              <Button size="sm" onClick={() => {
+                try { localStorage.setItem(VIEWER_ITEMS_LS_KEY, JSON.stringify(itemEditDraft)); } catch {}
+                setViewerPreset({ ...itemEditDraft });
+                // 관리자 차트도 동기화 (extra_ 유지)
+                setChartMetrics(prev => {
+                  const next: Record<string, boolean> = { ...itemEditDraft };
+                  for (const [k, v] of Object.entries(prev)) {
+                    if (k.startsWith("extra_")) next[k] = v;
+                  }
+                  return next;
+                });
+                setItemEditSaved(true);
+                setTimeout(() => { setItemEditSaved(false); setShowItemEditPanel(false); }, 1400);
+              }} className="bg-fursys-red hover:bg-red-700 text-white">
+                저장
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 

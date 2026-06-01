@@ -86,8 +86,8 @@ Instructions:
       const DIGITAL_KEYWORDS: Record<string, string[]> = {
         date: ["일자", "날짜", "date", "기간", "일", "월", "week", "주", "업로드"],
         medium: ["매체", "채널", "media", "channel", "platform", "매체명"],
-        mediumDetail: ["매체상세", "상세매체", "세부매체", "detail", "submedium"],
-        agenda: ["아젠다", "캠페인아젠다", "agenda"],
+        mediumDetail: ["매체상세", "상세매체", "세부매체", "detail", "submedium", "상품"],
+        agenda: ["아젠다", "캠페인아젠다", "agenda", "키워드", "소재", "크리에이티브"],
         device: ["디바이스", "기기", "device", "mo", "pc"],
         spend: ["비용", "비", "spend", "cost", "금액", "집행", "광고비", "예산소진", "소진비용"],
         impressions: ["노출", "impression", "imp", "노출수"],
