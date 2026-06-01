@@ -652,6 +652,14 @@ const EXTRA_COL_COLORS = [
   "#F43F5E","#3B82F6","#14B8A6","#E879F9",
 ];
 
+// 차트에서 제외할 extra 컬럼 이름 목록
+// (기본 지표와 중복되거나, 단가 섹션 전용이거나, 텍스트형 컬럼)
+const EXCLUDED_EXTRA_CHART_COLS = new Set([
+  "CTR","VTR","CPM","CPV","CPC","ROAS",
+  "ctr","vtr","cpm","cpv","cpc","roas",
+  "소재","상품",
+]);
+
 // ── 차트 전용 데이터 추출 (테이블 필터 독립적 & 무조건 일자별) ───────────
 function getChartData(
   data: any[],
@@ -1953,24 +1961,26 @@ export default function AwarenessPage() {
                       </label>
                     );
                   })}
-                  {/* 시트 추가 컬럼 — 관리자만 표시 (Task 1-4 뷰어 버그 수정) */}
-                  {isAdmin && detectedExtraCols.map((col, idx) => {
-                    const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
-                    return (
-                      <label key={`extra_${col}`} className="flex items-center gap-1.5 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={!!chartMetrics[`extra_${col}`]}
-                          onChange={(e) => setChartMetrics(prev => ({ ...prev, [`extra_${col}`]: e.target.checked }))}
-                          className="w-3.5 h-3.5"
-                          style={{ accentColor: color }}
-                        />
-                        <span className="text-xs font-medium px-1.5 py-0.5 rounded" style={{ color, backgroundColor: `${color}18` }}>
-                          {col}
-                        </span>
-                      </label>
-                    );
-                  })}
+                  {/* 시트 추가 컬럼 — 관리자만 표시, 중복/불필요 컬럼 제외 */}
+                  {isAdmin && detectedExtraCols
+                    .filter(col => !EXCLUDED_EXTRA_CHART_COLS.has(col))
+                    .map((col, idx) => {
+                      const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
+                      return (
+                        <label key={`extra_${col}`} className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={!!chartMetrics[`extra_${col}`]}
+                            onChange={(e) => setChartMetrics(prev => ({ ...prev, [`extra_${col}`]: e.target.checked }))}
+                            className="w-3.5 h-3.5"
+                            style={{ accentColor: color }}
+                          />
+                          <span className="text-xs font-medium px-1.5 py-0.5 rounded" style={{ color, backgroundColor: `${color}18` }}>
+                            {col}
+                          </span>
+                        </label>
+                      );
+                    })}
                 </div>
               </div>
               <div className="h-[280px] w-full">
@@ -2044,24 +2054,26 @@ export default function AwarenessPage() {
                       <Line yAxisId="right" type="monotone" dataKey="roas" name="roas" stroke="#10B981" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#10B981', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} />
                     )}
 
-                    {/* ── 시트 추가 컬럼 (관리자만) ── */}
-                    {isAdmin && detectedExtraCols.map((col, idx) => {
-                      if (!chartMetrics[`extra_${col}`]) return null;
-                      const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
-                      return (
-                        <Line
-                          key={`extra_${col}`}
-                          yAxisId="left"
-                          type="monotone"
-                          dataKey={(d: any) => d.extra?.[col] ?? 0}
-                          name={col}
-                          stroke={color}
-                          strokeWidth={2.5}
-                          dot={{ r: 3, fill: color, strokeWidth: 2, stroke: '#fff' }}
-                          activeDot={{ r: 5 }}
-                        />
-                      );
-                    })}
+                    {/* ── 시트 추가 컬럼 (관리자만, 중복/불필요 제외) ── */}
+                    {isAdmin && detectedExtraCols
+                      .filter(col => !EXCLUDED_EXTRA_CHART_COLS.has(col))
+                      .map((col, idx) => {
+                        if (!chartMetrics[`extra_${col}`]) return null;
+                        const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
+                        return (
+                          <Line
+                            key={`extra_${col}`}
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey={(d: any) => d.extra?.[col] ?? 0}
+                            name={col}
+                            stroke={color}
+                            strokeWidth={2.5}
+                            dot={{ r: 3, fill: color, strokeWidth: 2, stroke: '#fff' }}
+                            activeDot={{ r: 5 }}
+                          />
+                        );
+                      })}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
