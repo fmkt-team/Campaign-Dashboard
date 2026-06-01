@@ -17,47 +17,71 @@ import {
 // ── 주간 계산 헬퍼 ─────────────────────────────────────────────────
 type WeekInfo = {
   label: string;        // "WEEK 1"
-  rangeLabel: string;   // "4/7 ~ 4/13"
-  start: string;        // "2025-04-07"
-  end: string;          // "2025-04-13"
+  rangeLabel: string;   // "5/27 수 ~ 5/31 일"
+  start: string;        // "2026-05-27"
+  end: string;          // "2026-05-31"
 };
+
+// KST(UTC+9) 기준 오늘 날짜 반환
+function getKstToday(): string {
+  const kst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().slice(0, 10);
+}
+
+// 날짜 문자열에 N일 더하기 (정오 UTC 기준으로 DST 오류 방지)
+function addDaysToDate(dateStr: string, days: number): string {
+  const d = new Date(dateStr + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+const KR_DAYS = ["일", "월", "화", "수", "목", "금", "토"];
+
+// "M/D 요" 형식 포맷 (예: "5/27 수")
+function fmtDayLabel(dateStr: string): string {
+  const d = new Date(dateStr + "T12:00:00Z");
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${KR_DAYS[d.getUTCDay()]}`;
+}
 
 function calculateWeeks(startDate: string, endDate: string): WeekInfo[] {
   if (!startDate || !endDate) return [];
-  const start  = new Date(startDate + "T00:00:00");
-  const end    = new Date(endDate + "T23:59:59");
-  const today  = new Date();
-  const cap    = today < end ? today : end;
+  const kstToday = getKstToday();
+  // 표시 상한: KST 오늘 또는 캠페인 종료일 중 더 이른 날
+  const capDate = kstToday < endDate ? kstToday : endDate;
 
   const weeks: WeekInfo[] = [];
-  let weekStart = new Date(start);
-  let weekNum   = 1;
+  let weekNum  = 1;
+  let curStart = startDate;
 
-  while (weekStart <= cap) {
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    const actualEnd = weekEnd > cap ? cap : weekEnd;
+  while (curStart <= capDate) {
+    // 이 주(월~일)에서 curStart가 속한 일요일을 찾음
+    // getUTCDay(): 0=일, 1=월, ..., 6=토
+    const dow           = new Date(curStart + "T12:00:00Z").getUTCDay();
+    const daysToSunday  = (7 - dow) % 7; // 일=0, 월=6, 화=5, ..., 토=1
+    const weekEndFull   = addDaysToDate(curStart, daysToSunday); // 이 주 일요일
+    // 실제 종료: 이 주 일요일 vs 상한 중 더 이른 날
+    const actualEnd     = weekEndFull < capDate ? weekEndFull : capDate;
 
-    const fmt = (d: Date) => `${d.getMonth() + 1}/${d.getDate()}`;
     weeks.push({
-      label: `WEEK ${weekNum}`,
-      rangeLabel: `${fmt(weekStart)} ~ ${fmt(actualEnd)}`,
-      start: weekStart.toISOString().slice(0, 10),
-      end:   actualEnd.toISOString().slice(0, 10),
+      label:      `WEEK ${weekNum}`,
+      rangeLabel: `${fmtDayLabel(curStart)} ~ ${fmtDayLabel(actualEnd)}`,
+      start:      curStart,
+      end:        actualEnd,
     });
 
-    weekStart = new Date(weekStart);
-    weekStart.setDate(weekStart.getDate() + 7);
+    // 다음 주는 이 주 일요일 다음 날(월요일)부터
+    curStart = addDaysToDate(weekEndFull, 1);
     weekNum++;
+    if (weekNum > 52) break; // 안전 가드
   }
   return weeks;
 }
 
 function getCurrentWeekIdx(weeks: WeekInfo[]): number {
   if (weeks.length === 0) return 0;
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const kstToday = getKstToday();
   for (let i = 0; i < weeks.length; i++) {
-    if (todayStr >= weeks[i].start && todayStr <= weeks[i].end) return i;
+    if (kstToday >= weeks[i].start && kstToday <= weeks[i].end) return i;
   }
   return weeks.length - 1;
 }

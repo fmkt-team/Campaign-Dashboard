@@ -482,16 +482,41 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
   const [editingKpi, setEditingKpi] = useState(false);
   const [kpiDraft, setKpiDraft] = useState<any[]>([]);
 
+  // ── Exposure KPI 항목 설정 ─────────────────────────────────────
+  const EXPOSURE_LS_KEY = "dashboard_kpi_exposure_items";
+  const DEFAULT_EXPOSURE_ITEMS = { media: true, viral: true, youtube: true };
+  const [exposureItems, setExposureItems] = useState(DEFAULT_EXPOSURE_ITEMS);
+  const [showExposureEdit, setShowExposureEdit] = useState(false);
+  const [exposureDraft, setExposureDraft] = useState(DEFAULT_EXPOSURE_ITEMS);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(EXPOSURE_LS_KEY);
+      if (saved) {
+        const p = JSON.parse(saved);
+        setExposureItems({
+          media:   p.media   ?? true,
+          viral:   p.viral   ?? true,
+          youtube: p.youtube ?? true,
+        });
+      }
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const kpiTargets = campaign?.kpiTargets ?? [];
 
   // 자동 합산 계산 — 4개 KPI
   const autoValues: Record<string, number> = {
-    // 1) 캠페인 노출: 매체 조회수 + 바이럴 조회수 + YouTube 조회수
+    // 1) 캠페인 노출: 선택된 항목만 합산 (매체 노출수 / 바이럴 조회수 / YouTube 조회수)
     exposure: (() => {
-      const mediaViews = digitalKpis.reduce((s: number, r: any) => s + (r.views || 0), 0);
-      const viralViews = viralContents.reduce((s: number, r: any) => s + (r.views || 0), 0);
-      const ytViews = youtubeVideos.reduce((s: number, r: any) => s + (r.views || 0), 0);
-      return mediaViews + viralViews + ytViews;
+      const mediaVal = exposureItems.media
+        ? digitalKpis.reduce((s: number, r: any) => s + (r.impressions || 0), 0) : 0;
+      const viralVal = exposureItems.viral
+        ? viralContents.reduce((s: number, r: any) => s + (r.views || 0), 0) : 0;
+      const ytVal = exposureItems.youtube
+        ? youtubeVideos.reduce((s: number, r: any) => s + (r.views || 0), 0) : 0;
+      return mediaVal + viralVal + ytVal;
     })(),
     // 2) 이벤트 신청: 흥미 상세 중 팝업이 아닌 활동의 participants 합산
     event: interestActivities
@@ -513,7 +538,7 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
   // 기본 KPI 초기화 — 4개 항목
   const initDefaultKpis = async () => {
     const defaults = [
-      { label: "캠페인 노출", target: 42000000, current: 0, category: "exposure", description: "매체 조회수 + 바이럴 + YouTube 조회수" },
+      { label: "캠페인 노출", target: 42000000, current: 0, category: "exposure", description: "매체 노출수 + 바이럴 조회수 + YouTube 조회수" },
       { label: "이벤트 신청", target: 3000, current: 0, category: "event", description: "팝업 외 활동 참여자 수 합산" },
       { label: "팝업스토어 집객", target: 6000, current: 0, category: "popup", description: "팝업 활동 참여자 수 합산" },
       { label: "마이크로사이트 유입", target: 100000, current: 0, category: "microsite", description: "캠페인 기간 누적 세션 수 (GA4 직접 연동)" },
@@ -574,6 +599,7 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
           const colorClass = pct >= 100 ? "text-green-500" : pct >= 60 ? "text-indigo-500" : pct >= 30 ? "text-amber-500" : "text-gray-400";
           const barColor = pct >= 100 ? "bg-green-500" : pct >= 60 ? "bg-indigo-500" : pct >= 30 ? "bg-amber-500" : "bg-gray-300";
           const isMicrosite = kpi.category === "microsite";
+          const isExposure  = kpi.category === "exposure";
           return (
             <GlassCard key={idx} className="p-5 relative overflow-hidden">
               <div className="flex items-start justify-between mb-2">
@@ -588,6 +614,16 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
                       className="p-1 rounded text-gray-300 hover:text-indigo-400 disabled:cursor-not-allowed transition-colors"
                     >
                       <Loader2 className={`w-3 h-3 ${kpiSyncing ? "animate-spin text-indigo-400" : ""}`} />
+                    </button>
+                  )}
+                  {/* exposure 카드 전용: 항목 편집 버튼 (관리자 전용) */}
+                  {isAdmin && isExposure && (
+                    <button
+                      onClick={() => { setExposureDraft({ ...exposureItems }); setShowExposureEdit(true); }}
+                      title="노출 KPI 항목 설정"
+                      className="p-1 rounded text-gray-300 hover:text-indigo-400 transition-colors"
+                    >
+                      <Pencil className="w-3 h-3" />
                     </button>
                   )}
                   <span className={`text-xl font-bold font-mono ${colorClass}`}>{pct.toFixed(1)}%</span>
@@ -605,6 +641,56 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
           );
         })}
       </div>
+
+      {/* ── Exposure 항목 편집 모달 ── */}
+      {isAdmin && showExposureEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl p-6 w-[380px] shadow-2xl border border-gray-100">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
+                <Target className="w-4 h-4 text-indigo-500" /> 노출 KPI 항목 설정
+              </h3>
+              <button onClick={() => setShowExposureEdit(false)}><X className="w-4 h-4 text-gray-400 hover:text-gray-700" /></button>
+            </div>
+            <p className="text-xs text-gray-400 mb-4">합산에 포함할 항목을 선택하세요 (1개 이상 필수)</p>
+            <div className="flex flex-col gap-2.5 mb-5">
+              {([
+                { key: "media"   as const, label: "매체 노출수",          desc: "매체 퍼포먼스 데이터의 총 노출 수 (impressions)" },
+                { key: "viral"   as const, label: "바이럴 컨텐츠 조회수",  desc: "바이럴 컨텐츠 누적 조회 수" },
+                { key: "youtube" as const, label: "YouTube 조회수",       desc: "YouTube 영상 누적 조회 수" },
+              ]).map(item => (
+                <label key={item.key} className="flex items-start gap-3 cursor-pointer bg-gray-50 rounded-xl p-3 hover:bg-gray-100 border border-gray-100 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={!!exposureDraft[item.key]}
+                    onChange={e => setExposureDraft(prev => ({ ...prev, [item.key]: e.target.checked }))}
+                    className="accent-indigo-500 w-4 h-4 mt-0.5 flex-shrink-0"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">{item.label}</p>
+                    <p className="text-xs text-gray-400">{item.desc}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-3 border-t border-gray-100">
+              <Button variant="ghost" size="sm" onClick={() => setShowExposureEdit(false)}>취소</Button>
+              <Button
+                size="sm"
+                disabled={!Object.values(exposureDraft).some(Boolean)}
+                onClick={() => {
+                  try { localStorage.setItem(EXPOSURE_LS_KEY, JSON.stringify(exposureDraft)); } catch {}
+                  setExposureItems({ ...exposureDraft });
+                  setShowExposureEdit(false);
+                }}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Check className="w-3.5 h-3.5 mr-1.5" /> 저장
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPI 수정 모달 */}
       {isAdmin && editingKpi && (
