@@ -660,11 +660,12 @@ const EXCLUDED_EXTRA_CHART_COLS = new Set([
   "소재","상품",
 ]);
 
-// ── 차트 전용 데이터 추출 (테이블 필터 독립적 & 무조건 일자별) ───────────
+// ── 차트 전용 데이터 추출 (viewMode 연동) ─────────────────────────────
 function getChartData(
   data: any[],
   filterAgenda: string = "all",
-  dateRange: { from: Date | undefined; to?: Date | undefined } | null = null
+  dateRange: { from: Date | undefined; to?: Date | undefined } | null = null,
+  chartViewMode: ViewMode = "daily"
 ) {
   const valid = data.filter(r => {
     const dValid = r.date && r.date !== "1970-01-01" && VALID_DATE_RE.test(r.date);
@@ -682,10 +683,27 @@ function getChartData(
   const dateGroups = new Map<string, any>();
   for (const row of valid) {
     const extra = parseExtra(row.extraData);
-    const key = row.date; // 항상 일자별
+    // viewMode에 따라 집계 키 결정 (total → 월별로 표시)
+    let key = row.date;
+    try {
+      if (chartViewMode === "weekly")
+        key = format(startOfWeek(parseISO(row.date), { weekStartsOn: 1 }), "yyyy-MM-dd");
+      else if (chartViewMode === "monthly" || chartViewMode === "total")
+        key = row.date.substring(0, 7);
+    } catch {}
     if (!dateGroups.has(key)) {
+      // viewMode별 표시용 레이블 생성
+      let displayLabel = key;
+      try {
+        if (chartViewMode === "daily" && key.length >= 10)
+          displayLabel = key.substring(5).replace('-', '/');         // "2026-05-01" → "05/01"
+        else if (chartViewMode === "weekly" && key.length >= 10)
+          displayLabel = key.substring(5).replace('-', '/') + " 주"; // "2026-05-05" → "05/05 주"
+        else if ((chartViewMode === "monthly" || chartViewMode === "total") && key.length >= 7)
+          displayLabel = key.substring(2, 4) + "년 " + key.substring(5) + "월"; // "2026-05" → "26년 05월"
+      } catch {}
       dateGroups.set(key, {
-        dateLabel: key,
+        dateLabel: displayLabel,
         spend: 0, impressions: 0, views: 0, clicks: 0, conversions: 0, conversionRevenue: 0,
         extra: {} as Record<string, number>,
       });
@@ -896,16 +914,20 @@ export default function AwarenessPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
 
-  // 뷰어 노출 항목 초기 로드 (Task 4)
+  // 뷰어 노출 항목 초기 로드 (설정A: viewerItems, 설정B: viewerDefaults)
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(VIEWER_ITEMS_LS_KEY);
-      const preset: Record<string, boolean> = saved ? JSON.parse(saved) : { ...DEFAULT_VIEWER_PRESET };
-      setViewerPreset(preset);
-      setItemEditDraft(preset);
-      // 관리자: preset 을 chartMetrics 기본값으로 반영 (extra_ 항목은 유지)
+      const savedItems   = localStorage.getItem(VIEWER_ITEMS_LS_KEY);
+      const savedDefault = localStorage.getItem(VIEWER_DEFAULT_LS_KEY);
+      const items: Record<string, boolean>    = savedItems   ? JSON.parse(savedItems)   : { ...DEFAULT_VIEWER_PRESET };
+      const defaults: Record<string, boolean> = savedDefault ? JSON.parse(savedDefault) : { ...DEFAULT_VIEWER_PRESET };
+      setViewerItems(items);
+      setViewerDefaults(defaults);
+      setDraftItems(items);
+      setDraftDefaults(defaults);
+      // chartMetrics 초기값 = 기본 체크(defaults) 기준 (extra_ 유지)
       setChartMetrics(prev => {
-        const next: Record<string, boolean> = { ...preset };
+        const next: Record<string, boolean> = { ...defaults };
         for (const [k, v] of Object.entries(prev)) {
           if (k.startsWith("extra_")) next[k] = v;
         }
@@ -951,7 +973,8 @@ export default function AwarenessPage() {
   const [filterMediumDetail, setFilterMediumDetail] = useState("none");
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   // ── 차트 항목 체크 상태 ──────────────────────────────────────────
-  const VIEWER_ITEMS_LS_KEY = "dashboard_media_viewer_visible_items";
+  const VIEWER_ITEMS_LS_KEY   = "dashboard_media_viewer_items";   // 설정A: 뷰어 선택 가능 항목
+  const VIEWER_DEFAULT_LS_KEY = "dashboard_media_viewer_default"; // 설정B: 기본 체크 항목
   const ALL_CHART_ITEMS = [
     { key: "impressions", label: "노출수" },
     { key: "views",       label: "조회수" },
@@ -968,11 +991,15 @@ export default function AwarenessPage() {
   const [chartMetrics, setChartMetrics] = useState<Record<string, boolean>>({
     impressions: true, views: true, clicks: true, spend: true, ctr: true, vtr: true,
   });
-  const [viewerPreset, setViewerPreset]           = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
+  // 설정A: 뷰어에게 노출할 항목 목록
+  const [viewerItems, setViewerItems]       = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
+  // 설정B: 뷰어 접속 시 기본 체크 항목
+  const [viewerDefaults, setViewerDefaults] = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
   const [showItemEditPanel, setShowItemEditPanel] = useState(false);
-  const [itemEditDraft, setItemEditDraft]         = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
-  const [itemEditSaved, setItemEditSaved]         = useState(false);
-  // CPM / CPV / CPC 별도 차트 (Task 2)
+  const [draftItems, setDraftItems]     = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
+  const [draftDefaults, setDraftDefaults] = useState<Record<string, boolean>>(DEFAULT_VIEWER_PRESET);
+  const [itemEditSaved, setItemEditSaved] = useState(false);
+  // CPM / CPV / CPC 별도 차트
   const [cpcMetrics, setCpcMetrics] = useState({ cpm: true, cpv: true, cpc: true });
 
   // ── KPI 카드 ─────────────────────────────────────────────────
@@ -1403,7 +1430,7 @@ export default function AwarenessPage() {
   const uniqueMediumDetails = Array.from(new Set(digitalKpis.filter(r => filterMedium === "all" || r.medium === filterMedium).map(r => r.mediumDetail).filter(Boolean))).sort() as string[];
 
   const groupedDigital = groupDigitalKpis(digitalKpis, viewMode, filterAgenda, filterDevice, filterMedium, filterMediumDetail, dateRange || null);
-  const chartData      = getChartData(digitalKpis, filterAgenda, dateRange || null);
+  const chartData      = getChartData(digitalKpis, filterAgenda, dateRange || null, viewMode);
   const allDigital     = groupDigitalKpis(digitalKpis, "total", filterAgenda, filterDevice, filterMedium, filterMediumDetail, dateRange || null);
   const groupedViral   = groupViral(viralContents, "daily");
 
@@ -1930,12 +1957,12 @@ export default function AwarenessPage() {
                 <div className="flex items-center gap-2 shrink-0">
                   <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
                     <span className="w-2 h-4 bg-fursys-red rounded-sm"></span>
-                    일자별 그래프
+                    {VIEW_MODE_LABELS[viewMode]} 그래프
                   </h3>
                   {/* 항목 편집 버튼 (관리자 전용) — Task 4 */}
                   {isAdmin && (
                     <button
-                      onClick={() => { setItemEditDraft({ ...viewerPreset }); setShowItemEditPanel(true); }}
+                      onClick={() => { setDraftItems({ ...viewerItems }); setDraftDefaults({ ...viewerDefaults }); setShowItemEditPanel(true); }}
                       className="flex items-center gap-1 text-xs text-gray-400 hover:text-fursys-red border border-gray-200 rounded px-2 py-1 transition-colors"
                     >
                       <SlidersHorizontal className="w-3 h-3" /> 항목 편집
@@ -1943,18 +1970,16 @@ export default function AwarenessPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-3 flex-wrap flex-1 justify-end">
-                  {/* 체크박스 — 재정렬 + admin/viewer 분기 (Task 1-2, 1-4, 4-2) */}
+                  {/* 체크박스 — admin: 전체 표시 / viewer: viewerItems 범위 내 표시, 기본값=viewerDefaults */}
                   {ALL_CHART_ITEMS.map(metric => {
-                    const isVisible = isAdmin ? true : !!viewerPreset[metric.key];
+                    const isVisible = isAdmin ? true : !!viewerItems[metric.key];
                     if (!isVisible) return null;
-                    const isChecked = isAdmin ? !!chartMetrics[metric.key] : !!viewerPreset[metric.key];
                     return (
-                      <label key={metric.key} className={`flex items-center gap-1.5 ${isAdmin ? "cursor-pointer" : "cursor-default"}`}>
+                      <label key={metric.key} className="flex items-center gap-1.5 cursor-pointer">
                         <input
                           type="checkbox"
-                          checked={isChecked}
-                          onChange={isAdmin ? (e) => setChartMetrics(prev => ({ ...prev, [metric.key]: e.target.checked })) : undefined}
-                          readOnly={!isAdmin}
+                          checked={!!chartMetrics[metric.key]}
+                          onChange={(e) => setChartMetrics(prev => ({ ...prev, [metric.key]: e.target.checked }))}
                           className="accent-fursys-red w-3.5 h-3.5"
                         />
                         <span className="text-xs text-gray-600 font-medium">{metric.label}</span>
@@ -2027,30 +2052,30 @@ export default function AwarenessPage() {
                     />
 
                     {/* ── 막대그래프: 수량 지표 (Task 1-3) ── */}
-                    {(isAdmin ? chartMetrics["impressions"] : viewerPreset["impressions"]) && (
+                    {chartMetrics["impressions"] && (
                       <Bar yAxisId="left" dataKey="impressions" name="impressions" fill="#2563EB26" stroke="#2563EB" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
                     )}
-                    {(isAdmin ? chartMetrics["views"] : viewerPreset["views"]) && (
+                    {chartMetrics["views"] && (
                       <Bar yAxisId="left" dataKey="views" name="views" fill="#DC262626" stroke="#DC2626" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
                     )}
-                    {(isAdmin ? chartMetrics["clicks"] : viewerPreset["clicks"]) && (
+                    {chartMetrics["clicks"] && (
                       <Bar yAxisId="left" dataKey="clicks" name="clicks" fill="#D9770626" stroke="#D97706" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
                     )}
-                    {(isAdmin ? chartMetrics["conversions"] : viewerPreset["conversions"]) && (
+                    {chartMetrics["conversions"] && (
                       <Bar yAxisId="left" dataKey="conversions" name="conversions" fill="#05966926" stroke="#059669" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
                     )}
-                    {(isAdmin ? chartMetrics["spend"] : viewerPreset["spend"]) && (
+                    {chartMetrics["spend"] && (
                       <Bar yAxisId="left" dataKey="spend" name="spend" fill="#F59E0B26" stroke="#F59E0B" strokeWidth={1} radius={[3,3,0,0]} barSize={14} />
                     )}
 
                     {/* ── 꺾은선그래프: 비율 지표 (Task 1-3) ── */}
-                    {(isAdmin ? chartMetrics["vtr"] : viewerPreset["vtr"]) && (
+                    {chartMetrics["vtr"] && (
                       <Line yAxisId="right" type="monotone" dataKey="vtr" name="vtr" stroke="#8B5CF6" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#8B5CF6', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} />
                     )}
-                    {(isAdmin ? chartMetrics["ctr"] : viewerPreset["ctr"]) && (
+                    {chartMetrics["ctr"] && (
                       <Line yAxisId="right" type="monotone" dataKey="ctr" name="ctr" stroke="#EC4899" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#EC4899', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} />
                     )}
-                    {(isAdmin ? chartMetrics["roas"] : viewerPreset["roas"]) && (
+                    {chartMetrics["roas"] && (
                       <Line yAxisId="right" type="monotone" dataKey="roas" name="roas" stroke="#10B981" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#10B981', strokeWidth: 2, stroke: '#fff'}} activeDot={{r: 5}} />
                     )}
 
@@ -2774,36 +2799,64 @@ export default function AwarenessPage() {
         </div>
       )}
 
-      {/* ── 항목 편집 모달 (Task 4) ── */}
+      {/* ── 항목 편집 모달 (두 가지 설정: 뷰어 노출 + 기본 체크) ── */}
       {isAdmin && showItemEditPanel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl p-6 w-[440px] shadow-2xl border border-gray-100">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white rounded-2xl p-6 w-[480px] shadow-2xl border border-gray-100">
+            <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold text-gray-900 text-sm flex items-center gap-2">
-                <SlidersHorizontal className="w-4 h-4 text-fursys-red" /> 뷰어 노출 항목 편집
+                <SlidersHorizontal className="w-4 h-4 text-fursys-red" /> 뷰어 항목 설정
               </h3>
               <button onClick={() => setShowItemEditPanel(false)}><X className="w-4 h-4 text-gray-400 hover:text-gray-700" /></button>
             </div>
-            <p className="text-xs text-gray-400 mb-4">
-              체크한 항목만 뷰어 화면에 표시됩니다. 저장 후 뷰어에게 즉시 반영됩니다.
-            </p>
-            <div className="grid grid-cols-2 gap-2 mb-5">
+            {/* 컬럼 헤더 */}
+            <div className="flex items-center gap-2 mb-2 px-3 pb-2 border-b border-gray-100">
+              <span className="flex-1 text-xs font-semibold text-gray-500">항목</span>
+              <span className="text-xs font-semibold text-gray-400 text-center w-16">뷰어 노출</span>
+              <span className="text-xs font-semibold text-gray-400 text-center w-16">기본 체크</span>
+            </div>
+            <div className="flex flex-col gap-1.5 mb-4 max-h-[360px] overflow-y-auto pr-1">
               {([
                 ...ALL_CHART_ITEMS,
                 { key: "cpm_chart", label: "CPM (단가)" },
                 { key: "cpv_chart", label: "CPV (단가)" },
                 { key: "cpc_chart", label: "CPC (단가)" },
-              ] as { key: string; label: string }[]).map(item => (
-                <label key={item.key} className="flex items-center gap-2 cursor-pointer bg-gray-50 hover:bg-gray-100 rounded-lg px-3 py-2 transition-colors border border-gray-100">
-                  <input
-                    type="checkbox"
-                    checked={!!itemEditDraft[item.key]}
-                    onChange={e => setItemEditDraft(prev => ({ ...prev, [item.key]: e.target.checked }))}
-                    className="accent-fursys-red w-4 h-4"
-                  />
-                  <span className="text-sm font-medium text-gray-800">{item.label}</span>
-                </label>
-              ))}
+              ] as { key: string; label: string }[]).map(item => {
+                const isItemOn = !!draftItems[item.key];
+                return (
+                  <div key={item.key} className="flex items-center gap-2 bg-gray-50 hover:bg-gray-100 rounded-lg px-3 py-2 transition-colors border border-gray-100">
+                    <span className="flex-1 text-sm font-medium text-gray-800">{item.label}</span>
+                    {/* 설정A: 뷰어 노출 */}
+                    <div className="flex justify-center w-16">
+                      <input
+                        type="checkbox"
+                        checked={isItemOn}
+                        onChange={e => {
+                          const on = e.target.checked;
+                          setDraftItems(prev => ({ ...prev, [item.key]: on }));
+                          if (!on) setDraftDefaults(prev => ({ ...prev, [item.key]: false }));
+                        }}
+                        className="accent-fursys-red w-4 h-4 cursor-pointer"
+                      />
+                    </div>
+                    {/* 설정B: 기본 체크 (뷰어 노출 꺼지면 비활성) */}
+                    <div className="flex justify-center w-16">
+                      <input
+                        type="checkbox"
+                        checked={!!draftDefaults[item.key]}
+                        disabled={!isItemOn}
+                        onChange={e => setDraftDefaults(prev => ({ ...prev, [item.key]: e.target.checked }))}
+                        className="w-4 h-4 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        style={{ accentColor: isItemOn ? '#DC2626' : undefined }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="text-xs text-gray-500 bg-blue-50 rounded-lg px-3 py-2.5 border border-blue-100 mb-4 leading-relaxed">
+              <span className="font-semibold text-blue-600">뷰어 노출</span> — 뷰어 화면에 항목을 표시합니다.<br/>
+              <span className="font-semibold text-blue-600">기본 체크</span> — 뷰어 첫 접속 시 체크 상태. 뷰어도 직접 변경 가능합니다.
             </div>
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
               {itemEditSaved && (
@@ -2813,11 +2866,15 @@ export default function AwarenessPage() {
               )}
               <Button variant="ghost" size="sm" onClick={() => setShowItemEditPanel(false)}>취소</Button>
               <Button size="sm" onClick={() => {
-                try { localStorage.setItem(VIEWER_ITEMS_LS_KEY, JSON.stringify(itemEditDraft)); } catch {}
-                setViewerPreset({ ...itemEditDraft });
-                // 관리자 차트도 동기화 (extra_ 유지)
+                try {
+                  localStorage.setItem(VIEWER_ITEMS_LS_KEY, JSON.stringify(draftItems));
+                  localStorage.setItem(VIEWER_DEFAULT_LS_KEY, JSON.stringify(draftDefaults));
+                } catch {}
+                setViewerItems({ ...draftItems });
+                setViewerDefaults({ ...draftDefaults });
+                // 관리자 chartMetrics = draftDefaults 기준으로 동기화 (extra_ 유지)
                 setChartMetrics(prev => {
-                  const next: Record<string, boolean> = { ...itemEditDraft };
+                  const next: Record<string, boolean> = { ...draftDefaults };
                   for (const [k, v] of Object.entries(prev)) {
                     if (k.startsWith("extra_")) next[k] = v;
                   }
