@@ -1026,11 +1026,13 @@ export default function AwarenessPage() {
   };
 
   // ── 구글 시트 동기화 ─────────────────────────────────────────
+  // /api/fetch-raw-sheet → raw 2D 배열 반환 (AI 매체 분석용)
+  // /api/fetch-sheet    → parseGanttSheetData 결과 (타임라인 전용) — 여기서는 사용하지 않음
   const handleSheetSync = async (type: "digital" | "viral") => {
     if (!sheetUrl) return alert("스프레드시트 주소를 입력해주세요.");
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/fetch-sheet", {
+      const res = await fetch("/api/fetch-raw-sheet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sheetUrl }),
