@@ -628,6 +628,13 @@ function groupDigitalKpis(
   return flatResult;
 }
 
+// 추가 컬럼 차트 색상 팔레트
+const EXTRA_COL_COLORS = [
+  "#0EA5E9","#F97316","#A855F7","#22C55E",
+  "#EF4444","#EAB308","#06B6D4","#84CC16",
+  "#F43F5E","#3B82F6","#14B8A6","#E879F9",
+];
+
 // ── 차트 전용 데이터 추출 (테이블 필터 독립적 & 무조건 일자별) ───────────
 function getChartData(
   data: any[],
@@ -638,7 +645,7 @@ function getChartData(
     const dValid = r.date && r.date !== "1970-01-01" && VALID_DATE_RE.test(r.date);
     if (!dValid) return false;
     if (filterAgenda !== "all" && r.agenda !== filterAgenda) return false;
-    
+
     if (dateRange?.from || dateRange?.to) {
       const rowDate = new Date(r.date);
       if (dateRange.from && rowDate < dateRange.from) return false;
@@ -649,9 +656,14 @@ function getChartData(
 
   const dateGroups = new Map<string, any>();
   for (const row of valid) {
+    const extra = parseExtra(row.extraData);
     const key = row.date; // 항상 일자별
     if (!dateGroups.has(key)) {
-      dateGroups.set(key, { dateLabel: key, spend: 0, impressions: 0, views: 0, clicks: 0, conversions: 0, conversionRevenue: 0 });
+      dateGroups.set(key, {
+        dateLabel: key,
+        spend: 0, impressions: 0, views: 0, clicks: 0, conversions: 0, conversionRevenue: 0,
+        extra: {} as Record<string, number>,
+      });
     }
     const g = dateGroups.get(key)!;
     g.spend += row.spend || 0;
@@ -660,6 +672,9 @@ function getChartData(
     g.clicks += row.clicks || 0;
     g.conversions += row.conversions || 0;
     g.conversionRevenue += row.conversionRevenue || 0;
+    for (const [k, v] of Object.entries(extra)) {
+      g.extra[k] = (g.extra[k] || 0) + (v as number);
+    }
   }
 
   const result = Array.from(dateGroups.values()).sort((a, b) => a.dateLabel.localeCompare(b.dateLabel));
@@ -992,6 +1007,12 @@ export default function AwarenessPage() {
         setVisibleCols(v => {
           const next = { ...v };
           newLabels.forEach((l: string) => { if (!(l in next)) next[l] = true; });
+          return next;
+        });
+        // 차트에서도 추가 컬럼을 기본 활성화
+        setChartMetrics(prev => {
+          const next = { ...prev };
+          newLabels.forEach((l: string) => { if (!(`extra_${l}` in next)) next[`extra_${l}`] = true; });
           return next;
         });
       }
@@ -1857,8 +1878,8 @@ export default function AwarenessPage() {
                     { key: "roas", label: "ROAS" }
                   ].map(metric => (
                     <label key={metric.key} className="flex items-center gap-1.5 cursor-pointer">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         checked={!!chartMetrics[metric.key]}
                         onChange={(e) => setChartMetrics(prev => ({ ...prev, [metric.key]: e.target.checked }))}
                         className="accent-fursys-red w-3.5 h-3.5"
@@ -1866,6 +1887,24 @@ export default function AwarenessPage() {
                       <span className="text-xs text-gray-600 font-medium">{metric.label}</span>
                     </label>
                   ))}
+                  {/* 시트에서 감지된 추가 컬럼 */}
+                  {detectedExtraCols.map((col, idx) => {
+                    const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
+                    return (
+                      <label key={`extra_${col}`} className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={!!chartMetrics[`extra_${col}`]}
+                          onChange={(e) => setChartMetrics(prev => ({ ...prev, [`extra_${col}`]: e.target.checked }))}
+                          className="w-3.5 h-3.5"
+                          style={{ accentColor: color }}
+                        />
+                        <span className="text-xs font-medium px-1.5 py-0.5 rounded" style={{ color, backgroundColor: `${color}18` }}>
+                          {col}
+                        </span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
               <div className="h-[280px] w-full">
@@ -1927,6 +1966,25 @@ export default function AwarenessPage() {
                     {chartMetrics["ctr"] && <Line yAxisId="right" type="monotone" dataKey="ctr" name="ctr" stroke="#EC4899" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#EC4899', strokeWidth: 2, stroke: '#fff'}} />}
                     {chartMetrics["vtr"] && <Line yAxisId="right" type="monotone" dataKey="vtr" name="vtr" stroke="#8B5CF6" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#8B5CF6', strokeWidth: 2, stroke: '#fff'}} />}
                     {chartMetrics["roas"] && <Line yAxisId="right" type="monotone" dataKey="roas" name="roas" stroke="#10B981" strokeWidth={2.5} strokeDasharray="5 5" dot={{r: 3, fill: '#10B981', strokeWidth: 2, stroke: '#fff'}} />}
+
+                    {/* 시트 추가 컬럼 (extra) */}
+                    {detectedExtraCols.map((col, idx) => {
+                      if (!chartMetrics[`extra_${col}`]) return null;
+                      const color = EXTRA_COL_COLORS[idx % EXTRA_COL_COLORS.length];
+                      return (
+                        <Line
+                          key={`extra_${col}`}
+                          yAxisId="left"
+                          type="monotone"
+                          dataKey={(d: any) => d.extra?.[col] ?? 0}
+                          name={col}
+                          stroke={color}
+                          strokeWidth={2.5}
+                          dot={{ r: 3, fill: color, strokeWidth: 2, stroke: '#fff' }}
+                          activeDot={{ r: 5 }}
+                        />
+                      );
+                    })}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
