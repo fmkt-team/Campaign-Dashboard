@@ -881,7 +881,7 @@ export default function AwarenessPage() {
 
   // ── 탭·뷰 ────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<ActiveTab>("media");
-  const [viewMode,  setViewMode]  = useState<ViewMode>("weekly");
+  const [viewMode,  setViewMode]  = useState<ViewMode>("daily");
   const [showCumulative, setShowCumulative] = useState(true);
 
   // ── 누적 성과 항목 선택 ──────────────────────────────────────
@@ -1062,19 +1062,20 @@ export default function AwarenessPage() {
       if (!res.ok) throw new Error(parsed.error || "AI 분석 실패");
       if (!parsed.rows) throw new Error("AI 응답 형식 오류");
 
+      const totalParsed = (parsed.rows as any[]).length;
       const rows = (parsed.rows as any[])
         .map((r: any) => {
           const date = processDate(r.date) || "";
           if (!date || date === "1970-01-01" || !VALID_DATE_RE.test(date)) return null;
           return {
-            date, 
+            date,
             medium: r.medium || "-",
             mediumDetail: r.mediumDetail || undefined,
             agenda: r.agenda || undefined,
             device: r.device || undefined,
-            spend: processNumber(r.spend), 
+            spend: processNumber(r.spend),
             impressions: processNumber(r.impressions),
-            views: processNumber(r.views), 
+            views: processNumber(r.views),
             clicks: processNumber(r.clicks),
             cpv: processNumber(r.views) > 0 ? processNumber(r.spend) / processNumber(r.views) : 0,
             ctr: processNumber(r.impressions) > 0 ? (processNumber(r.clicks) / processNumber(r.impressions)) * 100 : 0,
@@ -1092,6 +1093,14 @@ export default function AwarenessPage() {
           };
         })
         .filter(Boolean);
+
+      // 안전 가드: 유효 행 0개이면 기존 데이터를 삭제하지 않고 오류 처리
+      if (rows.length === 0) {
+        throw new Error(
+          `유효한 날짜 데이터가 없습니다 (전체 ${totalParsed}행 파싱됨).\n` +
+          `시트의 날짜 컬럼(일자/날짜/date)이 올바른 형식(YYYY-MM-DD 또는 YYYY/MM/DD)인지 확인해주세요.`
+        );
+      }
 
       await syncDigitalKpis({ campaignId, rows: rows as any[] });
 

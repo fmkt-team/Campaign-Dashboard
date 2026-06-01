@@ -175,7 +175,7 @@ Instructions:
         extraColDefs.push({ label, colIdx: i });
       });
 
-      let lastKnownDate = "1970-01-01";
+      let lastKnownDate = "";  // 빈 날짜 행의 날짜를 위에서 아래로 이어받는 carry-forward 값
       let lastKnownMedium = "-";
       let lastKnownMediumDetail = "-";
       let lastKnownAgenda = "-";
@@ -213,9 +213,10 @@ Instructions:
           const sgPersIdx = mapping["signupPersonal"];
           const leadsIdx  = mapping["leadsCollected"];
 
-          let parsedDate = parseDate(dateIdx !== null ? row[dateIdx as any] : "1970-01-01");
-          if (parsedDate === "1970-01-01" && lastKnownDate !== "1970-01-01") parsedDate = lastKnownDate;
-          else lastKnownDate = parsedDate;
+          // carry-forward: 날짜 셀이 비어있으면 직전 유효 날짜를 그대로 사용
+          let parsedDate = dateIdx !== null ? parseDate(row[dateIdx as any]) : "";
+          if (!parsedDate && lastKnownDate) parsedDate = lastKnownDate;
+          else if (parsedDate) lastKnownDate = parsedDate;
 
           const spend       = parseNumber(spendIdx  !== null ? row[spendIdx as any]  : 0);
           const impressions = parseNumber(impIdx    !== null ? row[impIdx as any]    : 0);
