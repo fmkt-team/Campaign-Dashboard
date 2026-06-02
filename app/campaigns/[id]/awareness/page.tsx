@@ -1013,6 +1013,9 @@ export default function AwarenessPage() {
   const [isSyncing,  setIsSyncing]  = useState(false);
   const [syncStatus, setSyncStatus] = useState("");
 
+  // 자동 재동기화용 localStorage 키 (campaignId 기반)
+  const DIGITAL_SHEET_LS_KEY = `awareness-digital-url-${campaignId}`;
+
   // ── 바이럴 매핑 ──────────────────────────────────────────────
   const [previewData,    setPreviewData]    = useState<any[][] | null>(null);
   const [mapping,        setMapping]        = useState<Record<string, string>>({});
@@ -1039,13 +1042,35 @@ export default function AwarenessPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── 전역 새로고침 감지 ─────────────────────────────────────────
+  // ── 전역 새로고침 감지 → 저장된 시트 URL로 자동 재동기화 ────────
   useEffect(() => {
     if (refreshTrigger !== lastRefresh) {
       setLastRefresh(refreshTrigger);
-      setSyncStatus("✨ 데이터 새로고침 중...");
-      setTimeout(() => setSyncStatus(""), 2000);
+      try {
+        const savedUrl = localStorage.getItem(DIGITAL_SHEET_LS_KEY);
+        if (savedUrl) {
+          setSyncStatus("✨ 구글 시트에서 매체 데이터 새로고침 중...");
+          fetch("/api/fetch-raw-sheet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sheetUrl: savedUrl }),
+          })
+            .then(r => r.json())
+            .then(res => {
+              if (res.success && res.data) return runDigitalAI(res.data);
+              setSyncStatus("");
+            })
+            .catch(() => { setSyncStatus(""); });
+        } else {
+          setSyncStatus("✨ 데이터 새로고침 중...");
+          setTimeout(() => setSyncStatus(""), 2000);
+        }
+      } catch {
+        setSyncStatus("✨ 데이터 새로고침 중...");
+        setTimeout(() => setSyncStatus(""), 2000);
+      }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTrigger, lastRefresh]);
 
   // ── AI 매체 분석 ─────────────────────────────────────────────
@@ -1155,6 +1180,10 @@ export default function AwarenessPage() {
   // /api/fetch-sheet    → parseGanttSheetData 결과 (타임라인 전용) — 여기서는 사용하지 않음
   const handleSheetSync = async (type: "digital" | "viral") => {
     if (!sheetUrl) return alert("스프레드시트 주소를 입력해주세요.");
+    // 자동 재동기화를 위해 디지털 시트 URL 저장
+    if (type === "digital") {
+      try { localStorage.setItem(DIGITAL_SHEET_LS_KEY, sheetUrl); } catch {}
+    }
     setIsSyncing(true);
     try {
       const res = await fetch("/api/fetch-raw-sheet", {
@@ -1466,6 +1495,13 @@ export default function AwarenessPage() {
     const extra = parseExtra(row.extraData);
     for (const [k, v] of Object.entries(extra)) {
       extraTotals[k] = (extraTotals[k] || 0) + (v as number);
+    }
+  }
+  // CPM, VTR, CTR, CPV, CPC 는 합산이 아닌 총합 기반 재계산
+  {
+    const totalsCtx = { spend: totalSpend, impressions: totalImpressions, views: totalViews, clicks: totalClicks };
+    for (const [key, fn] of Object.entries(RATIO_EXTRA_KEYS)) {
+      if (key in extraTotals) extraTotals[key] = fn(totalsCtx);
     }
   }
   // 감지된 추가 컬럼 목록 (DB 데이터에서 추출)
