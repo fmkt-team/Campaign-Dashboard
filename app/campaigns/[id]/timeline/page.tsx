@@ -249,23 +249,29 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
   const leftPx  = Math.max(0, (toTs(ls) - chartStartTs) / MS_DAY * pxDay);
   const widthPx = Math.max(pxDay * 0.5, (toTs(le) - toTs(ls)) / MS_DAY * pxDay + pxDay);
 
+  const DRAG_THRESHOLD_PX = 3; // 3px 이상 이동해야 드래그로 판정
+
   const drag = useCallback((e: React.MouseEvent, mode: "move"|"left"|"right") => {
     e.preventDefault(); e.stopPropagation();
-    if (isDraggingRef) isDraggingRef.current = true;
     const ox = e.clientX, os = toTs(lsRef.current), oe = toTs(leRef.current);
     let moved = false;
 
     const mv = (ev: MouseEvent) => {
+      const dist = Math.abs(ev.clientX - ox);
+      // 3px 미만 이동은 클릭으로 간주, 드래그 시작 안 함
+      if (!moved && dist < DRAG_THRESHOLD_PX) return;
+      if (!moved) {
+        moved = true;
+        if (isDraggingRef) isDraggingRef.current = true;
+      }
       const dd = Math.round((ev.clientX - ox) / pxDay);
-      if (dd === 0) return;
-      moved = true;
       if (mode === "move")  { setLs(toStr(os + dd * MS_DAY)); setLe(toStr(oe + dd * MS_DAY)); }
       if (mode === "left")  { setLs(toStr(Math.min(os + dd * MS_DAY, oe - MS_DAY))); }
       if (mode === "right") { setLe(toStr(Math.max(oe + dd * MS_DAY, os + MS_DAY))); }
     };
     const up = () => {
       if (moved) onSave(task._id, lsRef.current, leRef.current);
-      else onClickEdit(task); // 드래그 없이 클릭 → 편집 모달 (resize 핸들 클릭 포함)
+      else onClickEdit(task); // 3px 미만 이동 or 클릭 → 편집 모달
       if (isDraggingRef) {
         setTimeout(() => { isDraggingRef.current = false; }, 100);
       }
@@ -1115,44 +1121,59 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
                   })}
                 </div>
 
-                {/* 이 주의 태스크 바들 */}
-                {weekBars.length > 0 && (
-                  <div className="relative" style={{ height: weekBars.length * 24 + 4 }}>
-                    {weekBars.map((bar, barIdx) => {
-                      const colW = 100 / 7;
-                      const isActivity = bar.task.isActivity;
-                      const displayText = isActivity
-                        ? (bar.task.name ? `${bar.task.parentTask?.subTask || ''} | ${bar.task.name}` : `${bar.task.parentTask?.subTask || ''}`)
-                        : (bar.task.barLabel ? `${bar.task.subTask} | ${bar.task.barLabel}` : bar.task.subTask);
-                      const tooltipText = isActivity
-                        ? (bar.task.name 
-                            ? `${bar.task.parentTask?.subTask || ''} | ${bar.task.name} (${bar.task.startDate} ~ ${bar.task.endDate})`
-                            : `${bar.task.parentTask?.subTask || ''} (${bar.task.startDate} ~ ${bar.task.endDate})`)
-                        : `${bar.task.barLabel || bar.task.subTask} (${bar.task.startDate} ~ ${bar.task.endDate})`;
-                      return (
-                        <div
-                          key={`${bar.task.__key}-${barIdx}`}
-                          className="absolute rounded px-2 flex items-center text-[10px] text-white font-medium group z-10 hover:z-[60]"
-                          style={{
-                            top: barIdx * 24 + 2,
-                            left: `calc(${bar.startCol * colW}% + 2px)`,
-                            width: `calc(${(bar.endCol - bar.startCol + 1) * colW}% - 4px)`,
-                            height: 20,
-                            backgroundColor: isActivity
-                              ? (categoryColors.get(bar.task.parentTask?.category || '미분류') || pickColor(bar.task.parentTask?.category || ''))
-                              : (categoryColors.get(bar.task.category || '미분류') || pickColor(bar.task.category || '')),
-                          }}
-                        >
-                          <span className="truncate block w-full">{displayText}</span>
-                          <span className="absolute z-[99] invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-900 text-white text-xs px-2 py-1 rounded shadow-md whitespace-nowrap transition-all pointer-events-none bottom-full mb-1 left-1/2 -translate-x-1/2">
-                            {tooltipText}
-                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900" />
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                {/* 이 주의 태스크 바들 — 컬럼별 충돌 기반으로 수직 위치 계산 */}
+                {weekBars.length > 0 && (() => {
+                  // 각 바의 row(수직 슬롯) 계산: 컬럼 범위가 겹치는 선행 바 중 최대 row + 1
+                  const rowForBar: number[] = [];
+                  for (let i = 0; i < weekBars.length; i++) {
+                    let row = 0;
+                    for (let j = 0; j < i; j++) {
+                      const a = weekBars[i], b = weekBars[j];
+                      if (b.startCol <= a.endCol && b.endCol >= a.startCol) {
+                        row = Math.max(row, rowForBar[j] + 1);
+                      }
+                    }
+                    rowForBar.push(row);
+                  }
+                  const maxRow = rowForBar.length > 0 ? Math.max(...rowForBar) : 0;
+                  const colW = 100 / 7;
+                  return (
+                    <div className="relative" style={{ height: (maxRow + 1) * 24 + 4 }}>
+                      {weekBars.map((bar, barIdx) => {
+                        const isActivity = bar.task.isActivity;
+                        const displayText = isActivity
+                          ? (bar.task.name ? `${bar.task.parentTask?.subTask || ''} | ${bar.task.name}` : `${bar.task.parentTask?.subTask || ''}`)
+                          : (bar.task.barLabel ? `${bar.task.subTask} | ${bar.task.barLabel}` : bar.task.subTask);
+                        const tooltipText = isActivity
+                          ? (bar.task.name
+                              ? `${bar.task.parentTask?.subTask || ''} | ${bar.task.name} (${bar.task.startDate} ~ ${bar.task.endDate})`
+                              : `${bar.task.parentTask?.subTask || ''} (${bar.task.startDate} ~ ${bar.task.endDate})`)
+                          : `${bar.task.barLabel || bar.task.subTask} (${bar.task.startDate} ~ ${bar.task.endDate})`;
+                        return (
+                          <div
+                            key={`${bar.task.__key}-${barIdx}`}
+                            className="absolute rounded px-2 flex items-center text-[10px] text-white font-medium group z-10 hover:z-[60]"
+                            style={{
+                              top: rowForBar[barIdx] * 24 + 2,
+                              left: `calc(${bar.startCol * colW}% + 2px)`,
+                              width: `calc(${(bar.endCol - bar.startCol + 1) * colW}% - 4px)`,
+                              height: 20,
+                              backgroundColor: isActivity
+                                ? (categoryColors.get(bar.task.parentTask?.category || '미분류') || pickColor(bar.task.parentTask?.category || ''))
+                                : (categoryColors.get(bar.task.category || '미분류') || pickColor(bar.task.category || '')),
+                            }}
+                          >
+                            <span className="truncate block w-full">{displayText}</span>
+                            <span className="absolute z-[99] invisible opacity-0 group-hover:visible group-hover:opacity-100 bg-gray-900 text-white text-xs px-2 py-1 rounded shadow-md whitespace-nowrap transition-all pointer-events-none bottom-full mb-1 left-1/2 -translate-x-1/2">
+                              {tooltipText}
+                              <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900" />
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}

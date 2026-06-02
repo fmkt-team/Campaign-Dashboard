@@ -1925,13 +1925,22 @@ export default function AwarenessPage() {
                     );
                   }
                   if (item === "signupCorporate" && cumulativeVisibleItems.signupCorporate) {
-                    return <StatCard key="signupCorporate" label="기업가입" value={fmt(totalSignupCorporate)} />;
+                    const sgCorpKpi = kpiTargets.find(t => t.label?.includes("기업가입") || t.label?.includes("기업회원"));
+                    const kpiInfo = sgCorpKpi ? { target: fmt(sgCorpKpi.target), rate: sgCorpKpi.target > 0 ? (totalSignupCorporate / sgCorpKpi.target) * 100 : 0, isBudget: false } : undefined;
+                    return <StatCard key="signupCorporate" label="기업가입" value={fmt(totalSignupCorporate)} kpiInfo={kpiInfo}
+                      onKpiEdit={() => { setEditingKpi({ label: "기업가입", target: sgCorpKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("기업가입") || t.label?.includes("기업회원")) }); setKpiTargetVal(String(sgCorpKpi?.target || "")); }} />;
                   }
                   if (item === "signupPersonal" && cumulativeVisibleItems.signupPersonal) {
-                    return <StatCard key="signupPersonal" label="개인가입" value={fmt(totalSignupPersonal)} />;
+                    const sgPerKpi = kpiTargets.find(t => t.label?.includes("개인가입") || t.label?.includes("개인회원"));
+                    const kpiInfo = sgPerKpi ? { target: fmt(sgPerKpi.target), rate: sgPerKpi.target > 0 ? (totalSignupPersonal / sgPerKpi.target) * 100 : 0, isBudget: false } : undefined;
+                    return <StatCard key="signupPersonal" label="개인가입" value={fmt(totalSignupPersonal)} kpiInfo={kpiInfo}
+                      onKpiEdit={() => { setEditingKpi({ label: "개인가입", target: sgPerKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("개인가입") || t.label?.includes("개인회원")) }); setKpiTargetVal(String(sgPerKpi?.target || "")); }} />;
                   }
                   if (item === "leadsCollected" && cumulativeVisibleItems.leadsCollected) {
-                    return <StatCard key="leadsCollected" label="리드수집" value={fmt(totalLeadsCollected)} />;
+                    const leadsKpi = kpiTargets.find(t => t.label?.includes("리드"));
+                    const kpiInfo = leadsKpi ? { target: fmt(leadsKpi.target), rate: leadsKpi.target > 0 ? (totalLeadsCollected / leadsKpi.target) * 100 : 0, isBudget: false } : undefined;
+                    return <StatCard key="leadsCollected" label="리드수집" value={fmt(totalLeadsCollected)} kpiInfo={kpiInfo}
+                      onKpiEdit={() => { setEditingKpi({ label: "리드수집", target: leadsKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label?.includes("리드")) }); setKpiTargetVal(String(leadsKpi?.target || "")); }} />;
                   }
                   if (detectedExtraCols.includes(item) && cumulativeVisibleItems[item]) {
                     const val = extraTotals[item] || 0;
@@ -1939,7 +1948,10 @@ export default function AwarenessPage() {
                     const isCrcy = ["CPM","CPV","CPC","cpm","cpv","cpc"].includes(item);
                     const displayVal = isPct ? `${val.toFixed(1)}%` : isCrcy ? fmtKrw(Math.round(val)) : fmt(val);
                     const avgLabel   = (isPct || isCrcy) ? `평균 ${item.toUpperCase()}` : item;
-                    return <StatCard key={item} label={avgLabel} value={displayVal} />;
+                    const extraKpi   = kpiTargets.find(t => t.label === avgLabel || t.label === item);
+                    const extraKpiInfo = extraKpi ? { target: isPct ? pct(extraKpi.target) : isCrcy ? fmtKrw(extraKpi.target) : fmt(extraKpi.target), isBudget: false } : undefined;
+                    return <StatCard key={item} label={avgLabel} value={displayVal} kpiInfo={extraKpiInfo}
+                      onKpiEdit={() => { setEditingKpi({ label: avgLabel, target: extraKpi?.target || 0, idx: kpiTargets.findIndex(t => t.label === avgLabel || t.label === item) }); setKpiTargetVal(String(extraKpi?.target || "")); }} />;
                   }
                   return null;
                 })}
