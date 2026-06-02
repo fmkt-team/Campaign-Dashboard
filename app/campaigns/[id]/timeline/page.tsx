@@ -265,7 +265,7 @@ function GanttBar({ task, chartStartTs, totalDays, containerW, rowH, barColor, o
     };
     const up = () => {
       if (moved) onSave(task._id, lsRef.current, leRef.current);
-      else if (mode === "move") onClickEdit(task);
+      else onClickEdit(task); // 드래그 없이 클릭 → 편집 모달 (resize 핸들 클릭 포함)
       if (isDraggingRef) {
         setTimeout(() => { isDraggingRef.current = false; }, 100);
       }
@@ -1057,6 +1057,9 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
               }
             }
 
+            // 이 주의 첫 번째 유효 날짜 (empty 셀 제외)
+            const weekFirstDate = week.find(d => d.date)?.date ?? "";
+
             for (const task of Array.from(allTasksInWeek.values())) {
               const visStart = task.startDate < monthStartStr ? monthStartStr : task.startDate;
               const visEnd = task.endDate > monthEndStr ? monthEndStr : task.endDate;
@@ -1069,7 +1072,9 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
                 if (d >= visStart && startCol === -1) startCol = i;
                 if (d <= visEnd) endCol = i;
               }
-              if (startCol === -1 && endCol !== -1) {
+
+              // 이전 주(또는 이전 달)에서 이어지는 항목은 이 주의 첫 번째 유효 칸부터 시작
+              if (endCol !== -1 && (startCol === -1 || visStart < weekFirstDate)) {
                 for (let i = 0; i < 7; i++) {
                   if (week[i].date) { startCol = i; break; }
                 }

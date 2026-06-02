@@ -1853,11 +1853,8 @@ export default function AwarenessPage() {
                     );
                   }
                   if (item === "cpv" && cumulativeVisibleItems.cpv) {
-                    const kpiInfo = cpvKpi ? {
-                      target: fmtKrw(cpvKpi.target),
-                      rate: cpvKpi.target > 0 ? (avgCpv / cpvKpi.target) * 100 : 0,
-                      isBudget: false
-                    } : undefined;
+                    // 평균 지표 → 목표치만 표시, 달성률 숨김 (rate 없음)
+                    const kpiInfo = cpvKpi ? { target: fmtKrw(cpvKpi.target), isBudget: false } : undefined;
                     return (
                       <StatCard
                         key="cpv"
@@ -1869,11 +1866,8 @@ export default function AwarenessPage() {
                     );
                   }
                   if (item === "ctr" && cumulativeVisibleItems.ctr) {
-                    const kpiInfo = ctrKpi ? {
-                      target: pct(ctrKpi.target),
-                      rate: ctrKpi.target > 0 ? (avgCtr / ctrKpi.target) * 100 : 0,
-                      isBudget: false
-                    } : undefined;
+                    // 평균 지표 → 목표치만 표시, 달성률 숨김
+                    const kpiInfo = ctrKpi ? { target: pct(ctrKpi.target), isBudget: false } : undefined;
                     return (
                       <StatCard
                         key="ctr"
@@ -1917,11 +1911,8 @@ export default function AwarenessPage() {
                     );
                   }
                   if (item === "roas" && cumulativeVisibleItems.roas) {
-                    const kpiInfo = roasKpi ? {
-                      target: pct(roasKpi.target),
-                      rate: roasKpi.target > 0 ? (avgRoas / roasKpi.target) * 100 : 0,
-                      isBudget: false
-                    } : undefined;
+                    // 평균 지표 → 목표치만 표시, 달성률 숨김
+                    const kpiInfo = roasKpi ? { target: pct(roasKpi.target), isBudget: false } : undefined;
                     return (
                       <StatCard
                         key="roas"
