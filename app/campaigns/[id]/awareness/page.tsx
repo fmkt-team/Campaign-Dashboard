@@ -1046,26 +1046,24 @@ export default function AwarenessPage() {
   useEffect(() => {
     if (refreshTrigger !== lastRefresh) {
       setLastRefresh(refreshTrigger);
-      try {
-        const savedUrl = localStorage.getItem(DIGITAL_SHEET_LS_KEY);
-        if (savedUrl) {
-          setSyncStatus("✨ 구글 시트에서 매체 데이터 새로고침 중...");
-          fetch("/api/fetch-raw-sheet", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sheetUrl: savedUrl }),
+      // Convex 우선 → localStorage 폴백으로 저장된 시트 URL 가져오기
+      const convexUrl  = campaign?.digitalSheetUrl ?? "";
+      const localUrl   = (() => { try { return localStorage.getItem(DIGITAL_SHEET_LS_KEY) ?? ""; } catch { return ""; } })();
+      const savedUrl   = convexUrl || localUrl;
+      if (savedUrl) {
+        setSyncStatus("✨ 구글 시트에서 매체 데이터 새로고침 중...");
+        fetch("/api/fetch-raw-sheet", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sheetUrl: savedUrl }),
+        })
+          .then(r => r.json())
+          .then(res => {
+            if (res.success && res.data) return runDigitalAI(res.data);
+            setSyncStatus("");
           })
-            .then(r => r.json())
-            .then(res => {
-              if (res.success && res.data) return runDigitalAI(res.data);
-              setSyncStatus("");
-            })
-            .catch(() => { setSyncStatus(""); });
-        } else {
-          setSyncStatus("✨ 데이터 새로고침 중...");
-          setTimeout(() => setSyncStatus(""), 2000);
-        }
-      } catch {
+          .catch(() => { setSyncStatus(""); });
+      } else {
         setSyncStatus("✨ 데이터 새로고침 중...");
         setTimeout(() => setSyncStatus(""), 2000);
       }
@@ -1180,9 +1178,10 @@ export default function AwarenessPage() {
   // /api/fetch-sheet    → parseGanttSheetData 결과 (타임라인 전용) — 여기서는 사용하지 않음
   const handleSheetSync = async (type: "digital" | "viral") => {
     if (!sheetUrl) return alert("스프레드시트 주소를 입력해주세요.");
-    // 자동 재동기화를 위해 디지털 시트 URL 저장
-    if (type === "digital") {
+    // 자동 재동기화를 위해 디지털 시트 URL 저장 (Convex + localStorage)
+    if (type === "digital" && campaign) {
       try { localStorage.setItem(DIGITAL_SHEET_LS_KEY, sheetUrl); } catch {}
+      updateCampaign({ id: campaign._id, digitalSheetUrl: sheetUrl }).catch(() => {});
     }
     setIsSyncing(true);
     try {
@@ -1869,7 +1868,13 @@ export default function AwarenessPage() {
                   if (item === "leadsCollected" && cumulativeVisibleItems.leadsCollected) {
                     return <StatCard key="leadsCollected" label="리드수집" value={fmt(totalLeadsCollected)} />;
                   }
-                  if (detectedExtraCols.includes(item) && cumulativeVisibleItems[item]) return <StatCard key={item} label={item} value={fmt(extraTotals[item] || 0)} />;
+                  if (detectedExtraCols.includes(item) && cumulativeVisibleItems[item]) {
+                    const val = extraTotals[item] || 0;
+                    const isPct  = ["VTR","CTR","vtr","ctr"].includes(item);
+                    const isCrcy = ["CPM","CPV","CPC","cpm","cpv","cpc"].includes(item);
+                    const displayVal = isPct ? `${val.toFixed(1)}%` : isCrcy ? fmtKrw(Math.round(val)) : fmt(val);
+                    return <StatCard key={item} label={item} value={displayVal} />;
+                  }
                   return null;
                 })}
               </div>

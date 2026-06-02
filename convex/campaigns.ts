@@ -82,11 +82,13 @@ export const updateCampaignSettings = mutation({
       description: v.optional(v.string()),
     }))),
     visibleTabs: v.optional(v.array(v.string())),
+    digitalSheetUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const updates: Record<string, any> = {};
     if (args.kpiTargets !== undefined) updates.kpiTargets = args.kpiTargets;
     if (args.visibleTabs !== undefined) updates.visibleTabs = args.visibleTabs;
+    if (args.digitalSheetUrl !== undefined) updates.digitalSheetUrl = args.digitalSheetUrl;
     await ctx.db.patch(args.id, updates);
   },
 });

@@ -39,6 +39,8 @@ export default defineSchema({
     naverPlaceUrl: v.optional(v.string()),
     // 네이버 키워드 그룹 (유입 상세 브랜드 검색, JSON 문자열)
     naverKeywordGroups: v.optional(v.string()),
+    // 매체 퍼포먼스 구글 시트 URL (자동 재동기화용)
+    digitalSheetUrl: v.optional(v.string()),
   }),
 
   milestones: defineTable({
