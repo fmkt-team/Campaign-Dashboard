@@ -471,7 +471,7 @@ async function fetchAIKeywords(texts: string[]): Promise<string[][]> {
   }
 }
 
-function NaverReviewAnalyzer() {
+function NaverReviewAnalyzer({ autoTrigger }: { autoTrigger?: number }) {
   const params = useParams();
   const analyzerCampaignId = params.id as string;
   const NAVER_URL_LS_KEY  = `naverReviewUrl_${analyzerCampaignId}`;
@@ -579,6 +579,36 @@ function NaverReviewAnalyzer() {
       setCrawling(false);
     }
   };
+
+  // ── 자동 새로고침 트리거 — 네이버 플레이스 리뷰 재크롤 ────────────
+  const prevAutoTriggerRef = useRef(0);
+  useEffect(() => {
+    if (!autoTrigger || autoTrigger === prevAutoTriggerRef.current) return;
+    prevAutoTriggerRef.current = autoTrigger;
+    const effectiveUrl = naverUrl.trim() || (analyzerCampaignData?.naverPlaceUrl?.trim() ?? "");
+    if (!effectiveUrl || crawling) return;
+    if (!naverUrl.trim()) setNaverUrl(effectiveUrl);
+    // crawl() 직접 실행 (naverUrl 상태 업데이트 비동기 문제 우회)
+    (async () => {
+      setCrawling(true);
+      setCrawlError("");
+      try {
+        const res = await fetch("/api/naver-reviews", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: effectiveUrl }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) { setCrawlError(data.error || "크롤링 실패"); return; }
+        await analyzeWithAI(data.reviews || [], { total: data.total, textTotal: data.textTotal, source: data.source });
+      } catch (e: any) {
+        setCrawlError(e.message || "네트워크 오류");
+      } finally {
+        setCrawling(false);
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoTrigger]);
 
   // ── 붙여넣기 분석 ──
   const analyzeFromPaste = async () => {
@@ -983,7 +1013,17 @@ export default function InterestPage() {
   };
 
   useEffect(() => {
-    if (refreshTrigger !== lastRefresh) setLastRefresh(refreshTrigger);
+    if (refreshTrigger !== lastRefresh) {
+      setLastRefresh(refreshTrigger);
+      // 흥미 상세 — 저장된 시트 URL로 자동 재동기화
+      (["event", "popup", "vip"] as const).forEach(type => {
+        try {
+          const savedUrl = localStorage.getItem(`interest_${type}_sheet_${campaignId}`);
+          if (savedUrl) syncFromSheet(type, savedUrl);
+        } catch {}
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTrigger, lastRefresh]);
 
   const syncFromSheet = useCallback(async (type: "event" | "popup" | "vip" | "response", url: string) => {
@@ -1948,7 +1988,7 @@ export default function InterestPage() {
               </GlassCard>
             </div>
 
-            <NaverReviewAnalyzer />
+            <NaverReviewAnalyzer autoTrigger={refreshTrigger} />
           </div>
         )}
       </section>

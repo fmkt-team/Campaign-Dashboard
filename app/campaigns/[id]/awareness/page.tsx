@@ -1042,14 +1042,15 @@ export default function AwarenessPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── 전역 새로고침 감지 → 저장된 시트 URL로 자동 재동기화 ────────
+  // ── 전역 새로고침 감지 → 매체 시트 + YouTube + 바이럴 일괄 업데이트 ────
   useEffect(() => {
     if (refreshTrigger !== lastRefresh) {
       setLastRefresh(refreshTrigger);
-      // Convex 우선 → localStorage 폴백으로 저장된 시트 URL 가져오기
-      const convexUrl  = campaign?.digitalSheetUrl ?? "";
-      const localUrl   = (() => { try { return localStorage.getItem(DIGITAL_SHEET_LS_KEY) ?? ""; } catch { return ""; } })();
-      const savedUrl   = convexUrl || localUrl;
+
+      // 1) 매체 퍼포먼스 구글 시트 재동기화 (Convex URL 우선 → localStorage 폴백)
+      const convexUrl = campaign?.digitalSheetUrl ?? "";
+      const localUrl  = (() => { try { return localStorage.getItem(DIGITAL_SHEET_LS_KEY) ?? ""; } catch { return ""; } })();
+      const savedUrl  = convexUrl || localUrl;
       if (savedUrl) {
         setSyncStatus("✨ 구글 시트에서 매체 데이터 새로고침 중...");
         fetch("/api/fetch-raw-sheet", {
@@ -1058,12 +1059,71 @@ export default function AwarenessPage() {
           body: JSON.stringify({ sheetUrl: savedUrl }),
         })
           .then(r => r.json())
-          .then(res => {
-            if (res.success && res.data) return runDigitalAI(res.data);
-            setSyncStatus("");
-          })
+          .then(res => { if (res.success && res.data) return runDigitalAI(res.data); setSyncStatus(""); })
           .catch(() => { setSyncStatus(""); });
-      } else {
+      }
+
+      // 2) 캠페인 광고 영상 — YouTube 통계 일괄 업데이트
+      if (youtubeVideos.length > 0) {
+        (async () => {
+          for (const video of youtubeVideos) {
+            if (!video.youtubeId || video.youtubeId === "-") continue;
+            try {
+              const ytUrl = `https://www.youtube.com/watch?v=${video.youtubeId}`;
+              const res = await fetch("/api/fetch-sns-stats", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: ytUrl }),
+              });
+              const data = await res.json();
+              if (data.success && data.stats) {
+                await updateYouTubeVideo({
+                  videoId: video._id,
+                  updates: {
+                    views:        data.stats.views    ?? video.views,
+                    likes:        data.stats.likes    ?? video.likes,
+                    comments:     data.stats.comments ?? video.comments,
+                    title:        data.stats.title && data.stats.title !== "-" ? data.stats.title : undefined,
+                    thumbnailUrl: data.stats.thumbnailUrl,
+                  },
+                });
+              }
+            } catch {}
+          }
+        })();
+      }
+
+      // 3) 바이럴 컨텐츠 성과 — URL 접속 통계 일괄 업데이트
+      if (viralContents.length > 0) {
+        (async () => {
+          for (const row of viralContents) {
+            if (!row.url) continue;
+            try {
+              const res = await fetch("/api/fetch-sns-stats", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: row.url }),
+              });
+              const data = await res.json();
+              if (data.success && data.stats) {
+                await updateViralRow({
+                  viralId: row._id,
+                  updates: {
+                    views:        data.stats.views,
+                    likes:        data.stats.likes,
+                    comments:     data.stats.comments,
+                    title:        data.stats.title && data.stats.title !== "-" ? data.stats.title : undefined,
+                    thumbnailUrl: data.stats.thumbnailUrl,
+                    date:         data.stats.date,
+                  },
+                });
+              }
+            } catch {}
+          }
+        })();
+      }
+
+      if (!savedUrl && youtubeVideos.length === 0 && viralContents.length === 0) {
         setSyncStatus("✨ 데이터 새로고침 중...");
         setTimeout(() => setSyncStatus(""), 2000);
       }
@@ -1873,7 +1933,8 @@ export default function AwarenessPage() {
                     const isPct  = ["VTR","CTR","vtr","ctr"].includes(item);
                     const isCrcy = ["CPM","CPV","CPC","cpm","cpv","cpc"].includes(item);
                     const displayVal = isPct ? `${val.toFixed(1)}%` : isCrcy ? fmtKrw(Math.round(val)) : fmt(val);
-                    return <StatCard key={item} label={item} value={displayVal} />;
+                    const avgLabel   = (isPct || isCrcy) ? `평균 ${item.toUpperCase()}` : item;
+                    return <StatCard key={item} label={avgLabel} value={displayVal} />;
                   }
                   return null;
                 })}
