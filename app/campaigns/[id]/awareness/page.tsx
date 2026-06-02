@@ -1694,7 +1694,11 @@ export default function AwarenessPage() {
                 <div className="bg-gray-50 p-3 rounded-lg mb-3 border border-gray-200 flex flex-col gap-2">
                   <p className="text-xs text-gray-400 mb-2">드래그하여 순서를 변경할 수 있습니다. (회색 = 숨김 항목)</p>
                   {(() => {
-                    const allItems = [...cumulativeItemOrder, ...detectedExtraCols.filter(col => !cumulativeItemOrder.includes(col))];
+                    // 대소문자 구분 없이 fixed 항목과 중복되는 extra 컬럼 제외
+                    const fixedLower = new Set(cumulativeItemOrder.map(k => k.toLowerCase()));
+                    const allItems = [...cumulativeItemOrder, ...detectedExtraCols.filter(col =>
+                      !cumulativeItemOrder.includes(col) && !fixedLower.has(col.toLowerCase())
+                    )];
                     return allItems.map((item, idx) => {
                       const itemLabels: Record<string, string> = {
                         spend: "집행 비용", impressions: "노출수", views: "조회수",
@@ -1715,18 +1719,22 @@ export default function AwarenessPage() {
                           onDragOver={(e) => e.preventDefault()}
                           onDrop={() => {
                             if (!draggedCumulativeItem || draggedCumulativeItem === item) return;
-                            const allItems = [...cumulativeItemOrder, ...detectedExtraCols.filter(col => !cumulativeItemOrder.includes(col))];
-                            const draggedIdx = allItems.indexOf(draggedCumulativeItem);
-                            const targetIdx = allItems.indexOf(item);
+                            // extra cols 포함한 전체 목록에서 순서 재계산
+                            const fixedLowerSet = new Set(cumulativeItemOrder.map(k => k.toLowerCase()));
+                            const all = [...cumulativeItemOrder, ...detectedExtraCols.filter(col =>
+                              !cumulativeItemOrder.includes(col) && !fixedLowerSet.has(col.toLowerCase())
+                            )];
+                            const draggedIdx = all.indexOf(draggedCumulativeItem);
+                            const targetIdx  = all.indexOf(item);
                             if (draggedIdx < targetIdx) {
-                              allItems.splice(draggedIdx, 1);
-                              allItems.splice(targetIdx - 1, 0, draggedCumulativeItem);
+                              all.splice(draggedIdx, 1);
+                              all.splice(targetIdx - 1, 0, draggedCumulativeItem);
                             } else {
-                              allItems.splice(draggedIdx, 1);
-                              allItems.splice(targetIdx, 0, draggedCumulativeItem);
+                              all.splice(draggedIdx, 1);
+                              all.splice(targetIdx, 0, draggedCumulativeItem);
                             }
-                            const nextOrder = allItems.filter(i => cumulativeItemOrder.includes(i));
-                            setCumulativeItemOrder(nextOrder);
+                            // extra cols도 순서에 포함해서 저장 (드래그 결과 유지)
+                            setCumulativeItemOrder(all);
                             setDraggedCumulativeItem(null);
                           }}
                           onDragEnd={() => setDraggedCumulativeItem(null)}
@@ -1763,7 +1771,13 @@ export default function AwarenessPage() {
                 </div>
               )}
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                {[...cumulativeItemOrder, ...detectedExtraCols.filter(col => !cumulativeItemOrder.includes(col))].map(item => {
+                {(() => {
+                  // 대소문자 중복 제거: cumulativeItemOrder에 이미 있는 항목은 extra에서 제외
+                  const fixedLowerSet = new Set(cumulativeItemOrder.map(k => k.toLowerCase()));
+                  return [...cumulativeItemOrder, ...detectedExtraCols.filter(col =>
+                    !cumulativeItemOrder.includes(col) && !fixedLowerSet.has(col.toLowerCase())
+                  )];
+                })().map(item => {
                   const spendKpi = kpiTargets.find(t => t.label?.includes("비용") || t.label?.includes("집행"));
                   const impressKpi = kpiTargets.find(t => t.label?.includes("노출"));
                   const viewsKpi = kpiTargets.find(t => t.label?.includes("조회"));
