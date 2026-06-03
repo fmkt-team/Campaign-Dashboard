@@ -453,6 +453,7 @@ export default function InflowPage() {
   const [loadingTrend, setLoadingTrend] = useState(false);
   const [trendError, setTrendError] = useState("");
   const [timeUnit, setTimeUnit] = useState<"date" | "week" | "month">("date");
+  const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null);
 
   const fetchTrend = useCallback(async () => {
     if (!dateStr.start || keywordGroups.length === 0) return;
@@ -944,16 +945,39 @@ export default function InflowPage() {
           ) : (
             <div className="space-y-6">
               <div className="flex flex-wrap gap-2">
-                {keywordGroups.map((g, i) => (
-                  <div key={i} className="flex items-center gap-2 bg-gray-50 border border-gray-100 px-3 py-1.5 rounded-full text-[11px] group hover:bg-gray-100"
-                    style={{ borderLeft: `3px solid ${LINE_COLORS[i % LINE_COLORS.length]}` }}>
-                    <span className="text-gray-900 font-medium">{g.groupName}</span>
-                    <span className="text-gray-400">{g.keywords.join(", ")}</span>
-                    <button onClick={() => setKeywordGroups(prev => prev.filter((_, idx) => idx !== i))} className="text-gray-900/20 hover:text-red-400 ml-1">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
+                {keywordGroups.map((g, i) => {
+                  const color   = LINE_COLORS[i % LINE_COLORS.length];
+                  const isSelected = selectedKeyword === g.groupName;
+                  const isDimmed   = selectedKeyword !== null && !isSelected;
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => setSelectedKeyword(isSelected ? null : g.groupName)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] cursor-pointer transition-all select-none
+                        ${isSelected
+                          ? "border-2 bg-white shadow-sm"
+                          : isDimmed
+                            ? "border border-gray-100 bg-gray-50 opacity-40"
+                            : "border border-gray-100 bg-gray-50 hover:bg-gray-100"
+                        }`}
+                      style={{ borderLeft: `3px solid ${color}`, borderColor: isSelected ? color : undefined }}
+                    >
+                      <span className={`font-medium ${isSelected ? "text-gray-900" : "text-gray-700"}`}>{g.groupName}</span>
+                      <span className="text-gray-400">{g.keywords.join(", ")}</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setKeywordGroups(prev => prev.filter((_, idx) => idx !== i)); if (selectedKeyword === g.groupName) setSelectedKeyword(null); }}
+                        className="text-gray-300 hover:text-red-400 ml-1"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+                {selectedKeyword && (
+                  <button onClick={() => setSelectedKeyword(null)} className="text-[11px] text-gray-400 hover:text-gray-700 px-2 underline">
+                    전체 보기
+                  </button>
+                )}
               </div>
               <GlassCard className="p-6 h-[420px]">
                 {naverChartData.length > 0 ? (
@@ -964,10 +988,17 @@ export default function InflowPage() {
                       <YAxis stroke="rgba(0,0,0,0.4)" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} unit="%" />
                       <Tooltip contentStyle={{ backgroundColor: "#fff", border: "1px solid rgba(0,0,0,0.1)", borderRadius: "12px", fontSize: "12px", color: "#333" }} />
                       <Legend wrapperStyle={{ paddingTop: "20px", fontSize: "12px" }} />
-                      {trendData?.results?.map((g: any, i: number) => (
-                        <Line key={g.title} type="monotone" dataKey={g.title} stroke={LINE_COLORS[i % LINE_COLORS.length]}
-                          strokeWidth={2.5} dot={{ r: 2, fill: LINE_COLORS[i % LINE_COLORS.length] }} activeDot={{ r: 5 }} />
-                      ))}
+                      {trendData?.results?.map((g: any, i: number) => {
+                        // selectedKeyword가 있으면 해당 그룹만 표시
+                        if (selectedKeyword && g.title !== selectedKeyword) return null;
+                        return (
+                          <Line key={g.title} type="monotone" dataKey={g.title}
+                            stroke={LINE_COLORS[i % LINE_COLORS.length]}
+                            strokeWidth={selectedKeyword ? 3 : 2.5}
+                            dot={{ r: selectedKeyword ? 3 : 2, fill: LINE_COLORS[i % LINE_COLORS.length] }}
+                            activeDot={{ r: 5 }} />
+                        );
+                      })}
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
