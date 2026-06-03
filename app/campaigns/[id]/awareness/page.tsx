@@ -40,6 +40,7 @@ const FIXED_COLS = [
   { key: "views",             label: "조회수" },
   { key: "clicks",            label: "클릭수" },
   { key: "cpv",               label: "CPV" },
+  { key: "cpc",               label: "CPC" },
   { key: "ctrVtr",            label: "VTR / CTR" },
   { key: "conversions",       label: "전환수" },
   { key: "conversionRevenue", label: "전환 매출" },
@@ -50,14 +51,14 @@ const FIXED_COLS = [
 ];
 
 const DEFAULT_VISIBLE: Record<string, boolean> = {
-  spend: true, impressions: true, views: true, clicks: true, cpv: true, ctrVtr: true,
+  spend: true, impressions: true, views: true, clicks: true, cpv: true, cpc: true, ctrVtr: true,
   conversions: true, conversionRevenue: true, roas: true,
   signupCorporate: false, signupPersonal: false, leadsCollected: false,
 };
 
 // FIXED_COLS가 이미 커버하는 extra col 이름 (대소문자 불일치 중복 방지)
 // cpv → "CPV", ctrVtr → "CTR"/"VTR", roas → "ROAS"
-const FIXED_COVERED_LOWER = new Set(["cpv", "ctr", "vtr", "roas"]);
+const FIXED_COVERED_LOWER = new Set(["cpv", "cpc", "ctr", "vtr", "roas"]);
 
 /** detectedExtraCols 중 FIXED_COLS와 중복되는 항목을 제거한 필터 함수 */
 function filterExtraCols(detectedExtraCols: string[], mediaColOrder: string[]): string[] {
@@ -632,19 +633,21 @@ function groupDigitalKpis(
 
   for (const dKey of sortedDates) {
     const p = dateGroups.get(dKey)!;
-    p.cpv = p.views > 0 ? Math.round(p.spend / p.views) : 0;
-    p.ctr = p.impressions > 0 ? Number(((p.clicks / p.impressions) * 100).toFixed(2)) : 0;
-    p.vtr = p.impressions > 0 ? Number(((p.views / p.impressions) * 100).toFixed(2)) : 0;
-    p.roas = p.spend > 0 ? Number(((p.conversionRevenue / p.spend) * 100).toFixed(1)) : 0;
-    recalcRatioExtra(p); // Task 5: 합산된 CPM 등 비율 지표 재계산
+    p.cpv  = p.views > 0       ? Math.round(p.spend / p.views)   : 0;
+    p.cpc  = p.clicks > 0      ? Math.round(p.spend / p.clicks)  : 0;
+    p.ctr  = p.impressions > 0 ? Number(((p.clicks / p.impressions) * 100).toFixed(2)) : 0;
+    p.vtr  = p.impressions > 0 ? Number(((p.views  / p.impressions) * 100).toFixed(2)) : 0;
+    p.roas = p.spend > 0       ? Number(((p.conversionRevenue / p.spend) * 100).toFixed(1)) : 0;
+    recalcRatioExtra(p);
 
     const items = Array.from(p.itemsMap.values()) as any[];
     items.forEach((item: any) => {
-      item.cpv = item.views > 0 ? Math.round(item.spend / item.views) : 0;
-      item.ctr = item.impressions > 0 ? Number(((item.clicks / item.impressions) * 100).toFixed(2)) : 0;
-      item.vtr = item.impressions > 0 ? Number(((item.views / item.impressions) * 100).toFixed(2)) : 0;
-      item.roas = item.spend > 0 ? Number(((item.conversionRevenue / item.spend) * 100).toFixed(1)) : 0;
-      recalcRatioExtra(item); // Task 5: 개별 항목도 재계산
+      item.cpv  = item.views > 0       ? Math.round(item.spend / item.views)   : 0;
+      item.cpc  = item.clicks > 0      ? Math.round(item.spend / item.clicks)  : 0;
+      item.ctr  = item.impressions > 0 ? Number(((item.clicks / item.impressions) * 100).toFixed(2)) : 0;
+      item.vtr  = item.impressions > 0 ? Number(((item.views  / item.impressions) * 100).toFixed(2)) : 0;
+      item.roas = item.spend > 0       ? Number(((item.conversionRevenue / item.spend) * 100).toFixed(1)) : 0;
+      recalcRatioExtra(item);
     });
     items.sort((a, b) => b.spend - a.spend); // 광고비 순 정렬
 
@@ -987,7 +990,7 @@ export default function AwarenessPage() {
 
   // ── 매디어 퍼포먼스 컬럼 순서 편집 ──────────────────────────
   const [mediaColOrder, setMediaColOrder] = useState<string[]>([
-    "spend", "impressions", "views", "clicks", "cpv", "ctrVtr",
+    "spend", "impressions", "views", "clicks", "cpv", "cpc", "ctrVtr",
     "conversions", "conversionRevenue", "roas", "signupCorporate", "signupPersonal", "leadsCollected"
   ]);
   const [showMediaColOrder, setShowMediaColOrder] = useState(false);
@@ -2518,6 +2521,7 @@ export default function AwarenessPage() {
                         if (col === "views")       return <TableHead key="views"       className="text-gray-500 text-[13px] whitespace-nowrap text-right">조회수</TableHead>;
                         if (col === "clicks")      return <TableHead key="clicks"      className="text-gray-500 text-[13px] whitespace-nowrap text-right">클릭수</TableHead>;
                         if (col === "cpv")         return <TableHead key="cpv"         className="text-gray-500 text-[13px] whitespace-nowrap text-right">CPV</TableHead>;
+                        if (col === "cpc")         return <TableHead key="cpc"         className="text-gray-500 text-[13px] whitespace-nowrap text-right">CPC</TableHead>;
                         if (col === "ctrVtr")      return <TableHead key="ctrVtr"      className="text-gray-500 text-[13px] whitespace-nowrap text-right">VTR / CTR</TableHead>;
                         if (col === "conversions") return <TableHead key="conversions" className="text-gray-500 text-[13px] whitespace-nowrap text-right">전환수</TableHead>;
                         if (col === "conversionRevenue") return <TableHead key="conversionRevenue" className="text-gray-500 text-[13px] whitespace-nowrap text-right">전환매출</TableHead>;
@@ -2553,6 +2557,7 @@ export default function AwarenessPage() {
                         if (col === "views")        return <TableCell key="views"        className={`${baseClass} py-3`}>{fmt(data.views)}</TableCell>;
                         if (col === "clicks")       return <TableCell key="clicks"       className={`${baseClass} py-3`}>{fmt(data.clicks)}</TableCell>;
                         if (col === "cpv")          return <TableCell key="cpv"          className={`${baseClass} py-3`}>{fmtKrw(data.cpv)}</TableCell>;
+                        if (col === "cpc")          return <TableCell key="cpc"          className={`${baseClass} py-3`}>{fmtKrw(data.cpc ?? 0)}</TableCell>;
                         if (col === "ctrVtr")       return <TableCell key="ctrVtr"       className={`${baseClass} py-3`}>{data.vtr}% / {data.ctr}%</TableCell>;
                         if (col === "conversions")  return <TableCell key="conversions"  className={`${baseClass} py-3`}>{fmt(data.conversions || 0)}</TableCell>;
                         if (col === "conversionRevenue") return <TableCell key="conversionRevenue" className={`${baseClass} py-3`}>{fmtKrw(data.conversionRevenue || 0)}</TableCell>;
