@@ -103,11 +103,15 @@ function DeltaBadge({ current, prev }: { current: number; prev: number }) {
 
 // ── 자동 데이터 리포트 ─────────────────────────────────────────────
 // 날짜 → 주차 레이블 변환 (WEEK N 형식)
+// 범위 밖(캠페인 시작 전)이면 첫 주차, 종료 후면 마지막 주차로 매핑
 function getWeekLabelForDate(dateStr: string, weeks: WeekInfo[]): string {
+  if (weeks.length === 0) return dateStr;
   const d = dateStr.slice(0, 10);
   for (const w of weeks) {
     if (d >= w.start && d <= w.end) return w.label;
   }
+  if (d < weeks[0].start)                        return weeks[0].label;
+  if (d > weeks[weeks.length - 1].end)            return weeks[weeks.length - 1].label;
   return dateStr;
 }
 
@@ -341,7 +345,7 @@ function AutoDataReport({
             </div>
             {/* 조회수 추이 미니 그래프 */}
             {viewsChartData.length > 1 && (
-              <div className="h-[60px] mt-2">
+              <div className="h-[60px] mt-3 pt-2 border-t border-indigo-100">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={viewsChartData} margin={{ top: 0, right: 0, left: -30, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" vertical={false} />
@@ -438,7 +442,7 @@ function AutoDataReport({
                   </div>
                 </div>
                 {inflow.chartData.length > 1 && (
-                  <div className="h-[70px]">
+                  <div className="h-[70px] mt-3 pt-2 border-t border-rose-100">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={inflow.chartData} margin={{ top: 0, right: 0, left: -30, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" vertical={false} />
