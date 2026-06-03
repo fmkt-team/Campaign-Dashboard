@@ -350,7 +350,8 @@ function AutoDataReport({
                   <LineChart data={viewsChartData} margin={{ top: 0, right: 0, left: -30, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" vertical={false} />
                     <XAxis dataKey="label" tick={{ fontSize: 8 }} tickLine={false} axisLine={false} />
-                    <YAxis tick={{ fontSize: 8 }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 8 }} tickLine={false} axisLine={false}
+                      tickFormatter={(v: number) => v >= 10000 ? `${(v / 10000).toFixed(0)}만` : v.toLocaleString()} />
                     <Tooltip contentStyle={{ fontSize: "10px", borderRadius: "8px", border: "1px solid #e0e7ff" }} formatter={(v: number) => [v.toLocaleString(), "조회수"]} />
                     <Line type="monotone" dataKey="views" stroke="#6366f1" strokeWidth={1.5} dot={false} name="조회수" />
                   </LineChart>
@@ -469,9 +470,11 @@ function AutoDataReport({
 function WeeklyNoteSection({
   campaignId,
   week,
+  readOnly = false,
 }: {
   campaignId: string;
   week: WeekInfo;
+  readOnly?: boolean;
 }) {
   const LS_KEY = `weekSummary_${campaignId}_${week.label}`;
   const [note, setNote] = useState("");
@@ -594,6 +597,9 @@ ${hasData
     }
   };
 
+  // 뷰어에게는 내용이 없으면 아예 숨김
+  if (readOnly && !note) return null;
+
   return (
     <GlassCard className="p-5">
       <div className="flex items-center justify-between mb-3">
@@ -601,33 +607,36 @@ ${hasData
           <h3 className="text-sm font-bold text-gray-900">{week.label} 요약 메모</h3>
           <p className="text-[10px] text-gray-400 mt-0.5">{week.rangeLabel}</p>
         </div>
-        <div className="flex items-center gap-2">
-          {saved && (
-            <span className="text-[11px] text-green-500 font-semibold flex items-center gap-1 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
-              <Check className="w-3 h-3" /> 저장되었습니다
-            </span>
-          )}
-          <button
-            onClick={generateAIDraft}
-            disabled={isGenerating}
-            className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-indigo-600 border border-indigo-200 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-all disabled:opacity-50">
-            {isGenerating
-              ? <><RefreshCw className="w-3 h-3 animate-spin" /> 생성 중...</>
-              : <><Sparkles className="w-3 h-3" /> AI 초안</>}
-          </button>
-          <button
-            onClick={saveNote}
-            className="px-3 py-1 text-[11px] font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-all">
-            저장
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-2">
+            {saved && (
+              <span className="text-[11px] text-green-500 font-semibold flex items-center gap-1 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
+                <Check className="w-3 h-3" /> 저장되었습니다
+              </span>
+            )}
+            <button
+              onClick={generateAIDraft}
+              disabled={isGenerating}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-indigo-600 border border-indigo-200 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-all disabled:opacity-50">
+              {isGenerating
+                ? <><RefreshCw className="w-3 h-3 animate-spin" /> 생성 중...</>
+                : <><Sparkles className="w-3 h-3" /> AI 초안</>}
+            </button>
+            <button
+              onClick={saveNote}
+              className="px-3 py-1 text-[11px] font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-all">
+              저장
+            </button>
+          </div>
+        )}
       </div>
       <textarea
         value={note}
-        onChange={e => setNote(e.target.value)}
-        rows={4}
-        placeholder={`${week.label} (${week.rangeLabel}) 주요 성과 및 인사이트를 입력하거나 AI 초안 버튼으로 자동 생성하세요...`}
-        className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-gray-400 resize-none placeholder:text-gray-400"
+        onChange={readOnly ? undefined : e => setNote(e.target.value)}
+        readOnly={readOnly}
+        rows={readOnly ? Math.min(note.split("\n").length + 1, 8) : 4}
+        placeholder={readOnly ? "" : `${week.label} (${week.rangeLabel}) 주요 성과 및 인사이트를 입력하거나 AI 초안 버튼으로 자동 생성하세요...`}
+        className={`w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none resize-none placeholder:text-gray-400 ${readOnly ? "cursor-default" : "focus:border-gray-400"}`}
       />
     </GlassCard>
   );
@@ -1006,9 +1015,9 @@ export default function InsightsPage() {
         weeks={weeks}
       />
 
-      {/* 주간 요약 메모 (관리자만 편집/추가 가능) */}
-      {isAdmin && selectedWeek && (
-        <WeeklyNoteSection campaignId={id} week={selectedWeek} />
+      {/* 주간 요약 메모: 관리자는 편집 가능, 뷰어는 저장된 내용 읽기 전용 */}
+      {selectedWeek && (
+        <WeeklyNoteSection campaignId={id} week={selectedWeek} readOnly={!isAdmin} />
       )}
 
       {/* 인사이트 카드 목록 */}
