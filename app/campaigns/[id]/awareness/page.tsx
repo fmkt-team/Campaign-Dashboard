@@ -40,7 +40,7 @@ const FIXED_COLS = [
   { key: "views",             label: "조회수" },
   { key: "clicks",            label: "클릭수" },
   { key: "cpv",               label: "CPV" },
-  { key: "ctrVtr",            label: "CTR / VTR" },
+  { key: "ctrVtr",            label: "VTR / CTR" },
   { key: "conversions",       label: "전환수" },
   { key: "conversionRevenue", label: "전환 매출" },
   { key: "roas",              label: "ROAS" },
@@ -2518,7 +2518,7 @@ export default function AwarenessPage() {
                         if (col === "views")       return <TableHead key="views"       className="text-gray-500 text-[13px] whitespace-nowrap text-right">조회수</TableHead>;
                         if (col === "clicks")      return <TableHead key="clicks"      className="text-gray-500 text-[13px] whitespace-nowrap text-right">클릭수</TableHead>;
                         if (col === "cpv")         return <TableHead key="cpv"         className="text-gray-500 text-[13px] whitespace-nowrap text-right">CPV</TableHead>;
-                        if (col === "ctrVtr")      return <TableHead key="ctrVtr"      className="text-gray-500 text-[13px] whitespace-nowrap text-right">CTR / VTR</TableHead>;
+                        if (col === "ctrVtr")      return <TableHead key="ctrVtr"      className="text-gray-500 text-[13px] whitespace-nowrap text-right">VTR / CTR</TableHead>;
                         if (col === "conversions") return <TableHead key="conversions" className="text-gray-500 text-[13px] whitespace-nowrap text-right">전환수</TableHead>;
                         if (col === "conversionRevenue") return <TableHead key="conversionRevenue" className="text-gray-500 text-[13px] whitespace-nowrap text-right">전환매출</TableHead>;
                         if (col === "roas")        return <TableHead key="roas"        className="text-gray-500 text-[13px] whitespace-nowrap text-right">ROAS</TableHead>;
@@ -2553,7 +2553,7 @@ export default function AwarenessPage() {
                         if (col === "views")        return <TableCell key="views"        className={`${baseClass} py-3`}>{fmt(data.views)}</TableCell>;
                         if (col === "clicks")       return <TableCell key="clicks"       className={`${baseClass} py-3`}>{fmt(data.clicks)}</TableCell>;
                         if (col === "cpv")          return <TableCell key="cpv"          className={`${baseClass} py-3`}>{fmtKrw(data.cpv)}</TableCell>;
-                        if (col === "ctrVtr")       return <TableCell key="ctrVtr"       className={`${baseClass} py-3`}>{data.ctr}% / {data.vtr}%</TableCell>;
+                        if (col === "ctrVtr")       return <TableCell key="ctrVtr"       className={`${baseClass} py-3`}>{data.vtr}% / {data.ctr}%</TableCell>;
                         if (col === "conversions")  return <TableCell key="conversions"  className={`${baseClass} py-3`}>{fmt(data.conversions || 0)}</TableCell>;
                         if (col === "conversionRevenue") return <TableCell key="conversionRevenue" className={`${baseClass} py-3`}>{fmtKrw(data.conversionRevenue || 0)}</TableCell>;
                         if (col === "roas")         return <TableCell key="roas"         className={`${baseClass} py-3 ${roasHighlight}`}>
