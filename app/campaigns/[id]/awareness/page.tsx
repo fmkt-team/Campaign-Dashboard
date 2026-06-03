@@ -896,6 +896,42 @@ export default function AwarenessPage() {
   const updateYouTubeVideo = useMutation(api.awareness.updateYouTubeVideo);
   const updateCampaign     = useMutation(api.campaigns.updateCampaignSettings);
 
+  // ── NEW 뱃지 (모든 데이터 업데이트 후 새 댓글 감지) ────────────
+  const COMMENT_COUNT_LS_AD    = `dashboard_comment_count_ad_${campaignId}`;
+  const COMMENT_COUNT_LS_VIRAL = `dashboard_comment_count_viral_${campaignId}`;
+  const [newBadgeAd,    setNewBadgeAd]    = useState(false);
+  const [newBadgeViral, setNewBadgeViral] = useState(false);
+  const refreshFiredRef = useRef(false);
+
+  // 탭 변경 + NEW 뱃지 해제
+  const handleTabChange = (tab: ActiveTab) => {
+    setActiveTab(tab);
+    if (tab === "video") {
+      setNewBadgeAd(false);
+      const cnt = youtubeVideos.reduce((s: number, v: any) => s + (v.comments || 0), 0);
+      try { localStorage.setItem(COMMENT_COUNT_LS_AD, String(cnt)); } catch {}
+    }
+    if (tab === "viral") {
+      setNewBadgeViral(false);
+      const cnt = viralContents.reduce((s: number, v: any) => s + (v.comments || 0), 0);
+      try { localStorage.setItem(COMMENT_COUNT_LS_VIRAL, String(cnt)); } catch {}
+    }
+  };
+
+  // 새 댓글 감지: youtubeVideos/viralContents 변경 시 저장값과 비교
+  useEffect(() => {
+    if (!refreshFiredRef.current) return;
+    try {
+      const savedAd    = parseInt(localStorage.getItem(COMMENT_COUNT_LS_AD)    ?? "0");
+      const savedViral = parseInt(localStorage.getItem(COMMENT_COUNT_LS_VIRAL) ?? "0");
+      const curAd      = youtubeVideos.reduce((s: number, v: any) => s + (v.comments || 0), 0);
+      const curViral   = viralContents.reduce((s: number, v: any) => s + (v.comments || 0), 0);
+      if (curAd > savedAd)       setNewBadgeAd(true);
+      if (curViral > savedViral) setNewBadgeViral(true);
+    } catch {}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [youtubeVideos, viralContents]);
+
   // ── 탭·뷰 ────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<ActiveTab>("media");
   const [viewMode,  setViewMode]  = useState<ViewMode>("daily");
@@ -1092,6 +1128,15 @@ export default function AwarenessPage() {
   useEffect(() => {
     if (refreshTrigger !== lastRefresh) {
       setLastRefresh(refreshTrigger);
+
+      // NEW 뱃지 감지 준비: 현재 댓글 수를 기준값으로 저장
+      try {
+        const curAd    = youtubeVideos.reduce((s: number, v: any) => s + (v.comments || 0), 0);
+        const curViral = viralContents.reduce((s: number, v: any) => s + (v.comments || 0), 0);
+        localStorage.setItem(COMMENT_COUNT_LS_AD,    String(curAd));
+        localStorage.setItem(COMMENT_COUNT_LS_VIRAL, String(curViral));
+        refreshFiredRef.current = true;
+      } catch {}
 
       // 1) 매체 퍼포먼스 구글 시트 재동기화 (Convex URL 우선 → localStorage 폴백)
       const convexUrl = campaign?.digitalSheetUrl ?? "";
@@ -1647,14 +1692,20 @@ export default function AwarenessPage() {
 
       {/* ── 탭 네비게이션 ── */}
       <div className="flex border-b border-gray-200">
-        {TABS.map(tab => (
-          <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-            className={`px-5 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
-              activeTab === tab.key ? "border-fursys-red text-fursys-red" : "border-transparent text-gray-400 hover:text-gray-700"
-            }`}>
-            {tab.label}
-          </button>
-        ))}
+        {TABS.map(tab => {
+          const hasNew = (tab.key === "video" && newBadgeAd) || (tab.key === "viral" && newBadgeViral);
+          return (
+            <button key={tab.key} onClick={() => handleTabChange(tab.key)}
+              className={`relative px-5 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                activeTab === tab.key ? "border-fursys-red text-fursys-red" : "border-transparent text-gray-400 hover:text-gray-700"
+              }`}>
+              {tab.label}
+              {hasNew && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-fursys-red" />
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* ════════════════════════════════════════════════════

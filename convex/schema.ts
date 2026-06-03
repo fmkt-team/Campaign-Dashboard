@@ -41,6 +41,8 @@ export default defineSchema({
     naverKeywordGroups: v.optional(v.string()),
     // 매체 퍼포먼스 구글 시트 URL (자동 재동기화용)
     digitalSheetUrl: v.optional(v.string()),
+    // 주간 요약 메모 (JSON 문자열: { "WEEK 1": "메모내용", ... })
+    weeklyMemos: v.optional(v.string()),
   }),
 
   milestones: defineTable({

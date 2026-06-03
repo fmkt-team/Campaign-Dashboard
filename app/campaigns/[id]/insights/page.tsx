@@ -102,14 +102,25 @@ function DeltaBadge({ current, prev }: { current: number; prev: number }) {
 }
 
 // ── 자동 데이터 리포트 ─────────────────────────────────────────────
+// 날짜 → 주차 레이블 변환 (WEEK N 형식)
+function getWeekLabelForDate(dateStr: string, weeks: WeekInfo[]): string {
+  const d = dateStr.slice(0, 10);
+  for (const w of weeks) {
+    if (d >= w.start && d <= w.end) return w.label;
+  }
+  return dateStr;
+}
+
 function AutoDataReport({
   campaignId,
   currentWeek,
   prevWeek,
+  weeks,
 }: {
   campaignId: Id<"campaigns">;
   currentWeek: WeekInfo | null;
   prevWeek: WeekInfo | null;
+  weeks: WeekInfo[];
 }) {
   const digitalKpis   = useQuery(api.awareness.getDigitalKpis,      { campaignId }) ?? [];
   const youtubeVideos = useQuery(api.awareness.getYouTubeVideos,     { campaignId }) ?? [];
@@ -207,6 +218,18 @@ function AutoDataReport({
     return { cur, prev, ctr, cpv, ytViews, ytComments, prevYtViews, viralViews, viralComments, ytFiltered };
   }, [curKpis, prevKpis, curYoutube, prevYoutube, curViral, currentWeek]);
 
+  // 주차별 조회수 집계 (인지 성과 카드 그래프용)
+  const viewsChartData = useMemo(() => {
+    if (weeks.length === 0) return [];
+    return weeks.map(w => ({
+      label: w.label,
+      views: digitalKpis.filter((r: any) => {
+        const d = (r.date as string)?.slice(0, 10);
+        return d && d >= w.start && d <= w.end;
+      }).reduce((s: number, r: any) => s + (r.views || 0), 0),
+    })).filter(d => d.views > 0);
+  }, [digitalKpis, weeks]);
+
   const interest = useMemo(() => {
     const totalVisitors     = curActivities.reduce((s: number, a: any) => s + (a.visitors || 0), 0);
     const totalParticipants = curActivities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
@@ -223,11 +246,14 @@ function AutoDataReport({
     const totalSessions = curTraffic.reduce((s: number, r: any) => s + (r.sessions || 0), 0);
     const prevUsers     = prevTraffic.reduce((s: number, r: any) => s + (r.users || 0), 0);
     const prevSessions  = prevTraffic.reduce((s: number, r: any) => s + (r.sessions || 0), 0);
-    const chartData = trafficWeekly.slice(-8).map((r: any) => ({
-      label: r.weekLabel || "",
-      users: r.users || 0,
-      sessions: r.sessions || 0,
-    }));
+    // X축 레이블을 WEEK N 형식으로 변환
+    const chartData = trafficWeekly.slice(-8).map((r: any) => {
+      const weekStart = (r.weekStart as string)?.slice(0, 10) ?? "";
+      const label = weeks.length > 0 && weekStart
+        ? getWeekLabelForDate(weekStart, weeks)
+        : (r.weekLabel || "");
+      return { label, users: r.users || 0, sessions: r.sessions || 0 };
+    });
     return { totalUsers, totalSessions, prevUsers, prevSessions, chartData };
   }, [curTraffic, prevTraffic, trafficWeekly]);
 
@@ -313,6 +339,20 @@ function AutoDataReport({
                 <p className="text-[11px] text-gray-400">이 주차 데이터 없음</p>
               )}
             </div>
+            {/* 조회수 추이 미니 그래프 */}
+            {viewsChartData.length > 1 && (
+              <div className="h-[60px] mt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={viewsChartData} margin={{ top: 0, right: 0, left: -30, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 8 }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 8 }} tickLine={false} axisLine={false} />
+                    <Tooltip contentStyle={{ fontSize: "10px", borderRadius: "8px", border: "1px solid #e0e7ff" }} formatter={(v: number) => [v.toLocaleString(), "조회수"]} />
+                    <Line type="monotone" dataKey="views" stroke="#6366f1" strokeWidth={1.5} dot={false} name="조회수" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
           </div>
 
           {/* 흥미 성과 */}
@@ -434,6 +474,10 @@ function WeeklyNoteSection({
   const [saved, setSaved] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  // Convex 연동 (뷰어 공유)
+  const campaignData   = useQuery(api.campaigns.getCampaignById, { id: campaignId as Id<"campaigns"> });
+  const updateCampaign = useMutation(api.campaigns.updateCampaignSettings);
+
   const digitalKpis   = useQuery(api.awareness.getDigitalKpis, { campaignId: campaignId as Id<"campaigns"> }) ?? [];
   const trafficWeekly = useQuery(api.inflow.getTrafficWeekly,  { campaignId: campaignId as Id<"campaigns"> }) ?? [];
   const activities    = useQuery(api.interest.getInterestActivities, { campaignId: campaignId as Id<"campaigns"> }) ?? [];
@@ -453,19 +497,31 @@ function WeeklyNoteSection({
     }), [trafficWeekly, week]);
 
   useEffect(() => {
+    // Convex 우선 → localStorage 폴백
+    if (campaignData === undefined) return; // 아직 로딩 중
     try {
-      const saved = localStorage.getItem(LS_KEY);
-      if (saved !== null) setNote(saved);
+      const convexMemos = campaignData?.weeklyMemos
+        ? JSON.parse(campaignData.weeklyMemos as string) : {};
+      const convexNote = convexMemos[week.label];
+      if (convexNote !== undefined) { setNote(convexNote); return; }
+      const lsNote = localStorage.getItem(LS_KEY);
+      if (lsNote !== null) setNote(lsNote);
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [LS_KEY]);
+  }, [LS_KEY, campaignData]);
 
-  const saveNote = () => {
+  const saveNote = async () => {
     try {
       localStorage.setItem(LS_KEY, note);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
     } catch {}
+    try {
+      const existing = campaignData?.weeklyMemos
+        ? JSON.parse(campaignData.weeklyMemos as string) : {};
+      const updated = { ...existing, [week.label]: note };
+      await updateCampaign({ id: campaignId as Id<"campaigns">, weeklyMemos: JSON.stringify(updated) });
+    } catch {}
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
   };
 
   const generateAIDraft = async () => {
@@ -543,8 +599,8 @@ ${hasData
         </div>
         <div className="flex items-center gap-2">
           {saved && (
-            <span className="text-[10px] text-green-500 font-medium flex items-center gap-1">
-              <Check className="w-3 h-3" /> 저장됨
+            <span className="text-[11px] text-green-500 font-semibold flex items-center gap-1 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">
+              <Check className="w-3 h-3" /> 저장되었습니다
             </span>
           )}
           <button
@@ -943,6 +999,7 @@ export default function InsightsPage() {
         campaignId={campaignId}
         currentWeek={selectedWeek}
         prevWeek={prevWeek}
+        weeks={weeks}
       />
 
       {/* 주간 요약 메모 (관리자만 편집/추가 가능) */}

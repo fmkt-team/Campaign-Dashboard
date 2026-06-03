@@ -471,7 +471,7 @@ async function fetchAIKeywords(texts: string[]): Promise<string[][]> {
   }
 }
 
-function NaverReviewAnalyzer({ autoTrigger }: { autoTrigger?: number }) {
+function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: number; onNewReviews?: () => void }) {
   const params = useParams();
   const analyzerCampaignId = params.id as string;
   const NAVER_URL_LS_KEY  = `naverReviewUrl_${analyzerCampaignId}`;
@@ -600,6 +600,13 @@ function NaverReviewAnalyzer({ autoTrigger }: { autoTrigger?: number }) {
         });
         const data = await res.json();
         if (!res.ok || data.error) { setCrawlError(data.error || "크롤링 실패"); return; }
+        // NEW 뱃지: 리뷰 수 증가 감지
+        try {
+          const REVIEW_CNT_KEY = `dashboard_comment_count_review_${analyzerCampaignId}`;
+          const savedCnt = parseInt(localStorage.getItem(REVIEW_CNT_KEY) ?? "0");
+          if ((data.total ?? 0) > savedCnt) onNewReviews?.();
+          localStorage.setItem(REVIEW_CNT_KEY, String(data.total ?? 0));
+        } catch {}
         await analyzeWithAI(data.reviews || [], { total: data.total, textTotal: data.textTotal, source: data.source });
       } catch (e: any) {
         setCrawlError(e.message || "네트워크 오류");
@@ -921,6 +928,9 @@ export default function InterestPage() {
   const { isAdmin } = useAuth();
   const { refreshTrigger } = useRefresh();
   const [lastRefresh, setLastRefresh] = useState(0);
+
+  // NEW 뱃지 (팝업 리뷰 새 댓글 감지)
+  const [newBadgeReview, setNewBadgeReview] = useState(false);
 
   const campaign = useQuery(api.campaigns.getCampaignById, { id: campaignId });
   const activities = useQuery(api.interest.getInterestActivities, { campaignId }) ?? [];
@@ -1619,10 +1629,13 @@ export default function InterestPage() {
             <MessageSquare className="w-4 h-4" /> 이벤트 응답 분석
           </button>
           <button
-            onClick={() => setActiveTab("popup")}
-            className={cn("px-4 py-3 text-sm font-bold flex items-center gap-2 border-b-2 transition-all", activeTab === "popup" ? "border-gray-900 text-gray-900" : "border-transparent text-gray-400 hover:text-gray-600")}
+            onClick={() => { setActiveTab("popup"); setNewBadgeReview(false); }}
+            className={cn("relative px-4 py-3 text-sm font-bold flex items-center gap-2 border-b-2 transition-all", activeTab === "popup" ? "border-gray-900 text-gray-900" : "border-transparent text-gray-400 hover:text-gray-600")}
           >
             <MapPin className="w-4 h-4" /> 팝업 성과 & 리뷰 분석
+            {newBadgeReview && (
+              <span className="w-2 h-2 rounded-full bg-red-500 ml-0.5" />
+            )}
           </button>
         </div>
 
@@ -1988,7 +2001,7 @@ export default function InterestPage() {
               </GlassCard>
             </div>
 
-            <NaverReviewAnalyzer autoTrigger={refreshTrigger} />
+            <NaverReviewAnalyzer autoTrigger={refreshTrigger} onNewReviews={() => setNewBadgeReview(true)} />
           </div>
         )}
       </section>
