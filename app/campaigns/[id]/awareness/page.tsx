@@ -2384,9 +2384,8 @@ export default function AwarenessPage() {
                 <p className="text-xs text-gray-400 mb-3">드래그하여 컬럼 순서를 변경할 수 있습니다. (회색 = 숨김 항목)</p>
                 <div className="flex flex-col gap-2">
                   {(() => {
-                    const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
-                    const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                    const allCols = [...fixedOrder, ...extraOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
+                    // mediaColOrder를 그대로 사용해 interleaved 순서 유지 (fixed/extra 분리 금지)
+                    const allCols = [...mediaColOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
 
                     return allCols.map((col) => {
                       const label = FIXED_COLS.find(fc => fc.key === col)?.label || col;
@@ -2402,9 +2401,8 @@ export default function AwarenessPage() {
                           onDragOver={(e) => e.preventDefault()}
                           onDrop={() => {
                             if (!draggedMediaCol || draggedMediaCol === col) return;
-                            const fOrd = mediaColOrder.filter(c => FIXED_COLS.some(fc => fc.key === c));
-                            const eOrd = mediaColOrder.filter(c => !FIXED_COLS.some(fc => fc.key === c));
-                            const all  = [...fOrd, ...eOrd, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
+                            // 저장된 순서 그대로 + 신규 extra cols 추가 (interleaved 위치 유지)
+                            const all = [...mediaColOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
                             const draggedIdx = all.indexOf(draggedMediaCol);
                             const targetIdx  = all.indexOf(col);
                             if (draggedIdx < targetIdx) {
@@ -2511,9 +2509,7 @@ export default function AwarenessPage() {
                       </>
                     )}
                     {(() => {
-                      const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
-                      const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                      const allCols = [...fixedOrder, ...extraOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
+                      const allCols = [...mediaColOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
                       return allCols.map(col => {
                         const isVisible = visibleCols[col];
                         if (!isVisible) return null;
@@ -2536,10 +2532,8 @@ export default function AwarenessPage() {
                 </TableHeader>
                 <TableBody>
                   {groupedDigital.map((row, i) => {
-                    // 컬럼 목록 계산 (중복 제거 포함)
-                    const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
-                    const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                    const allCols = [...fixedOrder, ...extraOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
+                    // 컬럼 목록 계산 (저장된 순서 그대로, 신규 extra 추가)
+                    const allCols = [...mediaColOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
 
                     // 셀 렌더 헬퍼
                     const renderCells = (data: any, isSubtotal: boolean) =>
