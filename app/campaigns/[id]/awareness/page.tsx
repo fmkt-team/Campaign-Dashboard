@@ -935,8 +935,16 @@ export default function AwarenessPage() {
       const savedTable = localStorage.getItem(TABLE_COLS_LS_KEY);
       if (savedTable) {
         const pt = JSON.parse(savedTable);
-        if (pt.visibleCols)  setVisibleCols(pt.visibleCols);
-        if (pt.mediaColOrder) setMediaColOrder(pt.mediaColOrder);
+        // visibleCols: DEFAULT_VISIBLE을 기반으로 저장값 병합
+        // → 새로 추가된 고정 컬럼(예: cpc)이 undefined 대신 기본값 true로 적용
+        if (pt.visibleCols) setVisibleCols({ ...DEFAULT_VISIBLE, ...pt.visibleCols });
+        // mediaColOrder: 저장값 복원 후 누락된 FIXED_COLS 키 추가
+        // → 새로 추가된 고정 컬럼이 순서에 항상 포함됨
+        if (pt.mediaColOrder) {
+          const loaded: string[] = [...pt.mediaColOrder];
+          FIXED_COLS.forEach(fc => { if (!loaded.includes(fc.key)) loaded.push(fc.key); });
+          setMediaColOrder(loaded);
+        }
       }
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2514,7 +2522,8 @@ export default function AwarenessPage() {
                     {(() => {
                       const allCols = [...mediaColOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
                       return allCols.map(col => {
-                        const isVisible = visibleCols[col];
+                        // 저장값에 없는 컬럼(새로 추가된 고정 컬럼 등)은 기본 표시
+                        const isVisible = visibleCols[col] ?? DEFAULT_VISIBLE[col] ?? true;
                         if (!isVisible) return null;
                         if (col === "spend")       return <TableHead key="spend"       className="text-gray-500 text-[13px] whitespace-nowrap text-right">집행 비용</TableHead>;
                         if (col === "impressions") return <TableHead key="impressions" className="text-gray-500 text-[13px] whitespace-nowrap text-right">노출수</TableHead>;
@@ -2542,7 +2551,7 @@ export default function AwarenessPage() {
                     // 셀 렌더 헬퍼
                     const renderCells = (data: any, isSubtotal: boolean) =>
                       allCols.map(col => {
-                        if (!visibleCols[col]) return null;
+                        if (!(visibleCols[col] ?? DEFAULT_VISIBLE[col] ?? true)) return null;
                         
                         const roasHighlight = col === "roas" && data.roas >= 300
                           ? "text-emerald-600 font-extrabold"
