@@ -55,6 +55,20 @@ const DEFAULT_VISIBLE: Record<string, boolean> = {
   signupCorporate: false, signupPersonal: false, leadsCollected: false,
 };
 
+// FIXED_COLS가 이미 커버하는 extra col 이름 (대소문자 불일치 중복 방지)
+// cpv → "CPV", ctrVtr → "CTR"/"VTR", roas → "ROAS"
+const FIXED_COVERED_LOWER = new Set(["cpv", "ctr", "vtr", "roas"]);
+
+/** detectedExtraCols 중 FIXED_COLS와 중복되는 항목을 제거한 필터 함수 */
+function filterExtraCols(detectedExtraCols: string[], mediaColOrder: string[]): string[] {
+  const orderLower = new Set(mediaColOrder.map(c => c.toLowerCase()));
+  return detectedExtraCols.filter(col =>
+    !mediaColOrder.includes(col) &&
+    !orderLower.has(col.toLowerCase()) &&
+    !FIXED_COVERED_LOWER.has(col.toLowerCase())
+  );
+}
+
 // ── 포맷 헬퍼 ────────────────────────────────────────────────
 function fmt(n: number)    { return n.toLocaleString(); }
 function pct(n: number)    { return n.toFixed(1) + "%"; }
@@ -884,6 +898,9 @@ export default function AwarenessPage() {
   const [viewMode,  setViewMode]  = useState<ViewMode>("daily");
   const [showCumulative, setShowCumulative] = useState(true);
 
+  // ── 테이블 컬럼 설정 저장 키 ────────────────────────────────
+  const TABLE_COLS_LS_KEY = `awareness-table-cols-${campaignId}`;
+
   // ── 누적 성과 항목 선택 ──────────────────────────────────────
   const CUMULATIVE_LS_KEY = `awareness-cumulative-${campaignId}`;
   const DEFAULT_VISIBLE_ITEMS: Record<string, boolean> = {
@@ -904,11 +921,19 @@ export default function AwarenessPage() {
   // localStorage 초기 로드 (마운트 1회) — 저장은 하지 않음
   useEffect(() => {
     try {
+      // 누적 성과 설정
       const saved = localStorage.getItem(CUMULATIVE_LS_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.visibleItems) setCumulativeVisibleItems(parsed.visibleItems);
         if (parsed.itemOrder)    setCumulativeItemOrder(parsed.itemOrder);
+      }
+      // 테이블 컬럼 설정 (관리자 저장 → 뷰어도 동일하게 적용)
+      const savedTable = localStorage.getItem(TABLE_COLS_LS_KEY);
+      if (savedTable) {
+        const pt = JSON.parse(savedTable);
+        if (pt.visibleCols)  setVisibleCols(pt.visibleCols);
+        if (pt.mediaColOrder) setMediaColOrder(pt.mediaColOrder);
       }
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -936,6 +961,16 @@ export default function AwarenessPage() {
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 테이블 컬럼 설정 저장 (관리자 → 뷰어 공유)
+  const [tableColSaved, setTableColSaved] = useState(false);
+  const saveTableColSettings = () => {
+    try {
+      localStorage.setItem(TABLE_COLS_LS_KEY, JSON.stringify({ visibleCols, mediaColOrder }));
+      setTableColSaved(true);
+      setTimeout(() => setTableColSaved(false), 2000);
+    } catch {}
+  };
 
   // 사용자 상호작용 시에만 저장 (effect 타이밍 문제 회피)
   const persistCumulative = (
@@ -2351,14 +2386,14 @@ export default function AwarenessPage() {
                   {(() => {
                     const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
                     const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                    const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
-  
+                    const allCols = [...fixedOrder, ...extraOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
+
                     return allCols.map((col) => {
                       const label = FIXED_COLS.find(fc => fc.key === col)?.label || col;
                       const isExtra = detectedExtraCols.includes(col);
                       const isDragging = draggedMediaCol === col;
                       const isVisible = visibleCols[col];
-  
+
                       return (
                         <div
                           key={col}
@@ -2367,24 +2402,22 @@ export default function AwarenessPage() {
                           onDragOver={(e) => e.preventDefault()}
                           onDrop={() => {
                             if (!draggedMediaCol || draggedMediaCol === col) return;
-                            const fixedOrder = mediaColOrder.filter(c => FIXED_COLS.some(fc => fc.key === c));
-                            const extraOrder = mediaColOrder.filter(c => !FIXED_COLS.some(fc => fc.key === c));
-                            const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(c => !mediaColOrder.includes(c))];
-                            const draggedIdx = allCols.indexOf(draggedMediaCol);
-                            const targetIdx = allCols.indexOf(col);
+                            const fOrd = mediaColOrder.filter(c => FIXED_COLS.some(fc => fc.key === c));
+                            const eOrd = mediaColOrder.filter(c => !FIXED_COLS.some(fc => fc.key === c));
+                            const all  = [...fOrd, ...eOrd, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
+                            const draggedIdx = all.indexOf(draggedMediaCol);
+                            const targetIdx  = all.indexOf(col);
                             if (draggedIdx < targetIdx) {
-                              allCols.splice(draggedIdx, 1);
-                              allCols.splice(targetIdx - 1, 0, draggedMediaCol);
+                              all.splice(draggedIdx, 1);
+                              all.splice(targetIdx - 1, 0, draggedMediaCol);
                             } else {
-                              allCols.splice(draggedIdx, 1);
-                              allCols.splice(targetIdx, 0, draggedMediaCol);
+                              all.splice(draggedIdx, 1);
+                              all.splice(targetIdx, 0, draggedMediaCol);
                             }
-                            const newOrder = allCols.filter(c => FIXED_COLS.some(fc => fc.key === c) || mediaColOrder.includes(c));
-                            let loadedOrder = [...newOrder];
+                            // extra cols 포함 전체 순서 저장 (필터 없이)
+                            const loadedOrder = [...all];
                             FIXED_COLS.forEach(fc => {
-                              if (!loadedOrder.includes(fc.key)) {
-                                loadedOrder.push(fc.key);
-                              }
+                              if (!loadedOrder.includes(fc.key)) loadedOrder.push(fc.key);
                             });
                             setMediaColOrder(loadedOrder);
                             setDraggedMediaCol(null);
@@ -2405,9 +2438,19 @@ export default function AwarenessPage() {
                     });
                   })()}
                 </div>
+                {/* 저장 버튼 */}
+                {isAdmin && (
+                  <div className="flex items-center justify-end gap-2 pt-3 mt-2 border-t border-gray-200">
+                    {tableColSaved && <span className="text-[10px] text-green-500 font-medium flex items-center gap-1">✓ 저장됨</span>}
+                    <button onClick={saveTableColSettings}
+                      className="px-3 py-1 text-[11px] font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-all">
+                      저장
+                    </button>
+                  </div>
+                )}
               </div>
             )}
-  
+
             {/* 컬럼 설정 패널 */}
             {showColSettings && (
               <div className="p-4 bg-gray-50 border-b border-gray-100 animate-in slide-in-from-top-2">
@@ -2427,7 +2470,10 @@ export default function AwarenessPage() {
                       <span className="text-sm text-gray-800">{col.label}</span>
                     </label>
                   ))}
-                  {detectedExtraCols.map(label => (
+                  {filterExtraCols(detectedExtraCols, mediaColOrder).concat(
+                    // mediaColOrder에 포함된 extra col(순서 저장된 것)도 체크박스에 표시
+                    mediaColOrder.filter(c => !FIXED_COLS.some(fc => fc.key === c) && detectedExtraCols.includes(c) && !filterExtraCols(detectedExtraCols, mediaColOrder).includes(c))
+                  ).map(label => (
                     <label key={label} className="flex items-center gap-2 cursor-pointer">
                       <input type="checkbox" checked={visibleCols[label] ?? true}
                         onChange={e => setVisibleCols(v => ({ ...v, [label]: e.target.checked }))}
@@ -2436,6 +2482,16 @@ export default function AwarenessPage() {
                     </label>
                   ))}
                 </div>
+                {/* 저장 버튼 */}
+                {isAdmin && (
+                  <div className="flex items-center justify-end gap-2 pt-3 mt-2 border-t border-gray-200">
+                    {tableColSaved && <span className="text-[10px] text-green-500 font-medium flex items-center gap-1">✓ 저장됨</span>}
+                    <button onClick={saveTableColSettings}
+                      className="px-3 py-1 text-[11px] font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-all">
+                      저장
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2457,7 +2513,7 @@ export default function AwarenessPage() {
                     {(() => {
                       const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
                       const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                      const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
+                      const allCols = [...fixedOrder, ...extraOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
                       return allCols.map(col => {
                         const isVisible = visibleCols[col];
                         if (!isVisible) return null;
@@ -2480,10 +2536,10 @@ export default function AwarenessPage() {
                 </TableHeader>
                 <TableBody>
                   {groupedDigital.map((row, i) => {
-                    // 컬럼 목록 계산
+                    // 컬럼 목록 계산 (중복 제거 포함)
                     const fixedOrder = mediaColOrder.filter(col => FIXED_COLS.some(fc => fc.key === col));
                     const extraOrder = mediaColOrder.filter(col => !FIXED_COLS.some(fc => fc.key === col));
-                    const allCols = [...fixedOrder, ...extraOrder, ...detectedExtraCols.filter(col => !mediaColOrder.includes(col))];
+                    const allCols = [...fixedOrder, ...extraOrder, ...filterExtraCols(detectedExtraCols, mediaColOrder)];
 
                     // 셀 렌더 헬퍼
                     const renderCells = (data: any, isSubtotal: boolean) =>
