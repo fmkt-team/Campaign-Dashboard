@@ -914,7 +914,6 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
 
     // 활동(activities)도 함께 표시
     const allItemsForDay = dayTasks.map(t => ({ ...t, isActivity: false }));
-    // 이미 이 날짜에 표시된 부모 태스크 ID 집합 (중복 방지용)
     const parentIdsOnDay = new Set(dayTasks.map((t: any) => t._id));
     for (const task of filteredTasks) {
       if (task.activities) {
@@ -922,11 +921,19 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
           const activity = task.activities[actIdx];
           if (!activity.startDate || !activity.endDate) continue;
           const actStart = new Date(activity.startDate).getTime();
-          const actEnd = new Date(activity.endDate).getTime();
-          const dTs = new Date(dateStr).getTime();
+          const actEnd   = new Date(activity.endDate).getTime();
+          const dTs      = new Date(dateStr).getTime();
           if (actStart <= dTs && dTs <= actEnd) {
-            // 이름 없는 activity가 부모 태스크와 같은 날에 겹치면 중복 표시 → 건너뜀
-            if (!activity.name?.trim() && parentIdsOnDay.has(task._id)) continue;
+            // 부모 태스크가 같은 날에 있으면 표시 텍스트 비교 → 동일하면 중복이므로 건너뜀
+            if (parentIdsOnDay.has(task._id)) {
+              const parentDisplay = task.barLabel?.trim()
+                ? `${task.subTask || ""}|${task.barLabel}`
+                : (task.subTask || "");
+              const actDisplay = activity.name?.trim()
+                ? `${task.subTask || ""}|${activity.name}`
+                : (task.subTask || "");
+              if (parentDisplay === actDisplay) continue;
+            }
             allItemsForDay.push({
               ...activity,
               parentTask: task,
@@ -1069,7 +1076,19 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
             // 이 주의 첫 번째 유효 날짜 (empty 셀 제외)
             const weekFirstDate = week.find(d => d.date)?.date ?? "";
 
-            for (const task of Array.from(allTasksInWeek.values())) {
+            // 표시 텍스트 + 날짜가 동일한 항목 최종 dedup (Convex 중복 문서 방어)
+            const seenDisplayKeys = new Set<string>();
+            const deduplicatedItems = Array.from(allTasksInWeek.values()).filter(task => {
+              const display = task.isActivity
+                ? (task.name?.trim() ? `${task.parentTask?.subTask || ""}|${task.name}` : (task.parentTask?.subTask || ""))
+                : (task.barLabel?.trim() ? `${task.subTask || ""}|${task.barLabel}` : (task.subTask || ""));
+              const dKey = `${display}|${task.startDate}|${task.endDate}`;
+              if (seenDisplayKeys.has(dKey)) return false;
+              seenDisplayKeys.add(dKey);
+              return true;
+            });
+
+            for (const task of deduplicatedItems) {
               const visStart = task.startDate < monthStartStr ? monthStartStr : task.startDate;
               const visEnd = task.endDate > monthEndStr ? monthEndStr : task.endDate;
               if (visStart > visEnd) continue;
