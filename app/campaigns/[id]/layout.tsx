@@ -21,6 +21,67 @@ const ALL_TABS = [
   { name: "주간 인사이트", path: "/insights", icon: BarChart3 },
 ];
 
+// ── 비밀번호 변경 모달 ────────────────────────────────────────────────────────
+function ChangePasswordModal({ email, onClose }: { email: string; onClose: () => void }) {
+  const updatePw = useMutation(api.adminUsers.updateAdminPassword);
+  const { loginWithCredentials, authRole } = useAuth();
+  const [oldPw,  setOldPw]  = useState("");
+  const [newPw,  setNewPw]  = useState("");
+  const [confPw, setConfPw] = useState("");
+  const [error,  setError]  = useState("");
+  const [saving, setSaving] = useState(false);
+  const [done,   setDone]   = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (newPw !== confPw) { setError("새 비밀번호가 일치하지 않습니다."); return; }
+    if (newPw.length < 6) { setError("비밀번호는 6자 이상이어야 합니다."); return; }
+    setSaving(true);
+    try {
+      await updatePw({ email, oldPassword: oldPw, newPassword: newPw });
+      setDone(true);
+      loginWithCredentials(email, newPw, authRole as "admin");
+      setTimeout(() => onClose(), 1500);
+    } catch (e: any) {
+      setError(e.message || "변경 실패");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl p-6 w-[400px] shadow-xl border border-gray-100">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-gray-500" /> 비밀번호 변경
+          </h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-gray-400 hover:text-gray-600" /></button>
+        </div>
+        <p className="text-xs text-gray-400 mb-4">{email}</p>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+          <input type="password" value={oldPw} onChange={e => setOldPw(e.target.value)}
+            placeholder="현재 비밀번호" required
+            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-gray-400" />
+          <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)}
+            placeholder="새 비밀번호 (6자 이상)" required
+            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-gray-400" />
+          <input type="password" value={confPw} onChange={e => setConfPw(e.target.value)}
+            placeholder="새 비밀번호 확인" required
+            className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-gray-400" />
+          {error && <p className="text-xs text-red-500 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+          {done  && <p className="text-xs text-green-500 bg-green-50 border border-green-100 rounded-lg px-3 py-2">✓ 변경 완료</p>}
+          <button type="submit" disabled={saving || done}
+            className="mt-1 w-full bg-gray-900 text-white font-medium py-2 rounded-lg text-sm hover:bg-gray-800 disabled:opacity-40">
+            {saving ? "변경 중..." : "변경하기"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function CampaignLayout({
   children,
 }: {
@@ -290,6 +351,11 @@ export default function CampaignLayout({
           </div>
         ) : children}
       </main>
+
+      {/* ── 비밀번호 변경 모달 ── */}
+      {showPwChange && authEmail && (
+        <ChangePasswordModal email={authEmail} onClose={() => setShowPwChange(false)} />
+      )}
 
       {/* ── 업데이트 완료 토스트 ── */}
       {showToast && (
