@@ -914,6 +914,8 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
 
     // 활동(activities)도 함께 표시
     const allItemsForDay = dayTasks.map(t => ({ ...t, isActivity: false }));
+    // 이미 이 날짜에 표시된 부모 태스크 ID 집합 (중복 방지용)
+    const parentIdsOnDay = new Set(dayTasks.map((t: any) => t._id));
     for (const task of filteredTasks) {
       if (task.activities) {
         for (let actIdx = 0; actIdx < task.activities.length; actIdx++) {
@@ -923,7 +925,8 @@ function CalendarView({ tasks, chartStart, chartEnd }: {
           const actEnd = new Date(activity.endDate).getTime();
           const dTs = new Date(dateStr).getTime();
           if (actStart <= dTs && dTs <= actEnd) {
-            console.log("[CAL] day:", dateStr, "task:", task.subTask, "activity name:", activity.name, "actIdx:", actIdx);
+            // 이름 없는 activity가 부모 태스크와 같은 날에 겹치면 중복 표시 → 건너뜀
+            if (!activity.name?.trim() && parentIdsOnDay.has(task._id)) continue;
             allItemsForDay.push({
               ...activity,
               parentTask: task,
