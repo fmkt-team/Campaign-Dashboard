@@ -951,6 +951,14 @@ export default function InterestPage() {
   const [syncMessage, setSyncMessage] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<"event" | "popup" | "vip" | "response" | null>(null);
 
+  // ── 이벤트 응답 분석 실제 데이터 ──
+  const [responseData, setResponseData] = useState<{name: string; text: string; date: string}[] | null>(null);
+
+  // ── 캘린더 형식 시트 (이벤트 신청 일자별 + 팝업 예약 일자별) ──
+  const [calendarSheetUrl, setCalendarSheetUrl] = useState("");
+  const [calendarSyncing, setCalendarSyncing] = useState(false);
+  const [calendarSyncMsg, setCalendarSyncMsg] = useState("");
+
   // ── 팝업 예약 신청 시트 (일자별 예약 신청 건 수) ──
   const [reservationUrl, setReservationUrl] = useState("");
   const [reservationDateFrom, setReservationDateFrom] = useState("");
@@ -994,6 +1002,12 @@ export default function InterestPage() {
     if (savedVip) setVipSheetUrl(savedVip);
     if (savedResponse) setResponseSheetUrl(savedResponse);
     if (savedLabels) { try { setCardLabels(JSON.parse(savedLabels)); } catch {} }
+
+    const savedCalendar = localStorage.getItem(`interest_calendar_sheet_${campaignId}`);
+    if (savedCalendar) setCalendarSheetUrl(savedCalendar);
+
+    const savedResponseData = localStorage.getItem(`interest_response_data_${campaignId}`);
+    if (savedResponseData) { try { setResponseData(JSON.parse(savedResponseData)); } catch {} }
 
     // 팝업 예약 신청 시트
     const savedResUrl  = localStorage.getItem(`popup_reservation_url_${campaignId}`);
@@ -1107,9 +1121,44 @@ export default function InterestPage() {
         localStorage.setItem(`interest_${type}_sheet_${campaignId}`, url);
         setSyncMessage(`✅ ${mapped.length}건 동기화 완료!`);
       } else {
-        // response type — just store url, data stays as mock
+        // response type — fetch CSV and parse actual responses
         localStorage.setItem(`interest_response_sheet_${campaignId}`, url);
-        setSyncMessage("✅ 이벤트 응답 시트 URL이 저장되었습니다.");
+        // Parse responses: find text column (longest avg) and date column (last)
+        // Sheet structure: B=seq, C=phone, D=name, E=text, G=date
+        const parsed: {name: string; text: string; date: string}[] = [];
+        for (const r of dataRows) {
+          if (r.length < 4) continue;
+          // Find text column: try index 4 (E) first, fallback to longest content
+          let text = "";
+          let name = "";
+          let date = "";
+          // Try known column positions first (D=name col3, E=text col4, G=date col6)
+          if (r[4] && r[4].length > 5) {
+            text = r[4];
+            name = r[3] || "";
+            date = r[6] || r[r.length - 1] || "";
+          } else if (r[3] && r[3].length > 5) {
+            // fallback: D=text
+            text = r[3];
+            name = r[2] || "";
+            date = r[r.length - 1] || "";
+          }
+          if (!text.trim()) continue;
+          // Filter out header-like rows
+          if (text.includes("사연") && text.length < 10) continue;
+          parsed.push({
+            name: name.trim(),
+            text: text.trim(),
+            date: date.trim().slice(0, 10), // keep YYYY-MM-DD part
+          });
+        }
+        if (parsed.length > 0) {
+          setResponseData(parsed);
+          try { localStorage.setItem(`interest_response_data_${campaignId}`, JSON.stringify(parsed)); } catch {}
+          setSyncMessage(`✅ ${parsed.length}건 응답 데이터 연동 완료!`);
+        } else {
+          setSyncMessage("✅ 이벤트 응답 시트 URL이 저장되었습니다. (응답 데이터 없음)");
+        }
       }
     } catch (e: any) {
       setSyncMessage(`❌ ${e.message}`);
@@ -1143,7 +1192,11 @@ export default function InterestPage() {
       await syncActivities({ campaignId, rows: activities.map(a => ({ ...mapActivity(a), vipCount: a.activityType === "팝업" ? 0 : a.vipCount })) });
     } else if (type === "response") {
       setResponseSheetUrl("");
-      try { localStorage.removeItem(`interest_response_sheet_${campaignId}`); } catch {}
+      setResponseData(null);
+      try {
+        localStorage.removeItem(`interest_response_sheet_${campaignId}`);
+        localStorage.removeItem(`interest_response_data_${campaignId}`);
+      } catch {}
     }
 
     const labels: Record<string, string> = { event: "이벤트", popup: "팝업", vip: "VIP", response: "이벤트 응답" };
@@ -1254,6 +1307,136 @@ export default function InterestPage() {
       setVisitorSyncing(false);
     }
   }, [visitorUrl, campaignId]);
+
+  // ── 캘린더 형식 시트 파서 + 동기화 ──
+  const syncCalendarSheet = useCallback(async () => {
+    if (!calendarSheetUrl) return;
+    const sheetId = extractSheetId(calendarSheetUrl);
+    if (!sheetId) { setCalendarSyncMsg("❌ 올바른 구글 시트 URL이 아닙니다."); return; }
+
+    const gidMatch = calendarSheetUrl.match(/gid=([0-9]+)/);
+    const gid = gidMatch ? gidMatch[1] : "";
+
+    setCalendarSyncing(true);
+    setCalendarSyncMsg("");
+    try {
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gid ? `&gid=${gid}` : ""}`;
+      const res = await fetch(csvUrl);
+      if (!res.ok) throw new Error("시트 접근 실패. 공유 설정을 확인하세요.");
+      const text = await res.text();
+      const allRows = parseCsv(text);
+
+      // ── 캘린더 파서: 날짜 헤더 행을 찾아 이하 행에서 데이터 추출 ──
+      const datePattern = /^(\d{1,2})\/(\d{1,2})/;
+      const year = new Date().getFullYear();
+
+      const eventSignups: {date: string; count: number}[] = [];
+      const generalRes: {date: string; count: number; people: number}[] = [];
+      const vipRes: {date: string; count: number; people: number}[] = [];
+
+      for (let i = 0; i < allRows.length; i++) {
+        const row = allRows[i];
+        // 날짜 헤더 행 감지: M/D 패턴 셀이 2개 이상
+        const dateCols: {col: number; date: string}[] = [];
+        for (let c = 0; c < row.length; c++) {
+          const m = row[c].match(datePattern);
+          if (m) {
+            const d = `${year}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+            dateCols.push({col: c, date: d});
+          }
+        }
+        if (dateCols.length < 2) continue;
+
+        // 이하 ~12행 스캔
+        for (let j = i + 1; j < Math.min(i + 15, allRows.length); j++) {
+          const dr = allRows[j];
+          const label = dr.join(" ");
+
+          if (label.includes("박수트로피") && label.includes("신청")) {
+            for (const {col, date} of dateCols) {
+              const val = dr[col] || "";
+              if (val === "-" || val === "") continue;
+              const n = processNumber(val);
+              if (n > 0) eventSignups.push({date, count: n});
+            }
+          }
+
+          if (label.includes("일반") && label.includes("예약")) {
+            for (const {col, date} of dateCols) {
+              const count = processNumber(dr[col] || "0");
+              const people = processNumber(dr[col + 1] || "0");
+              if (count > 0 || people > 0) generalRes.push({date, count, people});
+            }
+          }
+
+          if (label.includes("VIP") && label.includes("예약")) {
+            for (const {col, date} of dateCols) {
+              const count = processNumber(dr[col] || "0");
+              const people = processNumber(dr[col + 1] || "0");
+              if (count > 0 || people > 0) vipRes.push({date, count, people});
+            }
+          }
+        }
+      }
+
+      let msgs: string[] = [];
+
+      // 이벤트 신청 → activities 동기화
+      if (eventSignups.length > 0) {
+        const keep = activities
+          .filter(a => a.activityType !== "이벤트")
+          .map(a => ({
+            activityType: a.activityType, title: a.title, locationOrTarget: a.locationOrTarget,
+            startDate: a.startDate, endDate: a.endDate,
+            visitors: a.visitors, participants: a.participants, budget: a.budget, vipCount: a.vipCount,
+          }));
+        const newRows = eventSignups.map(({date, count}) => ({
+          activityType: "이벤트",
+          title: "박수트로피 사연 신청",
+          locationOrTarget: "",
+          startDate: date, endDate: date,
+          visitors: 0, participants: count, budget: 0,
+        }));
+        await syncActivities({campaignId, rows: [...keep, ...newRows]});
+        msgs.push(`이벤트 신청 ${eventSignups.length}건`);
+      }
+
+      // 팝업 예약 → reservationAllRows (명수 기준, vipPeople 포함)
+      if (generalRes.length > 0 || vipRes.length > 0) {
+        const vipMap = new Map(vipRes.map(r => [r.date, r]));
+        const allDates = Array.from(new Set([
+          ...generalRes.map(r => r.date),
+          ...vipRes.map(r => r.date),
+        ])).sort();
+        const merged = allDates.map(date => {
+          const g = generalRes.find(r => r.date === date);
+          const v = vipMap.get(date);
+          return {
+            date,
+            count:     g?.count   ?? 0,
+            people:    g?.people  ?? 0,
+            vipCount:  v?.count   ?? 0,
+            vipPeople: v?.people  ?? 0,
+          };
+        });
+        setReservationAllRows(merged as any);
+        localStorage.setItem(`popup_reservation_url_${campaignId}`, calendarSheetUrl);
+        localStorage.setItem(`popup_reservation_all_${campaignId}`, JSON.stringify(merged));
+        msgs.push(`팝업 예약 ${merged.length}일`);
+      }
+
+      localStorage.setItem(`interest_calendar_sheet_${campaignId}`, calendarSheetUrl);
+      if (msgs.length > 0) {
+        setCalendarSyncMsg(`✅ 동기화 완료: ${msgs.join(", ")}`);
+      } else {
+        setCalendarSyncMsg("⚠️ 파싱 가능한 데이터가 없습니다. 시트 구조를 확인하세요.");
+      }
+    } catch (e: any) {
+      setCalendarSyncMsg(`❌ ${e.message}`);
+    } finally {
+      setCalendarSyncing(false);
+    }
+  }, [calendarSheetUrl, campaignId, activities, syncActivities]);
 
   // ── 기간 필터 적용된 행 ──
   const reservationRows = useMemo(() => {
@@ -1458,6 +1641,51 @@ export default function InterestPage() {
           {syncMessage && (
             <p className={`text-xs mt-2 ${syncMessage.startsWith("✅") ? "text-green-600" : "text-red-500"}`}>{syncMessage}</p>
           )}
+
+          {/* ── 캘린더 형식 시트 (이벤트 신청 일자별 + 팝업 예약 일자별) ── */}
+          <div className="border-t border-indigo-100 pt-4 mt-2">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-semibold text-gray-700">📅 이벤트 신청 일자별 / 팝업 예약 일자별 (캘린더 형식 시트)</label>
+              {calendarSheetUrl && (
+                <button
+                  onClick={() => {
+                    setCalendarSheetUrl("");
+                    setCalendarSyncMsg("");
+                    try { localStorage.removeItem(`interest_calendar_sheet_${campaignId}`); } catch {}
+                  }}
+                  className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors"
+                  title="캘린더 시트 데이터 삭제"
+                >
+                  <Trash2 className="w-3 h-3" /> 삭제
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-gray-400 mb-2">
+              행 단위 캘린더 형식의 시트입니다. "박수트로피 사연 신청" 행 → 이벤트 신청 일자별, "일반/VIP 사전 예약" 행 → 팝업 예약 일자별로 자동 파싱됩니다.
+            </p>
+            <div className="flex gap-2">
+              <input
+                className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-orange-400 placeholder:text-gray-400"
+                placeholder="구글 시트 URL 입력 (gid 파라미터 포함)"
+                value={calendarSheetUrl}
+                onChange={e => { setCalendarSheetUrl(e.target.value); setCalendarSyncMsg(""); }}
+              />
+              <Button
+                size="sm"
+                disabled={calendarSyncing || !calendarSheetUrl}
+                onClick={syncCalendarSheet}
+                className="bg-orange-600 hover:bg-orange-700 text-white border-0 gap-1 px-3"
+              >
+                {calendarSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                동기화
+              </Button>
+            </div>
+            {calendarSyncMsg && (
+              <p className={`text-xs mt-2 ${calendarSyncMsg.startsWith("✅") ? "text-green-600" : calendarSyncMsg.startsWith("⚠️") ? "text-amber-600" : "text-red-500"}`}>
+                {calendarSyncMsg}
+              </p>
+            )}
+          </div>
         </GlassCard>
       )}
 
@@ -1646,97 +1874,77 @@ export default function InterestPage() {
                 <Link2 className="w-3 h-3 text-violet-500" />
                 연결된 시트:
                 <a href={responseSheetUrl} target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline truncate max-w-xs">{responseSheetUrl}</a>
+                {responseData && (
+                  <span className="ml-auto text-violet-600 font-semibold">{responseData.length}건 응답</span>
+                )}
               </div>
             )}
-            <GlassCard className="p-6">
-              <div className="flex flex-col md:flex-row gap-6">
-                <div className="w-full md:w-1/3 border-r border-gray-100 pr-0 md:pr-6">
-                  <h4 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-                    <List className="w-4 h-4 text-red-600" /> 분석할 질문 선택
-                  </h4>
-                  <div className="space-y-2">
-                    {MOCK_QUESTIONS.map(q => (
-                      <button
-                        key={q.id}
-                        onClick={() => setSelectedQuestionId(q.id)}
-                        className={cn("w-full text-left px-3 py-2.5 rounded-lg text-xs font-medium transition-all border",
-                          selectedQuestionId === q.id ? "bg-red-50 border-red-200 text-red-700" : "bg-white border-gray-200 text-gray-600 hover:border-gray-300")}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="truncate">{q.text}</span>
-                          {selectedQuestionId === q.id && <Check className="w-3.5 h-3.5 shrink-0" />}
-                        </div>
-                      </button>
-                    ))}
+            {responseData && responseData.length > 0 ? (() => {
+              // 실제 데이터에서 키워드 추출
+              const realKeywords = (() => {
+                const kwCount = new Map<string, number>();
+                responseData.forEach(r => {
+                  extractKwFromText(r.text).forEach(kw => {
+                    kwCount.set(kw, (kwCount.get(kw) ?? 0) + 1);
+                  });
+                });
+                const total = responseData.length || 1;
+                return [...kwCount.entries()]
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 12)
+                  .map(([text, count]) => ({text, weight: Math.round(count / total * 100)}));
+              })();
+
+              return (
+                <GlassCard className="p-6">
+                  <div className="flex flex-col gap-6">
+                    <div>
+                      <h4 className="text-sm font-bold text-gray-900 mb-1 flex items-center gap-2">
+                        <MessageCircle className="w-4 h-4 text-red-600" /> 사연 신청 키워드 분석
+                        <span className="text-xs font-normal text-gray-400">총 {responseData.length}건</span>
+                      </h4>
+                      <p className="text-xs text-gray-400 mb-3">실제 사연 내용에서 추출한 키워드 빈도입니다.</p>
+                      {realKeywords.length > 0
+                        ? <KeywordBubbles keywords={realKeywords} />
+                        : <p className="text-xs text-gray-400">키워드를 추출할 수 없습니다.</p>
+                      }
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
+                        <Quote className="w-4 h-4 text-red-600" /> 사연 신청 원문
+                      </h4>
+                      <div className="space-y-3 overflow-y-auto pr-2 custom-scrollbar max-h-[360px]">
+                        {responseData.map((r, i) => (
+                          <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                            <div className="flex items-center gap-2 mb-1">
+                              {r.name && <span className="text-xs font-semibold text-gray-700">{r.name}</span>}
+                              {r.date && <span className="text-xs text-gray-400 font-mono">{r.date}</span>}
+                            </div>
+                            <p className="text-sm text-gray-700 leading-relaxed">"{r.text}"</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
+                </GlassCard>
+              );
+            })() : (
+              <GlassCard className="p-6">
+                <div className="flex flex-col items-center gap-3 py-10 text-gray-400">
+                  <MessageSquare className="w-8 h-8 opacity-30" />
+                  <p className="text-sm font-medium">이벤트 응답 데이터가 없습니다.</p>
+                  {isAdmin && (
+                    <p className="text-xs">
+                      데이터 소스 관리에서{" "}
+                      <button onClick={() => setShowSettings(true)} className="text-violet-600 underline">
+                        📝 이벤트 응답 분석 데이터
+                      </button>
+                      를 연결하세요.
+                    </p>
+                  )}
                 </div>
-
-                <div className="w-full md:w-2/3">
-                  {(() => {
-                    const q = MOCK_QUESTIONS.find(x => x.id === selectedQuestionId);
-                    if (!q) return null;
-
-                    if (q.type === "choice") {
-                      const data = MOCK_ANSWERS[q.text] || MOCK_ANSWERS["참여 동기가 무엇인가요?"];
-                      const total = data.reduce((s, d) => s + d.value, 0);
-                      return (
-                        <div className="border border-gray-100 rounded-xl p-5 bg-white shadow-sm h-full flex flex-col">
-                          <h5 className="text-sm font-bold text-gray-800 mb-4">{q.text}</h5>
-                          <div className="flex gap-6 flex-1">
-                            <div className="flex-shrink-0" style={{ width: 180, height: 180 }}>
-                              <ResponsiveContainer width="100%" height="100%">
-                                <RechartsPieChart>
-                                  <Pie data={data} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={2} dataKey="value">
-                                    {data.map((entry: any, index: number) => <Cell key={`cell-${index}`} fill={entry.fill} />)}
-                                  </Pie>
-                                  <Tooltip content={<CustomTooltip />} />
-                                </RechartsPieChart>
-                              </ResponsiveContainer>
-                            </div>
-                            <div className="flex-1 space-y-2 py-1">
-                              {data.map((item: any, i: number) => (
-                                <div key={i} className="flex items-center gap-2">
-                                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: item.fill }} />
-                                  <span className="text-xs text-gray-600 flex-1 truncate">{item.name}</span>
-                                  <span className="text-xs font-mono font-bold text-gray-900">{Math.round(item.value / total * 100)}%</span>
-                                  <span className="text-[10px] font-mono text-gray-400">{item.value.toLocaleString()}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    if (q.type === "text") {
-                      return (
-                        <div className="border border-gray-100 rounded-xl p-5 bg-white shadow-sm h-full flex flex-col gap-6">
-                          <div>
-                            <h5 className="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
-                              <MessageCircle className="w-4 h-4 text-red-600" /> 주관식 키워드 분석
-                            </h5>
-                            <KeywordBubbles keywords={MOCK_KEYWORDS} />
-                          </div>
-                          <div className="flex-1 flex flex-col">
-                            <h5 className="text-sm font-bold text-gray-800 mb-3 flex items-center gap-2">
-                              <Quote className="w-4 h-4 text-red-600" /> 주요 주관식 원문
-                            </h5>
-                            <div className="space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[250px]">
-                              {MOCK_RAW_RESPONSES.map((r, i) => (
-                                <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg p-3">
-                                  <p className="text-xs text-gray-400 mb-1 font-mono">{r.date}</p>
-                                  <p className="text-sm text-gray-700 leading-relaxed">"{r.text}"</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    }
-                  })()}
-                </div>
-              </div>
-            </GlassCard>
+              </GlassCard>
+            )}
           </div>
         )}
 
@@ -1829,23 +2037,29 @@ export default function InterestPage() {
                   <TableHeader className="bg-gray-50/50">
                     <TableRow className="border-gray-100 hover:bg-transparent">
                       <TableHead className="text-gray-500 text-xs font-semibold">신청 일자</TableHead>
-                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 신청</TableHead>
+                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 신청 (건/명)</TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">
-                        <span className="flex items-center justify-end gap-1"><Crown className="w-3 h-3 text-yellow-500" />VIP 신청</span>
+                        <span className="flex items-center justify-end gap-1"><Crown className="w-3 h-3 text-yellow-500" />VIP (건/명)</span>
                       </TableHead>
-                      <TableHead className="text-gray-500 text-xs font-semibold text-right">총 예약 신청</TableHead>
+                      <TableHead className="text-gray-500 text-xs font-semibold text-right">총 예약 (명)</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {reservationRows && reservationRows.length > 0 ? (
-                      reservationRows.map((row, i) => (
+                      reservationRows.map((row: any, i: number) => {
+                        const hasPeople = (row.people ?? 0) > 0 || (row.vipPeople ?? 0) > 0;
+                        const genDisplay = hasPeople ? `${row.count} / ${row.people}` : row.count.toLocaleString();
+                        const vipDisplay = hasPeople ? `${row.vipCount} / ${row.vipPeople}` : row.vipCount.toLocaleString();
+                        const totalPeople = hasPeople ? ((row.people ?? 0) + (row.vipPeople ?? 0)) : (row.count + row.vipCount);
+                        return (
                         <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
                           <TableCell className="text-gray-600 font-mono font-medium">{row.date}</TableCell>
-                          <TableCell className="text-right font-mono text-gray-900 font-bold">{row.count.toLocaleString()}</TableCell>
-                          <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{row.vipCount.toLocaleString()}</TableCell>
-                          <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{(row.count + row.vipCount).toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900 font-bold">{genDisplay}</TableCell>
+                          <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{vipDisplay}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{totalPeople.toLocaleString()}</TableCell>
                         </TableRow>
-                      ))
+                        );
+                      })
                     ) : reservationRows && reservationRows.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={4} className="text-center text-xs text-gray-400 py-8">
