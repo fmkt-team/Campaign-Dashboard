@@ -1380,15 +1380,31 @@ export default function AwarenessPage() {
           if (!date) date = lDate; else lDate = date;
           let platform = mapping["platform"] ? String(cols[parseInt(mapping["platform"])] || "").trim() : "";
           if (!platform || platform === "-") platform = lPlat; else lPlat = platform;
-          // URL: 전용 url 컬럼 우선, 없으면 "온에어" 컬럼의 하이퍼링크 추출
-          // (온에어 셀 텍스트가 "URL"이거나 날짜 텍스트에 링크가 삽입된 경우 모두 처리)
-          let rawUrl = mapping["url"] ? String(cols[parseInt(mapping["url"])] || "").trim() : "";
+
+          // URL 추출 우선순위:
+          // 1) url 컬럼 매핑 시 → 해당 셀의 하이퍼링크 먼저 (온에어처럼 텍스트가 날짜/"URL"이어도 링크가 실제 URL)
+          // 2) 하이퍼링크 없으면 텍스트값 (실제 URL 문자열인 경우)
+          // 3) url 미매핑 → date 컬럼 하이퍼링크 폴백
+          let rawUrl = "";
+          if (mapping["url"]) {
+            const uColIdx = parseInt(mapping["url"]);
+            rawUrl =
+              previewHyperlinks?.[absRowIdx]?.[uColIdx] ||
+              String(cols[uColIdx] || "").trim();
+          }
           if (!rawUrl && mapping["date"] && previewHyperlinks) {
             rawUrl = previewHyperlinks[absRowIdx]?.[parseInt(mapping["date"])] ?? "";
           }
-          if (rawUrl.includes("youtube.com") || rawUrl.includes("youtu.be")) platform = "YouTube";
-          else if (rawUrl.includes("instagram.com")) platform = "Instagram";
-          else if (rawUrl.includes("blog.naver.com") || rawUrl.includes("naver.com")) platform = "Naver Blog";
+
+          // URL로 플랫폼 자동 감지
+          if (!platform || platform === "-") {
+            if (rawUrl.includes("youtube.com") || rawUrl.includes("youtu.be")) platform = "YouTube";
+            else if (rawUrl.includes("instagram.com")) platform = "Instagram";
+            else if (rawUrl.includes("blog.naver.com") || rawUrl.includes("naver.com")) platform = "Naver Blog";
+            else if (rawUrl.includes("tiktok.com")) platform = "TikTok";
+            else if (rawUrl.includes("twitter.com") || rawUrl.includes("x.com")) platform = "X";
+          }
+
           let creator = mapping["creator"] ? String(cols[parseInt(mapping["creator"])] || "").trim() : "";
           if (!creator || creator === "-") creator = lCreator; else lCreator = creator;
           return { date, platform: platform || "-", creator: creator || "-", title: "-", views: 0, likes: 0, comments: 0, url: rawUrl, thumbnailUrl: undefined };
@@ -3223,19 +3239,25 @@ export default function AwarenessPage() {
                 <p className="text-sm text-gray-400 mb-5">AI가 열을 자동 감지했습니다. 확인 후 수정해주세요.</p>
                 <div className="flex gap-6 overflow-hidden flex-1">
                   <div className="w-1/2 flex flex-col gap-2 overflow-y-auto pr-2">
-                    {renderMappingSelect("date", "온에어 / 업로드 일자", false)}
-                    {previewHyperlinks && mapping["date"] && (() => {
-                      const colIdx = parseInt(mapping["date"]);
+                    {/* 채널명 → creator */}
+                    {renderMappingSelect("creator", "채널명 (크리에이터)", true)}
+                    {/* 온에어 → url : 셀 텍스트가 날짜/"URL"이어도 하이퍼링크가 실제 URL */}
+                    {renderMappingSelect("url", "온에어 / 게시물 URL ★", true)}
+                    {previewHyperlinks && mapping["url"] && (() => {
+                      const colIdx = parseInt(mapping["url"]);
                       const hasLink = previewHyperlinks.slice(headerRowIdx + 1).some(r => r[colIdx]);
-                      return hasLink ? (
-                        <p className="text-[10px] text-blue-500 bg-blue-50 border border-blue-100 rounded px-2 py-1">
-                          🔗 온에어 컬럼에 하이퍼링크가 감지됐습니다. URL 컬럼 미지정 시 자동으로 사용됩니다.
+                      return (
+                        <p className={`text-[10px] px-2 py-1 rounded border ${hasLink ? "text-blue-600 bg-blue-50 border-blue-100" : "text-amber-600 bg-amber-50 border-amber-100"}`}>
+                          {hasLink
+                            ? "🔗 하이퍼링크 감지됨 — 셀 텍스트('6/6', 'URL' 등)가 아닌 링크 주소를 URL로 사용합니다."
+                            : "⚠ 이 열에 하이퍼링크가 없습니다. 다른 열을 선택해 주세요."}
                         </p>
-                      ) : null;
+                      );
                     })()}
-                    {renderMappingSelect("platform", "플랫폼/채널", false)}
-                    {renderMappingSelect("creator", "크리에이터", true)}
-                    {renderMappingSelect("url", "게시물 URL (별도 컬럼이 없으면 온에어 링크 자동 사용)")}
+                    {/* 업로드 일정 → date */}
+                    {renderMappingSelect("date", "업로드 일정 (날짜)", false)}
+                    {/* 카테고리 → platform */}
+                    {renderMappingSelect("platform", "카테고리 / 플랫폼", false)}
                   </div>
                   <div className="w-1/2 flex flex-col border-l border-gray-100 pl-6 overflow-y-auto">
                     <span className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-2">미리보기 (상위 5행)</span>

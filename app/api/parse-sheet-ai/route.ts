@@ -44,10 +44,18 @@ export async function POST(req: Request) {
         ]
       : ["date", "platform", "creator", "url"];
 
+    const viralHints = type === "viral" ? `
+Korean spreadsheet hints for viral content mapping:
+- "creator" field: look for columns named "채널명", "채널 명", "크리에이터", "인플루언서" — this is the channel/creator name.
+- "url" field: look for columns named "온에어", "on air" — this column contains hyperlinks to the published content (cell text may show a date like "6/6" or the word "URL", but the actual URL is embedded as a hyperlink).
+- "date" field: look for columns named "업로드 일정", "업로드일정", "업로드" — the planned upload date.
+- "platform" field: look for columns named "카테고리" — contains channel type like YouTube, magazine, etc.
+` : "";
+
     const prompt = `You are a data extraction assistant. I will provide a JSON array representing the first 15 rows of a spreadsheet.
 Your task is to identify which row index (0-indexed) contains the actual column headers, and then map the target fields to their column index (0-indexed integer).
 Target fields: ${requiredKeys.join(", ")}
-
+${viralHints}
 Spreadsheet Top Rows:
 ${JSON.stringify(sample)}
 
@@ -58,8 +66,7 @@ Instructions:
 {
   "headerRowIndex": integer,
   "mapping": {
-    "date": integer | null,
-    // ... other target fields
+    "date": integer | null
   }
 }
 `;
@@ -101,10 +108,10 @@ Instructions:
       };
 
       const VIRAL_KEYWORDS: Record<string, string[]> = {
-        date: ["일자", "날짜", "date", "업로드", "게시", "등록"],
-        platform: ["플랫폼", "platform", "채널", "channel", "sns"],
-        creator: ["크리에이터", "creator", "인플루언서", "influencer", "작성자", "이름"],
-        url: ["url", "링크", "link", "주소", "http", "채널 링크", "게시물 링크"],
+        date: ["업로드 일정", "업로드일정", "업로드", "일자", "날짜", "date", "게시", "등록"],
+        platform: ["카테고리", "플랫폼", "platform", "채널유형", "sns", "channel"],
+        creator: ["채널명", "채널 명", "크리에이터", "creator", "인플루언서", "채널", "influencer", "작성자", "이름"],
+        url: ["온에어", "on air", "onair", "url", "링크", "link", "주소", "http", "게시물"],
       };
 
       const keywords = type === "digital" ? DIGITAL_KEYWORDS : VIRAL_KEYWORDS;
