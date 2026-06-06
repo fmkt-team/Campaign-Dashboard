@@ -172,7 +172,8 @@ export async function POST(req: Request) {
       if (items && items.length > 0) {
         const item: any = items[0];
         stats.views = item.videoViewCount || item.videoPlayCount || 0;
-        stats.likes = item.likesCount || 0;
+        // 인스타그램은 좋아요 수를 공개하지 않는 경우가 많아 0으로 고정
+        stats.likes = typeof item.likesCount === "number" && item.likesCount > 0 ? item.likesCount : 0;
         stats.comments = item.commentsCount || 0;
         stats.title = item.caption ? item.caption.substring(0, 50) + "..." : "-";
         stats.thumbnailUrl = item.displayUrl || item.thumbnailUrl;

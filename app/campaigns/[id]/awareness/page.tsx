@@ -1201,9 +1201,9 @@ export default function AwarenessPage() {
                 await updateViralRow({
                   viralId: row._id,
                   updates: {
-                    views:        data.stats.views,
-                    likes:        data.stats.likes,
-                    comments:     data.stats.comments,
+                    views:        data.stats.views    ?? 0,
+                    likes:        data.stats.likes    ?? 0,
+                    comments:     data.stats.comments ?? 0,
                     title:        data.stats.title && data.stats.title !== "-" ? data.stats.title : undefined,
                     thumbnailUrl: data.stats.thumbnailUrl,
                     date:         data.stats.date,
@@ -1463,7 +1463,7 @@ export default function AwarenessPage() {
       const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
       const data = await res.json();
       if (data.success && data.stats) {
-        await updateViralRow({ viralId: rowId as Id<"viralContents">, updates: { views: data.stats.views, likes: data.stats.likes, comments: data.stats.comments, title: data.stats.title !== "-" ? data.stats.title : undefined, thumbnailUrl: data.stats.thumbnailUrl, date: data.stats.date } });
+        await updateViralRow({ viralId: rowId as Id<"viralContents">, updates: { views: data.stats.views ?? 0, likes: data.stats.likes ?? 0, comments: data.stats.comments ?? 0, title: data.stats.title !== "-" ? data.stats.title : undefined, thumbnailUrl: data.stats.thumbnailUrl, date: data.stats.date } });
       } else alert(data.error || "수집 실패");
     } catch (e: any) { alert("오류: " + e.message); }
     finally { setIsFetchingUrl(null); }
@@ -2952,6 +2952,8 @@ export default function AwarenessPage() {
           <GlassCard className="p-0 overflow-hidden min-h-[120px]">
             {groupedViral.length === 0 ? (
               <div className="flex items-center justify-center h-[120px] text-gray-400 text-sm">데이터를 연동해 주세요.</div>
+            ) : filteredViral.length === 0 ? (
+              <div className="flex items-center justify-center h-[120px] text-gray-400 text-sm">업로드된 컨텐츠(URL)가 없습니다.</div>
             ) : (
               <Table>
                 <TableHeader className="bg-gray-50">
@@ -2997,12 +2999,12 @@ export default function AwarenessPage() {
                         </TableCell>
                         <TableCell>
                           {isEditing ? (
-                            <div className="flex flex-col gap-1">
+                            <div className="flex flex-col gap-1 w-[150px]">
                               <div className="flex flex-wrap gap-1">
                                 {["YouTube","Instagram","X","TikTok","네이버카페","기타"].map(p => (
-                                  <button key={p}
+                                  <button key={p} type="button"
                                     onClick={() => setEditViralForm({ ...editViralForm, platform: p, _platformCustom: p === "기타" ? (editViralForm._platformCustom || "") : undefined })}
-                                    className={cn("text-[10px] px-2 py-0.5 rounded border transition-colors",
+                                    className={cn("text-[10px] px-1.5 py-0.5 rounded border transition-colors",
                                       editViralForm.platform === p || (p === "기타" && !["YouTube","Instagram","X","TikTok","네이버카페"].includes(editViralForm.platform) && editViralForm.platform)
                                         ? "bg-fursys-red text-white border-fursys-red"
                                         : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
@@ -3013,10 +3015,10 @@ export default function AwarenessPage() {
                               </div>
                               {editViralForm.platform === "기타" && (
                                 <Input
-                                  placeholder="플랫폼 직접 입력"
+                                  placeholder="직접 입력"
                                   value={editViralForm._platformCustom || ""}
                                   onChange={e => setEditViralForm({ ...editViralForm, _platformCustom: e.target.value, platform: e.target.value || "기타" })}
-                                  className="h-6 text-xs bg-transparent border-gray-200 w-28"
+                                  className="h-6 text-xs bg-transparent border-gray-200 w-full"
                                 />
                               )}
                             </div>
@@ -3078,11 +3080,13 @@ export default function AwarenessPage() {
                             {isEditing ? (
                               <>
                                 <button onClick={async () => {
-                                  const platformVal = editViralForm.platform === "기타"
-                                    ? (editViralForm._platformCustom?.trim() || "기타")
-                                    : (editViralForm.platform || undefined);
-                                  await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url, creator: editViralForm.creator, date: editViralForm.date || undefined, platform: platformVal, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } });
-                                  setEditingViralId(null);
+                                  try {
+                                    const platformVal = editViralForm.platform === "기타"
+                                      ? (editViralForm._platformCustom?.trim() || "기타")
+                                      : (editViralForm.platform || undefined);
+                                    await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url || undefined, creator: editViralForm.creator || undefined, date: editViralForm.date || undefined, platform: platformVal, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } });
+                                    setEditingViralId(null);
+                                  } catch (e: any) { alert("저장 실패: " + (e.message || String(e))); }
                                 }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
                                 <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
                               </>
