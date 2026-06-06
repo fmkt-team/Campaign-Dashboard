@@ -1010,10 +1010,21 @@ export default function AwarenessPage() {
   }, []);
 
   // 테이블 컬럼 설정 저장 (관리자 → 뷰어 공유)
+  // detectedExtraCols를 mediaColOrder에 병합해 저장 → 재접속 시 순서/항목 유지
   const [tableColSaved, setTableColSaved] = useState(false);
   const saveTableColSettings = () => {
     try {
-      localStorage.setItem(TABLE_COLS_LS_KEY, JSON.stringify({ visibleCols, mediaColOrder }));
+      // 현재 감지된 extra cols 중 아직 mediaColOrder에 없는 것을 뒤에 추가해 영구 저장
+      const detectedNow = Array.from(new Set(
+        digitalKpis.flatMap((r: any) => Object.keys(parseExtra(r.extraData)))
+      ));
+      const merged = [...mediaColOrder];
+      detectedNow.forEach(col => { if (!merged.includes(col)) merged.push(col); });
+      // visibleCols에도 새 extra col 기본값 추가
+      const mergedVisible = { ...visibleCols };
+      detectedNow.forEach(col => { if (!(col in mergedVisible)) mergedVisible[col] = true; });
+      localStorage.setItem(TABLE_COLS_LS_KEY, JSON.stringify({ visibleCols: mergedVisible, mediaColOrder: merged }));
+      setVisibleCols(mergedVisible);
       setTableColSaved(true);
       setTimeout(() => setTableColSaved(false), 2000);
     } catch {}

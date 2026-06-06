@@ -134,6 +134,15 @@ function AutoDataReport({
 
   const [expanded, setExpanded] = useState(true);
 
+  // ── 이벤트 응답 데이터 (localStorage) ──────────────────────────
+  const [responseData, setResponseData] = useState<{date: string}[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`interest_response_data_${campaignId}`);
+      if (raw) setResponseData(JSON.parse(raw));
+    } catch {}
+  }, [campaignId]);
+
   // ── 주차 필터 함수 ──────────────────────────────────────────────
   const filterByWeek = useCallback((rows: any[], dateField: string, week: WeekInfo | null) => {
     if (!week) return rows;
@@ -235,24 +244,35 @@ function AutoDataReport({
   }, [digitalKpis, weeks]);
 
   const interest = useMemo(() => {
-    // 이벤트 참여 수 (participants 필드 합산)
-    const totalParticipants = curActivities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
+    // 이벤트 참여자 수: responseData가 있으면 주차 날짜 기준 실제 응답 건수, 없으면 activities 수동값
+    const totalParticipants = responseData.length > 0
+      ? responseData.filter(r => {
+          if (!r.date) return false;
+          const d = r.date.slice(0, 10);
+          if (!currentWeek) return true;
+          return d >= currentWeek.start && d <= currentWeek.end;
+        }).length
+      : curActivities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
     // 팝업 방문객 수 (일반 / VIP / 총합)
     const popupVisitGeneral = curActivities.reduce((s: number, a: any) => s + (a.actualVisitCount || 0), 0);
     const popupVisitVip     = curActivities.reduce((s: number, a: any) => s + (a.vipActualVisitCount || 0), 0);
     const popupVisitTotal   = popupVisitGeneral + popupVisitVip;
-    // 팝업 사전 예약 수 (일반 / VIP / 총합)
-    const reserveGeneral    = curActivities.reduce((s: number, a: any) => s + (a.generalReservePeople || a.generalReserveCount || 0), 0);
-    const reserveVip        = curActivities.reduce((s: number, a: any) => s + (a.vipReservePeople || a.vipReserveCount || 0), 0);
-    const reserveTotal      = reserveGeneral + reserveVip;
     const actCount          = curActivities.length;
-    return { totalParticipants, popupVisitGeneral, popupVisitVip, popupVisitTotal, reserveGeneral, reserveVip, reserveTotal, actCount };
-  }, [curActivities]);
+    return { totalParticipants, popupVisitGeneral, popupVisitVip, popupVisitTotal, actCount };
+  }, [responseData, curActivities, currentWeek]);
 
   // 주차별 이벤트 참여자 수 + 팝업 방문객 수 추이 (흥미 성과 그래프용)
   const interestChartData = useMemo(() => {
     if (weeks.length === 0) return [];
     return weeks.map(w => {
+      // 이벤트 참여자: responseData 주차 필터 우선
+      const participants = responseData.length > 0
+        ? responseData.filter(r => { const d = r.date?.slice(0, 10) ?? ""; return d >= w.start && d <= w.end; }).length
+        : activities.filter((a: any) => {
+            const s = (a.startDate as string)?.slice(0, 10) ?? "";
+            const e = (a.endDate   as string)?.slice(0, 10) ?? s;
+            return s <= w.end && e >= w.start;
+          }).reduce((s: number, a: any) => s + (a.participants || 0), 0);
       const weekActs = activities.filter((a: any) => {
         const s = (a.startDate as string)?.slice(0, 10) ?? "";
         const e = (a.endDate   as string)?.slice(0, 10) ?? s;
@@ -260,11 +280,11 @@ function AutoDataReport({
       });
       return {
         label: w.label,
-        participants: weekActs.reduce((s: number, a: any) => s + (a.participants || 0), 0),
+        participants,
         visitors: weekActs.reduce((s: number, a: any) => s + (a.actualVisitCount || 0) + (a.vipActualVisitCount || 0), 0),
       };
     }).filter(d => d.participants > 0 || d.visitors > 0);
-  }, [activities, weeks]);
+  }, [activities, weeks, responseData]);
 
   const inflow = useMemo(() => {
     const totalUsers    = curTraffic.reduce((s: number, r: any) => s + (r.users || 0), 0);
@@ -392,7 +412,7 @@ function AutoDataReport({
                 <span className="text-[9px] text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">이 주차</span>
               )}
             </div>
-            {interest.actCount > 0 ? (
+            {(interest.actCount > 0 || interest.totalParticipants > 0) ? (
               <div className="space-y-2">
                 {/* 이벤트 참여 수 */}
                 <div className="flex justify-between items-center text-[11px]">
@@ -414,24 +434,6 @@ function AutoDataReport({
                     <div className="bg-emerald-100/50 rounded px-1 py-1">
                       <p className="text-[9px] text-emerald-600">총합</p>
                       <p className="text-[11px] font-bold text-emerald-700">{interest.popupVisitTotal.toLocaleString()}</p>
-                    </div>
-                  </div>
-                </div>
-                {/* 팝업 사전 예약 수 (일반 / VIP / 총합) */}
-                <div className="pt-1 border-t border-emerald-100">
-                  <p className="text-[10px] text-emerald-600 font-semibold mb-1">팝업 사전 예약 수</p>
-                  <div className="grid grid-cols-3 gap-1 text-center">
-                    <div className="bg-white/60 rounded px-1 py-1">
-                      <p className="text-[9px] text-gray-400">일반</p>
-                      <p className="text-[11px] font-bold text-gray-900">{interest.reserveGeneral.toLocaleString()}</p>
-                    </div>
-                    <div className="bg-yellow-50/60 rounded px-1 py-1">
-                      <p className="text-[9px] text-yellow-600">VIP</p>
-                      <p className="text-[11px] font-bold text-yellow-700">{interest.reserveVip.toLocaleString()}</p>
-                    </div>
-                    <div className="bg-emerald-100/50 rounded px-1 py-1">
-                      <p className="text-[9px] text-emerald-600">총합</p>
-                      <p className="text-[11px] font-bold text-emerald-700">{interest.reserveTotal.toLocaleString()}</p>
                     </div>
                   </div>
                 </div>
@@ -578,11 +580,18 @@ function WeeklyNoteSection({
       const spend       = weekKpis.reduce((s: number, r: any) => s + (r.spend || 0), 0);
       const users       = weekTraffic.reduce((s: number, r: any) => s + (r.users || 0), 0);
       const sessions    = weekTraffic.reduce((s: number, r: any) => s + (r.sessions || 0), 0);
-      const participants    = activities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
+      // 이벤트 참여자: responseData 주차 필터 우선
+      let participants = 0;
+      try {
+        const rdRaw = localStorage.getItem(`interest_response_data_${campaignId}`);
+        if (rdRaw) {
+          const rd: {date: string}[] = JSON.parse(rdRaw);
+          participants = rd.filter(r => { const d = r.date?.slice(0,10)??""; return d >= week.start && d <= week.end; }).length;
+        }
+      } catch {}
+      if (!participants) participants = activities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
       const popupVisitGen   = activities.reduce((s: number, a: any) => s + (a.actualVisitCount || 0), 0);
       const popupVisitVip   = activities.reduce((s: number, a: any) => s + (a.vipActualVisitCount || 0), 0);
-      const reserveGen      = activities.reduce((s: number, a: any) => s + (a.generalReservePeople || a.generalReserveCount || 0), 0);
-      const reserveVip      = activities.reduce((s: number, a: any) => s + (a.vipReservePeople || a.vipReserveCount || 0), 0);
 
       const hasData = impressions > 0 || views > 0 || users > 0 || participants > 0;
 
@@ -602,7 +611,6 @@ ${views > 0 ? `- CTR: ${(clicks / views * 100).toFixed(2)}%` : ""}
 흥미 성과:
 - 이벤트 참여 수: ${participants.toLocaleString()}명
 - 팝업 방문객 수: 일반 ${popupVisitGen.toLocaleString()}명, VIP ${popupVisitVip.toLocaleString()}명, 총합 ${(popupVisitGen + popupVisitVip).toLocaleString()}명
-- 팝업 사전 예약 수: 일반 ${reserveGen.toLocaleString()}명, VIP ${reserveVip.toLocaleString()}명, 총합 ${(reserveGen + reserveVip).toLocaleString()}명
 
 ${hasData
   ? "위 데이터를 바탕으로 마케팅 관점의 주간 인사이트를 3~4문장으로 작성해주세요. 핵심 성과 → 주목할 지표 → 개선점 또는 다음 주 방향 순으로 작성해주세요."
