@@ -2768,10 +2768,12 @@ export default function AwarenessPage() {
                             className="text-[10px] text-blue-500 hover:underline mt-1">🔗 영상 보러가기</a>
                         )}
                       </div>
-                      <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteYouTubeVideo({ videoId: vid._id }); }}
-                        className="shrink-0 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400 self-start">
-                        <Trash className="w-3.5 h-3.5" />
-                      </button>
+                      {isAdmin && (
+                        <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteYouTubeVideo({ videoId: vid._id }); }}
+                          className="shrink-0 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-400 self-start">
+                          <Trash className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
 
                     {/* 통계 행 */}
@@ -2974,7 +2976,7 @@ export default function AwarenessPage() {
                     <TableHead className="text-right text-gray-500 text-xs">좋아요</TableHead>
                     <TableHead className="text-right text-gray-500 text-xs">댓글</TableHead>
                     <TableHead className="text-right text-gray-500 text-xs">인게이지먼트</TableHead>
-                    <TableHead className="text-gray-500 text-xs text-center">관리</TableHead>
+                    {isAdmin && <TableHead className="text-gray-500 text-xs text-center">관리</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -3083,57 +3085,59 @@ export default function AwarenessPage() {
                           )}
                         </TableCell>
                         <TableCell className="text-right font-bold text-fursys-red">{eng}%</TableCell>
-                        <TableCell className="text-center w-[110px]">
-                          <div className="flex items-center justify-center gap-1">
-                            {isEditing ? (
-                              <>
-                                <button onClick={async () => {
-                                  try {
-                                    const platformVal = editViralForm.platform === "기타"
-                                      ? (editViralForm._platformCustom?.trim() || "기타")
-                                      : (editViralForm.platform || undefined);
-                                    const baseUpdates = {
-                                      url: editViralForm.url || undefined,
-                                      creator: editViralForm.creator || undefined,
-                                      date: editViralForm.date || undefined,
-                                      views: processNumber(editViralForm.views),
-                                      likes: processNumber(editViralForm.likes),
-                                      comments: processNumber(editViralForm.comments),
-                                    };
+                        {isAdmin && (
+                          <TableCell className="text-center w-[110px]">
+                            <div className="flex items-center justify-center gap-1">
+                              {isEditing ? (
+                                <>
+                                  <button onClick={async () => {
                                     try {
-                                      // platform 포함 저장 시도
-                                      await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { ...baseUpdates, platform: platformVal } });
-                                    } catch {
-                                      // 구버전 Convex 배포가 platform 미지원 시 fallback
-                                      await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: baseUpdates });
-                                    }
-                                    setEditingViralId(null);
-                                  } catch (e: any) { alert("저장 실패: " + (e.message || String(e))); }
-                                }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
-                                <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
-                              </>
-                            ) : (
-                              <>
-                                {row.url && (
-                                  <button onClick={() => handleFetchSnsStats(row._id, row.url)} className="p-1 rounded hover:bg-gray-100 text-blue-400" title="자동 수집">
-                                    {isFetchingUrl === row._id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
-                                  </button>
-                                )}
-                                <button onClick={() => {
-                                  const knownPlatforms = ["YouTube","Instagram","X","TikTok","네이버카페"];
-                                  const isKnown = knownPlatforms.includes(row.platform);
-                                  setEditingViralId(row._id);
-                                  setEditViralForm({
-                                    ...row,
-                                    platform: isKnown ? row.platform : "기타",
-                                    _platformCustom: isKnown ? undefined : (row.platform !== "-" ? row.platform : ""),
-                                  });
-                                }} className="p-1 rounded hover:bg-gray-100 text-gray-400"><Pencil className="w-4 h-4" /></button>
-                                <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteViralRow({ viralId: row._id }); }} className="p-1 rounded hover:bg-red-50 text-red-400"><Trash className="w-4 h-4" /></button>
-                              </>
-                            )}
-                          </div>
-                        </TableCell>
+                                      const platformVal = editViralForm.platform === "기타"
+                                        ? (editViralForm._platformCustom?.trim() || "기타")
+                                        : (editViralForm.platform || undefined);
+                                      const baseUpdates = {
+                                        url: editViralForm.url || undefined,
+                                        creator: editViralForm.creator || undefined,
+                                        date: editViralForm.date || undefined,
+                                        views: processNumber(editViralForm.views),
+                                        likes: processNumber(editViralForm.likes),
+                                        comments: processNumber(editViralForm.comments),
+                                      };
+                                      try {
+                                        // platform 포함 저장 시도
+                                        await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { ...baseUpdates, platform: platformVal } });
+                                      } catch {
+                                        // 구버전 Convex 배포가 platform 미지원 시 fallback
+                                        await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: baseUpdates });
+                                      }
+                                      setEditingViralId(null);
+                                    } catch (e: any) { alert("저장 실패: " + (e.message || String(e))); }
+                                  }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
+                                  <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
+                                </>
+                              ) : (
+                                <>
+                                  {row.url && (
+                                    <button onClick={() => handleFetchSnsStats(row._id, row.url)} className="p-1 rounded hover:bg-gray-100 text-blue-400" title="자동 수집">
+                                      {isFetchingUrl === row._id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
+                                    </button>
+                                  )}
+                                  <button onClick={() => {
+                                    const knownPlatforms = ["YouTube","Instagram","X","TikTok","네이버카페"];
+                                    const isKnown = knownPlatforms.includes(row.platform);
+                                    setEditingViralId(row._id);
+                                    setEditViralForm({
+                                      ...row,
+                                      platform: isKnown ? row.platform : "기타",
+                                      _platformCustom: isKnown ? undefined : (row.platform !== "-" ? row.platform : ""),
+                                    });
+                                  }} className="p-1 rounded hover:bg-gray-100 text-gray-400"><Pencil className="w-4 h-4" /></button>
+                                  <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteViralRow({ viralId: row._id }); }} className="p-1 rounded hover:bg-red-50 text-red-400"><Trash className="w-4 h-4" /></button>
+                                </>
+                              )}
+                            </div>
+                          </TableCell>
+                        )}
                       </TableRow>
                     );
                   })}

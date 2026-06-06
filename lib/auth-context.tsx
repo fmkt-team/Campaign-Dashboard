@@ -52,8 +52,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setAuthEmail(parsed.email);
         }
       }
-      // 뷰어 세션
-      const viewerSession = sessionStorage.getItem(VIEWER_SESSION_KEY);
+      // 뷰어 세션 (localStorage에서 복원)
+      const viewerSession = localStorage.getItem(VIEWER_SESSION_KEY);
       if (viewerSession) {
         const parsed = JSON.parse(viewerSession);
         if (parsed.campaignId) {
@@ -79,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = () => {
     try {
       sessionStorage.removeItem(SESSION_KEY);
-      sessionStorage.removeItem(VIEWER_SESSION_KEY);
+      localStorage.removeItem(VIEWER_SESSION_KEY);
     } catch {}
     setAuthRole(null);
     setAuthEmail(null);
@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setViewerSession = (campaignId: string, token: string) => {
     try {
-      sessionStorage.setItem(VIEWER_SESSION_KEY, JSON.stringify({ campaignId, token }));
+      localStorage.setItem(VIEWER_SESSION_KEY, JSON.stringify({ campaignId, token }));
     } catch {}
     setIsViewer(true);
     setViewerCampaignId(campaignId);
@@ -100,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const clearViewerSession = () => {
-    try { sessionStorage.removeItem(VIEWER_SESSION_KEY); } catch {}
+    try { localStorage.removeItem(VIEWER_SESSION_KEY); } catch {}
     setIsViewer(false);
     setViewerCampaignId(null);
   };

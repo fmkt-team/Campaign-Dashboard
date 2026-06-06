@@ -1677,9 +1677,9 @@ export default function InterestPage() {
         };
       });
 
-      // 기존 activities 중 이벤트 및 팝업일별데이터 제외한 행들 보존
+      // 기존 activities 중 팝업일별데이터 제외한 행들 보존
       const keep = activities
-        .filter(a => a.activityType !== "이벤트" && a.activityType !== "팝업일별데이터")
+        .filter(a => a.activityType !== "팝업일별데이터")
         .map(a => ({
           activityType: a.activityType, title: a.title, locationOrTarget: a.locationOrTarget,
           startDate: a.startDate, endDate: a.endDate,
