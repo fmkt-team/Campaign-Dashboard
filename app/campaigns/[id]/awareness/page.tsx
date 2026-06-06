@@ -1099,14 +1099,16 @@ export default function AwarenessPage() {
   const DIGITAL_SHEET_LS_KEY = `awareness-digital-url-${campaignId}`;
 
   // ── 바이럴 매핑 ──────────────────────────────────────────────
-  const [previewData,    setPreviewData]    = useState<any[][] | null>(null);
+  const [previewData,       setPreviewData]       = useState<any[][] | null>(null);
+  const [previewHyperlinks, setPreviewHyperlinks] = useState<(string | null)[][] | null>(null);
   const [mapping,        setMapping]        = useState<Record<string, string>>({});
   const [headerRowIdx,   setHeaderRowIdx]   = useState(0);
   const [isGuessingCols, setIsGuessingCols] = useState(false);
 
   // ── 바이럴 필터·편집 ─────────────────────────────────────────
-  const [filterMonth,    setFilterMonth]    = useState("all");
-  const [filterPlatform, setFilterPlatform] = useState("all");
+  const [filterMonth,       setFilterMonth]       = useState("all");
+  const [filterPlatform,    setFilterPlatform]    = useState("all");
+  const [filterUploadedOnly, setFilterUploadedOnly] = useState(true);
   const [editingViralId, setEditingViralId] = useState<string | null>(null);
   const [editViralForm,  setEditViralForm]  = useState<any>({});
   const [isFetchingUrl,  setIsFetchingUrl]  = useState<string | null>(null);
@@ -1306,8 +1308,8 @@ export default function AwarenessPage() {
   };
 
   // ── 바이럴 AI 컬럼 추론 ──────────────────────────────────────
-  const openViralMapper = async (rawData: any[][]) => {
-    setPreviewData(rawData); setMapping({}); setHeaderRowIdx(0); setIsGuessingCols(true); setShowConfig(null);
+  const openViralMapper = async (rawData: any[][], rawHyperlinks?: (string | null)[][]) => {
+    setPreviewData(rawData); setPreviewHyperlinks(rawHyperlinks ?? null); setMapping({}); setHeaderRowIdx(0); setIsGuessingCols(true); setShowConfig(null);
     try {
       const res = await fetch("/api/parse-sheet-ai", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -1339,10 +1341,10 @@ export default function AwarenessPage() {
       const res = await fetch("/api/fetch-raw-sheet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetUrl }),
+        body: JSON.stringify({ sheetUrl, type }),
       }).then(r => r.json());
       if (!res.success || !res.data) throw new Error(res.error || "데이터 없음");
-      if (type === "digital") await runDigitalAI(res.data); else await openViralMapper(res.data);
+      if (type === "digital") await runDigitalAI(res.data); else await openViralMapper(res.data, res.hyperlinks);
     } catch (e: any) { alert("구글 시트 연동 에러: " + e.message); }
     finally { setIsSyncing(false); setSheetUrl(""); }
   };
@@ -1369,14 +1371,22 @@ export default function AwarenessPage() {
     setIsSyncing(true);
     try {
       let lDate = "", lPlat = "-", lCreator = "-";
-      const rows = previewData.slice(headerRowIdx + 1)
-        .filter(row => Object.values(mapping).some(ci => { const v = row[parseInt(ci)]; return v !== undefined && v !== ""; }))
-        .map(cols => {
+      const dataRows = previewData.slice(headerRowIdx + 1);
+      // filter 전에 원본 인덱스를 보존해야 hyperlinks 배열 참조가 정확함
+      const rows = dataRows
+        .map((cols, i) => ({ cols, absRowIdx: headerRowIdx + 1 + i }))
+        .filter(({ cols }) => Object.values(mapping).some(ci => { const v = cols[parseInt(ci)]; return v !== undefined && v !== ""; }))
+        .map(({ cols, absRowIdx }) => {
           let date = mapping["date"] ? processDate(cols[parseInt(mapping["date"])]) : "";
           if (!date) date = lDate; else lDate = date;
           let platform = mapping["platform"] ? String(cols[parseInt(mapping["platform"])] || "").trim() : "";
           if (!platform || platform === "-") platform = lPlat; else lPlat = platform;
-          const rawUrl = mapping["url"] ? String(cols[parseInt(mapping["url"])] || "").trim() : "";
+          // URL: 전용 url 컬럼 우선, 없으면 "온에어" 컬럼의 하이퍼링크 추출
+          // (온에어 셀 텍스트가 "URL"이거나 날짜 텍스트에 링크가 삽입된 경우 모두 처리)
+          let rawUrl = mapping["url"] ? String(cols[parseInt(mapping["url"])] || "").trim() : "";
+          if (!rawUrl && mapping["date"] && previewHyperlinks) {
+            rawUrl = previewHyperlinks[absRowIdx]?.[parseInt(mapping["date"])] ?? "";
+          }
           if (rawUrl.includes("youtube.com") || rawUrl.includes("youtu.be")) platform = "YouTube";
           else if (rawUrl.includes("instagram.com")) platform = "Instagram";
           else if (rawUrl.includes("blog.naver.com") || rawUrl.includes("naver.com")) platform = "Naver Blog";
@@ -1666,6 +1676,7 @@ export default function AwarenessPage() {
   const viralMonths    = Array.from(new Set(groupedViral.map(v => v.date?.substring(0, 7)))).filter(Boolean).sort().reverse();
   const viralPlatforms = Array.from(new Set(groupedViral.map(v => v.platform))).filter(Boolean).sort();
   const filteredViral  = groupedViral.filter(v => {
+    if (filterUploadedOnly && !v.url) return false;
     if (filterMonth !== "all" && v.date?.substring(0, 7) !== filterMonth) return false;
     if (filterPlatform !== "all" && v.platform !== filterPlatform) return false;
     return true;
@@ -2854,6 +2865,16 @@ export default function AwarenessPage() {
             <div className="flex items-center gap-4">
               <h2 className="text-xl font-bold text-gray-900">바이럴 컨텐츠 성과</h2>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setFilterUploadedOnly(p => !p)}
+                  className={cn(
+                    "text-xs px-3 py-1.5 rounded border font-medium transition-colors",
+                    filterUploadedOnly
+                      ? "bg-fursys-red text-white border-fursys-red"
+                      : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
+                  )}>
+                  🔗 업로드된 것만
+                </button>
                 <select className="bg-white border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none"
                   value={filterMonth} onChange={e => setFilterMonth(e.target.value)}>
                   <option value="all">전체 월</option>
@@ -2949,9 +2970,15 @@ export default function AwarenessPage() {
                     const hasComments = (row.commentsList?.length ?? 0) > 0;
                     return (
                       <TableRow key={row._id} className="border-gray-100 hover:bg-gray-50 text-sm">
-                        <TableCell className="text-gray-400 font-mono text-xs">{row.dateLabel}</TableCell>
+                        <TableCell className="text-gray-400 font-mono text-xs">
+                          {isEditing
+                            ? <Input value={editViralForm.date || ""} onChange={e => setEditViralForm({ ...editViralForm, date: e.target.value })} placeholder="YYYY-MM-DD" className="h-6 text-xs w-28 bg-transparent border-gray-200" />
+                            : row.dateLabel}
+                        </TableCell>
                         <TableCell>
-                          <span className="bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-700">{row.platform}</span>
+                          {isEditing
+                            ? <Input value={editViralForm.platform || ""} onChange={e => setEditViralForm({ ...editViralForm, platform: e.target.value })} placeholder="플랫폼" className="h-6 text-xs w-24 bg-transparent border-gray-200" />
+                            : <span className="bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-700">{row.platform}</span>}
                         </TableCell>
                         <TableCell className="font-medium text-gray-900">
                           {isEditing
@@ -3008,7 +3035,7 @@ export default function AwarenessPage() {
                           <div className="flex items-center justify-center gap-1">
                             {isEditing ? (
                               <>
-                                <button onClick={async () => { await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url, creator: editViralForm.creator, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } }); setEditingViralId(null); }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
+                                <button onClick={async () => { await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url, creator: editViralForm.creator, date: editViralForm.date || undefined, platform: editViralForm.platform || undefined, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } }); setEditingViralId(null); }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
                                 <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
                               </>
                             ) : (
@@ -3155,10 +3182,19 @@ export default function AwarenessPage() {
                 <p className="text-sm text-gray-400 mb-5">AI가 열을 자동 감지했습니다. 확인 후 수정해주세요.</p>
                 <div className="flex gap-6 overflow-hidden flex-1">
                   <div className="w-1/2 flex flex-col gap-2 overflow-y-auto pr-2">
-                    {renderMappingSelect("date", "업로드 일자", false)}
+                    {renderMappingSelect("date", "온에어 / 업로드 일자", false)}
+                    {previewHyperlinks && mapping["date"] && (() => {
+                      const colIdx = parseInt(mapping["date"]);
+                      const hasLink = previewHyperlinks.slice(headerRowIdx + 1).some(r => r[colIdx]);
+                      return hasLink ? (
+                        <p className="text-[10px] text-blue-500 bg-blue-50 border border-blue-100 rounded px-2 py-1">
+                          🔗 온에어 컬럼에 하이퍼링크가 감지됐습니다. URL 컬럼 미지정 시 자동으로 사용됩니다.
+                        </p>
+                      ) : null;
+                    })()}
                     {renderMappingSelect("platform", "플랫폼/채널", false)}
                     {renderMappingSelect("creator", "크리에이터", true)}
-                    {renderMappingSelect("url", "게시물 URL")}
+                    {renderMappingSelect("url", "게시물 URL (별도 컬럼이 없으면 온에어 링크 자동 사용)")}
                   </div>
                   <div className="w-1/2 flex flex-col border-l border-gray-100 pl-6 overflow-y-auto">
                     <span className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-2">미리보기 (상위 5행)</span>

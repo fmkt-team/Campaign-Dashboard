@@ -131,6 +131,7 @@ export const updateViralRow = mutation({
       title: v.optional(v.string()),
       creator: v.optional(v.string()),
       date: v.optional(v.string()),
+      platform: v.optional(v.string()),
       views: v.optional(v.number()),
       likes: v.optional(v.number()),
       comments: v.optional(v.number()),
