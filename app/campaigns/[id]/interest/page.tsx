@@ -1050,7 +1050,7 @@ export default function InterestPage() {
   const [reservationUrl, setReservationUrl] = useState("");
   const [reservationDateFrom, setReservationDateFrom] = useState("");
   const [reservationDateTo, setReservationDateTo] = useState("");
-  const [reservationAllRows, setReservationAllRows] = useState<{ date: string; count: number; vipCount: number }[] | null>(null);
+  const [reservationAllRows, setReservationAllRows] = useState<{ date: string; count: number; vipCount: number; people?: number; vipPeople?: number }[] | null>(null);
   const [reservationSyncing, setReservationSyncing] = useState(false);
   const [showReservationUrl, setShowReservationUrl] = useState(false);
   const [reservationSyncMsg, setReservationSyncMsg] = useState("");
@@ -1831,6 +1831,27 @@ export default function InterestPage() {
     return { visitors, vipVisitors, reservations };
   }, [popupActivities]);
 
+  // 날짜 필터 연동 팝업 누적 예약 합계 계산
+  const reservationStats = useMemo(() => {
+    let generalCount = 0;
+    let generalPeople = 0;
+    let vipCount = 0;
+    let vipPeople = 0;
+    let totalPeople = 0;
+
+    if (reservationRows) {
+      reservationRows.forEach(row => {
+        generalCount += row.count || 0;
+        generalPeople += row.people ?? row.count ?? 0;
+        vipCount += row.vipCount || 0;
+        vipPeople += row.vipPeople ?? row.vipCount ?? 0;
+      });
+      totalPeople = generalPeople + vipPeople;
+    }
+
+    return { generalCount, generalPeople, vipCount, vipPeople, totalPeople };
+  }, [reservationRows]);
+
   const combinedChartData = useMemo(() => {
     const map = new Map<string, any>();
 
@@ -2480,6 +2501,54 @@ export default function InterestPage() {
 
         {activeTab === "popup" && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            {/* ── 누적 예약 현황 요약 카드 (날짜 필터 연동) ── */}
+            {reservationAllRows && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <GlassCard className="p-5 flex flex-col justify-between border-l-4 border-l-blue-500 bg-white">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center">
+                      <CalendarDays className="w-4 h-4 text-blue-600" />
+                    </div>
+                    <span className="text-xs font-semibold text-gray-500">일반 예약 신청 (누적)</span>
+                  </div>
+                  <p className="text-2xl font-bold font-mono text-gray-900 mt-1">
+                    {reservationStats.generalCount.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">건</span>
+                    <span className="text-gray-300 mx-2">/</span>
+                    {reservationStats.generalPeople.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">명</span>
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-2">* 조회 기간 내 일반 사전예약 신청 합계</p>
+                </GlassCard>
+
+                <GlassCard className="p-5 flex flex-col justify-between border-l-4 border-l-amber-500 bg-amber-50/5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 rounded-full bg-amber-50/50 flex items-center justify-center">
+                      <Crown className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <span className="text-xs font-semibold text-gray-500">VIP 예약 신청 (누적)</span>
+                  </div>
+                  <p className="text-2xl font-bold font-mono text-amber-700 mt-1">
+                    {reservationStats.vipCount.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">건</span>
+                    <span className="text-gray-300 mx-2">/</span>
+                    {reservationStats.vipPeople.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">명</span>
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-2">* 조회 기간 내 VIP 사전예약 신청 합계</p>
+                </GlassCard>
+
+                <GlassCard className="p-5 flex flex-col justify-between border-l-4 border-l-gray-900 bg-gray-50/50">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
+                      <Users className="w-4 h-4 text-gray-900" />
+                    </div>
+                    <span className="text-xs font-semibold text-gray-500">총 예약 신청 인원 (누적)</span>
+                  </div>
+                  <p className="text-2xl font-bold font-mono text-gray-900 mt-1">
+                    {reservationStats.totalPeople.toLocaleString()}<span className="text-sm font-sans text-gray-400 font-medium ml-0.5">명</span>
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-2">* 조회 기간 내 일반 및 VIP 합산 총 예약 인원</p>
+                </GlassCard>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
               {/* ── 일자별 예약 신청 건 수 ── */}

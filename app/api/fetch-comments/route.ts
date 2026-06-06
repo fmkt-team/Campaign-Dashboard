@@ -5,51 +5,56 @@ const apifyClient = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
 
 async function fetchYoutubeComments(videoId: string) {
   const commentsList: any[] = [];
+  const MAX_LIMIT = 500; // API 타임아웃 및 할당량 방지를 위한 최대 수집 상한
 
   // YouTube Data API로 댓글 가져오기
   if (process.env.YOUTUBE_API_KEY) {
     try {
-      console.log(`[YouTube Comments] Fetching with YouTube Data API: ${videoId}`);
-      const response = await fetch(
-        `https://www.googleapis.com/youtube/v3/commentThreads?videoId=${videoId}&key=${process.env.YOUTUBE_API_KEY}&part=snippet&maxResults=100&textFormat=plainText`,
-        { headers: { "User-Agent": "Mozilla/5.0" } }
-      );
+      let nextPageToken = "";
+      console.log(`[YouTube Comments] Fetching all comments with YouTube Data API: ${videoId}`);
+      
+      do {
+        const url = `https://www.googleapis.com/youtube/v3/commentThreads?videoId=${videoId}&key=${process.env.YOUTUBE_API_KEY}&part=snippet&maxResults=100&textFormat=plainText${nextPageToken ? `&pageToken=${nextPageToken}` : ""}`;
+        const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
 
-      if (!response.ok) {
-        throw new Error(`YouTube API error: ${response.status}`);
-      }
+        if (!response.ok) {
+          throw new Error(`YouTube API error: ${response.status}`);
+        }
 
-      const data = await response.json();
-      if (data.items && Array.isArray(data.items)) {
-        data.items.forEach((item: any) => {
-          const snippet = item.snippet?.topLevelComment?.snippet;
-          if (snippet) {
-            commentsList.push({
-              text: snippet.textDisplay || "",
-              author: snippet.authorDisplayName || "익명",
-              likes: snippet.likeCount || 0,
-              date: snippet.publishedAt ? snippet.publishedAt.split("T")[0] : "",
-            });
-          }
-        });
-      }
-      console.log(`[YouTube Comments] ✅ Fetched ${commentsList.length} comments`);
+        const data = await response.json();
+        if (data.items && Array.isArray(data.items)) {
+          data.items.forEach((item: any) => {
+            const snippet = item.snippet?.topLevelComment?.snippet;
+            if (snippet && commentsList.length < MAX_LIMIT) {
+              commentsList.push({
+                text: snippet.textDisplay || "",
+                author: snippet.authorDisplayName || "익명",
+                likes: snippet.likeCount || 0,
+                date: snippet.publishedAt ? snippet.publishedAt.split("T")[0] : "",
+              });
+            }
+          });
+        }
+        nextPageToken = data.nextPageToken || "";
+      } while (nextPageToken && commentsList.length < MAX_LIMIT);
+
+      console.log(`[YouTube Comments] ✅ Fetched ${commentsList.length} comments total`);
       return commentsList;
     } catch (e: any) {
       console.error(`[YouTube Comments] ❌ YouTube API failed: ${e.message}`);
       // Apify로 폴백
       try {
-        console.log(`[YouTube Comments] Falling back to Apify...`);
+        console.log(`[YouTube Comments] Falling back to Apify (limit 200)...`);
         if (!process.env.APIFY_API_TOKEN) {
           throw new Error("Apify API token not available");
         }
         const run = await apifyClient.actor("streamers/youtube-scraper").call({
           startUrls: [{ url: `https://youtube.com/watch?v=${videoId}` }],
-          maxComments: 30,
+          maxComments: 200,
         });
         const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
         const comments = (items[0] as any)?.comments || [];
-        const apifyComments = comments.slice(0, 30).map((c: any) => ({
+        const apifyComments = comments.slice(0, 200).map((c: any) => ({
           text: c.text || c.content || "",
           author: c.authorText || c.author || "익명",
           likes: c.likeCount || 0,

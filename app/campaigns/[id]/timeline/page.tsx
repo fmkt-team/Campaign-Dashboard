@@ -427,6 +427,17 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
   const { refreshTrigger } = useRefresh();
   const [lastKpiRefresh, setLastKpiRefresh] = useState(0);
 
+  // ── 구글 시트 연동 이벤트 응답 데이터 로드 ──
+  const [responseData, setResponseData] = useState<any[]>([]);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(`interest_response_data_${campaignId}`);
+      if (saved) {
+        setResponseData(JSON.parse(saved));
+      }
+    } catch {}
+  }, [campaignId, refreshTrigger]);
+
   // ── GA4 Property ID: Convex 우선 → localStorage fallback ─────────────────
   const resolvedGa4Id = useMemo(() => {
     if (campaign?.microGa4Id) return campaign.microGa4Id as string;
@@ -524,13 +535,15 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
         ? youtubeVideos.reduce((s: number, r: any) => s + (r.views || 0), 0) : 0;
       return mediaVal + viralVal + ytVal;
     })(),
-    // 2) 이벤트 신청: 흥미 상세 중 팝업이 아닌 활동의 participants 합산
-    event: interestActivities
-      .filter((r: any) => r.activityType !== "팝업")
-      .reduce((s: number, r: any) => s + (r.participants || 0), 0),
+    // 2) 이벤트 신청: 응답 데이터 있으면 실제 응답 건수 우선, 없으면 팝업 외 활동의 participants 합산
+    event: responseData && responseData.length > 0
+      ? responseData.length
+      : interestActivities
+          .filter((r: any) => r.activityType !== "팝업" && r.activityType !== "팝업일별데이터")
+          .reduce((s: number, r: any) => s + (r.participants || 0), 0),
     // 3) 팝업스토어 집객: 흥미 상세 중 팝업 활동의 participants 합산
     popup: interestActivities
-      .filter((r: any) => r.activityType === "팝업")
+      .filter((r: any) => r.activityType === "팝업" || r.activityType === "팝업일별데이터")
       .reduce((s: number, r: any) => s + (r.participants || 0), 0),
     // 4) 마이크로사이트 유입: 캠페인 전체 기간 GA4 세션 수 (직접 fetch, 날짜 필터와 독립)
     microsite: micrositeKpiSessions ?? 0,
