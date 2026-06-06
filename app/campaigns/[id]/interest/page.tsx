@@ -1026,13 +1026,11 @@ export default function InterestPage() {
     url: string;
     dateHeaderRows: number[];
     dataRows: {
-      eventApply: number[];
       vipReserve: number[];
       generalReserve: number[];
       actualVisit: number[];
       walkin: number[];
       totalVisit: number[];
-      awardEvent: number[];
     };
     confidence: number;
     notes: string;
@@ -1456,10 +1454,21 @@ export default function InterestPage() {
     const datePattern = /^(\d{1,2})[\/\.]\s*(\d{1,2})/;
     const year = new Date().getFullYear();
 
-    const eventSignups: {date: string; count: number}[] = [];
     const generalRes: {date: string; count: number; people: number}[] = [];
     const vipRes: {date: string; count: number; people: number}[] = [];
     const visitorRows_: {date: string; actual: number; vipActual: number}[] = [];
+
+    // "건수 / 인원" 형태로 한 셀에 입력된 수치를 분리하는 헬퍼 함수
+    const parseSlashValue = (val: string) => {
+      if (!val) return { count: 0, people: 0 };
+      const s = val.trim();
+      if (s.includes("/")) {
+        const parts = s.split("/").map(p => processNumber(p.trim()));
+        return { count: parts[0] || 0, people: parts[1] || 0 };
+      }
+      const num = processNumber(s);
+      return { count: num, people: num }; // 슬래시가 없는 경우 동일값 할당
+    };
 
     const dateHeaderRows: number[] = (mapping.dateHeaderRows || []).map((r: number) => r - 1); // 0-based
     const dr = mapping.dataRows || {};
@@ -1468,6 +1477,10 @@ export default function InterestPage() {
     for (let hi = 0; hi < dateHeaderRows.length; hi++) {
       const headerRowIdx = dateHeaderRows[hi];
       if (headerRowIdx < 0 || headerRowIdx >= allRows.length) continue;
+
+      // 7행 블록(설치기간 및 사연신청만 있는 영역)은 예약/방문 파싱에서 무시 처리 (0-based로 8 이하일 때 스킵)
+      if (headerRowIdx <= 8) continue;
+
       const headerRow = allRows[headerRowIdx];
 
       // 날짜 컬럼 추출
@@ -1478,21 +1491,12 @@ export default function InterestPage() {
       }
       if (dateCols.length === 0) continue;
 
-      // 이벤트 신청
-      const eIdx = toIdx(dr.eventApply, hi);
-      if (eIdx >= 0 && allRows[eIdx]) {
-        for (const {col, date} of dateCols) {
-          const n = processNumber(allRows[eIdx][col] || "0");
-          if (n > 0) eventSignups.push({date, count: n});
-        }
-      }
-
       // 일반 예약
       const gIdx = toIdx(dr.generalReserve, hi);
       if (gIdx >= 0 && allRows[gIdx]) {
         for (const {col, date} of dateCols) {
-          const count  = processNumber(allRows[gIdx][col]     || "0");
-          const people = processNumber(allRows[gIdx][col + 1] || "0");
+          const rawVal = allRows[gIdx][col] || "";
+          const { count, people } = parseSlashValue(rawVal);
           if (count > 0 || people > 0) generalRes.push({date, count, people});
         }
       }
@@ -1501,26 +1505,38 @@ export default function InterestPage() {
       const vIdx = toIdx(dr.vipReserve, hi);
       if (vIdx >= 0 && allRows[vIdx]) {
         for (const {col, date} of dateCols) {
-          const count  = processNumber(allRows[vIdx][col]     || "0");
-          const people = processNumber(allRows[vIdx][col + 1] || "0");
+          const rawVal = allRows[vIdx][col] || "";
+          const { count, people } = parseSlashValue(rawVal);
           if (count > 0 || people > 0) vipRes.push({date, count, people});
         }
       }
 
-      // 총 방문객 / 실제 방문
+      // 총 방문객 / 실제 방문 (방문자 수도 "실제방문 / 예약" 형태로 들어올 수 있으므로 분리 파싱 적용)
       const tvIdx = toIdx(dr.totalVisit, hi);
       const avIdx = toIdx(dr.actualVisit, hi);
       const useVisitIdx = tvIdx >= 0 ? tvIdx : avIdx;
       if (useVisitIdx >= 0 && allRows[useVisitIdx]) {
         for (const {col, date} of dateCols) {
-          const actual    = processNumber(allRows[useVisitIdx][col]     || "0");
-          const vipActual = avIdx >= 0 && allRows[avIdx] ? processNumber(allRows[avIdx][col + 1] || "0") : 0;
-          if (actual > 0) visitorRows_.push({date, actual, vipActual});
+          const rawVal = allRows[useVisitIdx][col] || "";
+          const { count: actual } = parseSlashValue(rawVal);
+
+          let vipActual = 0;
+          if (avIdx >= 0 && allRows[avIdx]) {
+            const rawVipVal = allRows[avIdx][col + 1] || "";
+            // 만약 VIP 실제 방문자수가 단일 셀에 분리되어 있다면 col+1에서 가져오고, 
+            // 그렇지 않고 슬래시 형태로 묶여 있을 수 있으므로 parseSlashValue 처리
+            const parsedVip = parseSlashValue(rawVipVal);
+            vipActual = parsedVip.count;
+          }
+
+          if (actual > 0 || vipActual > 0) {
+            visitorRows_.push({date, actual, vipActual});
+          }
         }
       }
     }
 
-    return { eventSignups, generalRes, vipRes, visitorRows_ };
+    return { generalRes, vipRes, visitorRows_ };
   }, []);
 
   // ── AI 매핑으로 데이터 저장 ──────────────────────────────────────
@@ -1538,7 +1554,7 @@ export default function InterestPage() {
       if (!json.success || !json.data) throw new Error(json.error || "시트 데이터 없음");
 
       const allRows: string[][] = json.data;
-      const { eventSignups, generalRes, vipRes, visitorRows_ } = parseSheetWithMapping(allRows, mapping);
+      const { generalRes, vipRes, visitorRows_ } = parseSheetWithMapping(allRows, mapping);
       const msgs: string[] = [];
 
       // 팝업 예약 및 방문 데이터 병합
@@ -1589,18 +1605,10 @@ export default function InterestPage() {
       // 최종 동기화 행 구성
       const finalRows = [
         ...keep,
-        ...eventSignups.map(({date, count}) => ({
-          activityType: "이벤트", title: "사연 신청",
-          locationOrTarget: "", startDate: date, endDate: date,
-          visitors: 0, participants: count, budget: 0,
-        })),
         ...popupDayRows
       ];
 
       await syncActivities({ campaignId, rows: finalRows });
-
-      // 이벤트 메시지 추가
-      if (eventSignups.length > 0) msgs.push(`이벤트 신청 ${eventSignups.length}건`);
 
       // 팝업 예약 로컬 상태 설정
       if (generalRes.length > 0 || vipRes.length > 0) {
@@ -1651,13 +1659,11 @@ export default function InterestPage() {
       const dr = m.dataRows || {};
       setDraftRows({
         dateHeaderRows:  (m.dateHeaderRows  || []).join(", "),
-        eventApply:      (dr.eventApply     || []).join(", "),
         vipReserve:      (dr.vipReserve     || []).join(", "),
         generalReserve:  (dr.generalReserve || []).join(", "),
         actualVisit:     (dr.actualVisit    || []).join(", "),
         walkin:          (dr.walkin         || []).join(", "),
         totalVisit:      (dr.totalVisit     || []).join(", "),
-        awardEvent:      (dr.awardEvent     || []).join(", "),
       });
       setPopupAnalysisStep("review");
     } catch (e: any) {
@@ -1692,13 +1698,11 @@ export default function InterestPage() {
       url: popupAnalysisUrl,
       dateHeaderRows: parseRowNums(draftRows.dateHeaderRows || ""),
       dataRows: {
-        eventApply:     parseRowNums(draftRows.eventApply    || ""),
         vipReserve:     parseRowNums(draftRows.vipReserve    || ""),
         generalReserve: parseRowNums(draftRows.generalReserve|| ""),
         actualVisit:    parseRowNums(draftRows.actualVisit   || ""),
         walkin:         parseRowNums(draftRows.walkin        || ""),
         totalVisit:     parseRowNums(draftRows.totalVisit    || ""),
-        awardEvent:     parseRowNums(draftRows.awardEvent    || ""),
       },
       confidence: popupDraftMapping.confidence,
       notes: popupDraftMapping.notes,
@@ -2029,13 +2033,11 @@ export default function InterestPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
                   {([
                     { key: "dateHeaderRows",  label: "📅 날짜 헤더 행" },
-                    { key: "eventApply",      label: "📝 이벤트/사연 신청" },
                     { key: "vipReserve",      label: "👑 VIP 사전 예약" },
                     { key: "generalReserve",  label: "🏬 일반 사전 예약" },
                     { key: "actualVisit",     label: "✅ 실제 방문자" },
                     { key: "walkin",          label: "🚶 워크인 방문" },
                     { key: "totalVisit",      label: "👥 총 방문객" },
-                    { key: "awardEvent",      label: "🏆 시상/이벤트 참여" },
                   ] as const).map(({ key, label }) => (
                     <div key={key} className="flex items-center gap-2">
                       <span className="text-[11px] text-gray-600 w-[130px] shrink-0">{label}</span>
@@ -2074,7 +2076,6 @@ export default function InterestPage() {
                                   <div className="flex flex-wrap gap-0.5 justify-center max-w-[110px]">
                                     {([
                                       { key: "dateHeaderRows",  label: "날짜", color: "bg-blue-600 border-blue-600 text-white" },
-                                      { key: "eventApply",      label: "사연", color: "bg-purple-600 border-purple-600 text-white" },
                                       { key: "generalReserve",  label: "일반", color: "bg-amber-600 border-amber-600 text-white" },
                                       { key: "vipReserve",      label: "VIP",  color: "bg-yellow-600 border-yellow-600 text-white" },
                                       { key: "actualVisit",     label: "방문", color: "bg-green-600 border-green-600 text-white" },
@@ -2131,7 +2132,6 @@ export default function InterestPage() {
                 <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
                   {([
                     ["날짜 헤더", (popupConfirmedMapping.dateHeaderRows || []).join(", ")],
-                    ["이벤트 신청", (popupConfirmedMapping.dataRows?.eventApply || []).join(", ")],
                     ["VIP 예약", (popupConfirmedMapping.dataRows?.vipReserve || []).join(", ")],
                     ["일반 예약", (popupConfirmedMapping.dataRows?.generalReserve || []).join(", ")],
                     ["실제 방문", (popupConfirmedMapping.dataRows?.actualVisit || []).join(", ")],

@@ -29,13 +29,11 @@ export async function POST(req: Request) {
     const prompt = `아래는 팝업 운영 현황 구글 시트 데이터야. 시트를 분석해서 아래 항목들이 어느 행/열에 있는지 찾아줘.
 찾아야 할 항목:
 * 날짜 헤더 (일자가 나열된 행, MM/DD 패턴이 여러 열에 걸쳐 있음)
-* 이벤트/사연 신청 건수
 * VIP 사전 예약 (건수 / 명수)
 * 일반 사전 예약 (건수 / 명수)
 * 실제 방문자 수 (VIP / 일반)
 * 워크인 방문 (팀 / 인원)
 * 총 방문객 수
-* 시상/이벤트 참여 수
 
 행 번호는 1부터 시작하는 정수야. 각 항목이 반복되는 경우(날짜 섹션이 여러 블록) 모든 해당 행 번호를 배열로 반환해.
 항목을 찾지 못한 경우 빈 배열 []로 반환해.
@@ -44,13 +42,11 @@ export async function POST(req: Request) {
 {
   "dateHeaderRows": [행번호 배열],
   "dataRows": {
-    "eventApply": [행번호 배열],
     "vipReserve": [행번호 배열],
     "generalReserve": [행번호 배열],
     "actualVisit": [행번호 배열],
     "walkin": [행번호 배열],
-    "totalVisit": [행번호 배열],
-    "awardEvent": [행번호 배열]
+    "totalVisit": [행번호 배열]
   },
   "confidence": 0~100 사이 정수,
   "notes": "분석 시 특이사항 (한국어)"
@@ -62,8 +58,8 @@ ${formattedData}`;
     let mapping: any = {
       dateHeaderRows: [],
       dataRows: {
-        eventApply: [], vipReserve: [], generalReserve: [],
-        actualVisit: [], walkin: [], totalVisit: [], awardEvent: [],
+        vipReserve: [], generalReserve: [],
+        actualVisit: [], walkin: [], totalVisit: [],
       },
       confidence: 0,
       notes: "AI 분석 실패",
@@ -108,13 +104,11 @@ ${formattedData}`;
 
 function analyzeSheetStatistically(allRows: string[][]) {
   const dateHeaderRows: number[] = [];
-  const eventApply: number[] = [];
   const vipReserve: number[] = [];
   const generalReserve: number[] = [];
   const actualVisit: number[] = [];
   const walkin: number[] = [];
   const totalVisit: number[] = [];
-  const awardEvent: number[] = [];
 
   const datePattern = /(\d{1,2})[\/\.]\s*(\d{1,2})/;
 
@@ -133,9 +127,6 @@ function analyzeSheetStatistically(allRows: string[][]) {
     }
 
     // 2. 각 항목별 키워드 매칭
-    if (rowStr.includes("사연") || (rowStr.includes("이벤트") && (rowStr.includes("신청") || rowStr.includes("참여")))) {
-      eventApply.push(rowNum);
-    }
     if (rowStr.includes("vip") && (rowStr.includes("예약") || rowStr.includes("신청"))) {
       vipReserve.push(rowNum);
     }
@@ -151,21 +142,16 @@ function analyzeSheetStatistically(allRows: string[][]) {
     if (rowStr.includes("총 방문") || rowStr.includes("총방문") || (rowStr.includes("방문객") && rowStr.includes("총"))) {
       totalVisit.push(rowNum);
     }
-    if (rowStr.includes("시상") || rowStr.includes("어워드")) {
-      awardEvent.push(rowNum);
-    }
   });
 
   return {
     dateHeaderRows,
     dataRows: {
-      eventApply,
       vipReserve,
       generalReserve,
       actualVisit,
       walkin,
       totalVisit,
-      awardEvent
     },
     confidence: 80,
     notes: "규칙 기반 정적 분석 결과가 자동 적용되었습니다."
