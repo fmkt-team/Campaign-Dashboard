@@ -2652,15 +2652,15 @@ export default function InterestPage() {
                   </TableHeader>
                   <TableBody>
                     {reservationRows && reservationRows.length > 0 && (
-                      <TableRow className="bg-gray-100/70 font-bold border-b-2 border-gray-250 text-sm hover:bg-gray-100/70">
-                        <TableCell className="text-gray-950 font-bold py-3">누계 (합계)</TableCell>
-                        <TableCell className="text-right font-mono text-gray-950 py-3">
+                      <TableRow className="bg-slate-700 font-bold border-b-2 border-slate-500 text-sm hover:bg-slate-700">
+                        <TableCell className="text-white font-extrabold py-3.5 text-xs uppercase tracking-wider">누계 (합계)</TableCell>
+                        <TableCell className="text-right font-mono text-slate-100 py-3.5 font-extrabold">
                           {reservationStats.generalCount.toLocaleString()} / {reservationStats.generalPeople.toLocaleString()}
                         </TableCell>
-                        <TableCell className="text-right font-mono text-yellow-700 bg-yellow-50/20 py-3">
+                        <TableCell className="text-right font-mono text-amber-300 py-3.5 font-extrabold">
                           {reservationStats.vipCount.toLocaleString()} / {reservationStats.vipPeople.toLocaleString()}
                         </TableCell>
-                        <TableCell className="text-right font-mono text-gray-950 font-extrabold bg-gray-100/50 py-3">
+                        <TableCell className="text-right font-mono text-white font-black bg-slate-600 py-3.5 rounded-sm">
                           {reservationStats.totalPeople.toLocaleString()}
                         </TableCell>
                       </TableRow>
@@ -2800,18 +2800,18 @@ export default function InterestPage() {
                   </TableHeader>
                   <TableBody>
                     {visitorRows && visitorRows.length > 0 && (
-                      <TableRow className="bg-gray-100/70 font-bold border-b-2 border-gray-250 text-sm hover:bg-gray-100/70">
-                        <TableCell className="text-gray-950 font-bold py-3">누계 (합계)</TableCell>
-                        <TableCell className="text-right font-mono text-gray-950 py-3">
+                      <TableRow className="bg-slate-700 font-bold border-b-2 border-slate-500 text-sm hover:bg-slate-700">
+                        <TableCell className="text-white font-extrabold py-3.5 text-xs uppercase tracking-wider">누계 (합계)</TableCell>
+                        <TableCell className="text-right font-mono text-slate-100 py-3.5 font-extrabold">
                           {(visitorStats.actual - visitorStats.vipActual).toLocaleString()}
                         </TableCell>
-                        <TableCell className="text-right font-mono text-yellow-700 bg-yellow-50/20 py-3">
+                        <TableCell className="text-right font-mono text-amber-300 py-3.5 font-extrabold">
                           {visitorStats.vipActual.toLocaleString()}
                         </TableCell>
-                        <TableCell className="text-right font-mono text-gray-950 font-extrabold bg-gray-100/50 py-3">
+                        <TableCell className="text-right font-mono text-white font-black bg-slate-600 py-3.5 rounded-sm">
                           {visitorStats.actual.toLocaleString()}
                         </TableCell>
-                        <TableCell className="text-right font-mono text-gray-900 bg-gray-50/50 py-3">
+                        <TableCell className="text-right font-mono text-slate-300 bg-slate-600/50 py-3.5">
                           —
                         </TableCell>
                       </TableRow>
