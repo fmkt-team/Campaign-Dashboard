@@ -3092,7 +3092,21 @@ export default function AwarenessPage() {
                                     const platformVal = editViralForm.platform === "기타"
                                       ? (editViralForm._platformCustom?.trim() || "기타")
                                       : (editViralForm.platform || undefined);
-                                    await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url || undefined, creator: editViralForm.creator || undefined, date: editViralForm.date || undefined, platform: platformVal, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } });
+                                    const baseUpdates = {
+                                      url: editViralForm.url || undefined,
+                                      creator: editViralForm.creator || undefined,
+                                      date: editViralForm.date || undefined,
+                                      views: processNumber(editViralForm.views),
+                                      likes: processNumber(editViralForm.likes),
+                                      comments: processNumber(editViralForm.comments),
+                                    };
+                                    try {
+                                      // platform 포함 저장 시도
+                                      await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { ...baseUpdates, platform: platformVal } });
+                                    } catch {
+                                      // 구버전 Convex 배포가 platform 미지원 시 fallback
+                                      await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: baseUpdates });
+                                    }
                                     setEditingViralId(null);
                                   } catch (e: any) { alert("저장 실패: " + (e.message || String(e))); }
                                 }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
