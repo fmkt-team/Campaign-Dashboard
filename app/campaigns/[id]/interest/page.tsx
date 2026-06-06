@@ -1087,27 +1087,19 @@ export default function InterestPage() {
   }, [refreshTrigger, lastRefresh]);
 
   const syncFromSheet = useCallback(async (type: "event" | "popup" | "vip" | "response", url: string) => {
-    const sheetId = extractSheetId(url);
-    if (!sheetId) { setSyncMessage("❌ 올바른 구글 시트 URL이 아닙니다."); return; }
+    if (!url) return;
     setSyncing(type);
     setSyncMessage("");
     try {
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-      const res = await fetch(csvUrl);
-      if (!res.ok) throw new Error("시트 접근 실패. 공유 설정을 확인하세요.");
-      const text = await res.text();
-      const rows = text.split("\n").map(line => {
-        const cells: string[] = [];
-        let current = "";
-        let inQuotes = false;
-        for (const ch of line) {
-          if (ch === '"') { inQuotes = !inQuotes; continue; }
-          if (ch === ',' && !inQuotes) { cells.push(current.trim()); current = ""; continue; }
-          current += ch;
-        }
-        cells.push(current.trim());
-        return cells;
-      }).filter(r => r.some(c => c));
+      // 서버사이드 서비스 계정으로 fetch (CORS 우회)
+      const apiRes = await fetch("/api/fetch-raw-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: url }),
+      });
+      const apiJson = await apiRes.json();
+      if (!apiJson.success || !apiJson.data) throw new Error(apiJson.error || "시트 데이터를 가져오지 못했습니다.");
+      const rows: string[][] = apiJson.data;
 
       if (rows.length < 2) throw new Error("데이터가 2행 미만입니다.");
 
@@ -1263,16 +1255,17 @@ export default function InterestPage() {
   // ── 팝업 예약 신청 시트 동기화 ──
   const syncReservationSheet = useCallback(async () => {
     if (!reservationUrl) return;
-    const sheetId = extractSheetId(reservationUrl);
-    if (!sheetId) { setReservationSyncMsg("❌ 올바른 구글 시트 URL이 아닙니다."); return; }
     setReservationSyncing(true);
     setReservationSyncMsg("");
     try {
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-      const res = await fetch(csvUrl);
-      if (!res.ok) throw new Error("시트 접근 실패. 공유 설정을 확인하세요.");
-      const text = await res.text();
-      const rows = parseCsv(text);
+      const apiRes = await fetch("/api/fetch-raw-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: reservationUrl }),
+      });
+      const apiJson = await apiRes.json();
+      if (!apiJson.success || !apiJson.data) throw new Error(apiJson.error || "시트 데이터를 가져오지 못했습니다.");
+      const rows: string[][] = apiJson.data;
       if (rows.length < 2) throw new Error("데이터가 2행 미만입니다.");
       const headers = rows[0].map(h => h.toLowerCase());
       const dataRows = rows.slice(1);
@@ -1300,16 +1293,17 @@ export default function InterestPage() {
   // ── 팝업 방문자 시트 동기화 ──
   const syncVisitorSheet = useCallback(async () => {
     if (!visitorUrl) return;
-    const sheetId = extractSheetId(visitorUrl);
-    if (!sheetId) { setVisitorSyncMsg("❌ 올바른 구글 시트 URL이 아닙니다."); return; }
     setVisitorSyncing(true);
     setVisitorSyncMsg("");
     try {
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
-      const res = await fetch(csvUrl);
-      if (!res.ok) throw new Error("시트 접근 실패. 공유 설정을 확인하세요.");
-      const text = await res.text();
-      const rows = parseCsv(text);
+      const apiRes = await fetch("/api/fetch-raw-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: visitorUrl }),
+      });
+      const apiJson = await apiRes.json();
+      if (!apiJson.success || !apiJson.data) throw new Error(apiJson.error || "시트 데이터를 가져오지 못했습니다.");
+      const rows: string[][] = apiJson.data;
       if (rows.length < 2) throw new Error("데이터가 2행 미만입니다.");
       const headers = rows[0].map(h => h.toLowerCase());
       const dataRows = rows.slice(1);
