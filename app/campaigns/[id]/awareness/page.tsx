@@ -1691,7 +1691,8 @@ export default function AwarenessPage() {
   const viralMonths    = Array.from(new Set(groupedViral.map(v => v.date?.substring(0, 7)))).filter(Boolean).sort().reverse();
   const viralPlatforms = Array.from(new Set(groupedViral.map(v => v.platform))).filter(Boolean).sort();
   const filteredViral  = groupedViral.filter(v => {
-    if (!v.url) return false; // URL 없는 항목(미업로드)은 항상 제외
+    // http(s)로 시작하는 실제 URL이 있는 항목만 노출 (날짜 텍스트 등 잘못 저장된 값 제외)
+    if (!v.url || !v.url.startsWith("http")) return false;
     if (filterMonth !== "all" && v.date?.substring(0, 7) !== filterMonth) return false;
     if (filterPlatform !== "all" && v.platform !== filterPlatform) return false;
     return true;
