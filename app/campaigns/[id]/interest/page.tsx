@@ -56,6 +56,20 @@ function extractSheetId(url: string): string | null {
   return m ? m[1] : null;
 }
 
+// 다양한 타임스탬프/날짜 포맷 → YYYY-MM-DD 변환
+// 처리: "2026-05-30 14:23", "2026/5/30 오후 2:23", "2026. 5. 30.", "5/30/2026 14:23"
+function extractDate(raw: string): string {
+  if (!raw) return "";
+  const s = raw.trim();
+  // YYYY-MM-DD or YYYY/MM/DD or YYYY. M. D
+  const m1 = s.match(/(\d{4})[-\/.](\s*\d{1,2})[-\/.\s]\s*(\d{1,2})/);
+  if (m1) return `${m1[1]}-${m1[2].trim().padStart(2, "0")}-${m1[3].trim().padStart(2, "0")}`;
+  // M/D/YYYY
+  const m2 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m2) return `${m2[3]}-${m2[1].padStart(2, "0")}-${m2[2].padStart(2, "0")}`;
+  return "";
+}
+
 // CSV 파싱 (쌍따옴표로 묶인 필드 지원)
 function parseCsv(text: string): string[][] {
   return text.split("\n").map(line => {
@@ -1149,41 +1163,48 @@ export default function InterestPage() {
         localStorage.setItem(`interest_${type}_sheet_${campaignId}`, url);
         setSyncMessage(`✅ ${mapped.length}건 동기화 완료!`);
       } else {
-        // response type — fetch CSV and parse actual responses
+        // response type — 실제 응답 건수 기반 파싱
         localStorage.setItem(`interest_response_sheet_${campaignId}`, url);
-        // Parse responses: find text column (longest avg) and date column (last)
-        // Sheet structure: B=seq, C=phone, D=name, E=text, G=date
+
+        // 헤더 행에서 날짜/이름/사연 컬럼 자동 감지
+        const hdr = rows[0].map(h => h.toLowerCase());
+        const dateColIdx = (() => {
+          // 타임스탬프(A열)가 가장 우선
+          if (extractDate(dataRows[0]?.[0] || "")) return 0;
+          // 헤더 키워드
+          const ki = hdr.findIndex(h => ["timestamp","타임스탬프","날짜","일시","응답일","접수일"].some(k => h.includes(k)));
+          if (ki >= 0) return ki;
+          // 마지막 열 폴백
+          return rows[0].length - 1;
+        })();
+        const nameColIdx = hdr.findIndex(h => ["이름","name","성명"].some(k => h.includes(k)));
+        // 긴 텍스트 컬럼 = 사연/내용
+        const textColIdx = (() => {
+          // 헤더 키워드 우선
+          const ki = hdr.findIndex(h => ["사연","내용","text","응답","내용"].some(k => h.includes(k)));
+          if (ki >= 0) return ki;
+          // 가장 긴 평균 컨텐츠를 가진 열
+          const colLens = rows[0].map((_, ci) =>
+            dataRows.slice(0, 20).reduce((s, r) => s + (r[ci]?.length || 0), 0)
+          );
+          return colLens.indexOf(Math.max(...colLens));
+        })();
+
         const parsed: {name: string; text: string; date: string}[] = [];
         for (const r of dataRows) {
-          if (r.length < 4) continue;
-          // Find text column: try index 4 (E) first, fallback to longest content
-          let text = "";
-          let name = "";
-          let date = "";
-          // Try known column positions first (D=name col3, E=text col4, G=date col6)
-          if (r[4] && r[4].length > 5) {
-            text = r[4];
-            name = r[3] || "";
-            date = r[6] || r[r.length - 1] || "";
-          } else if (r[3] && r[3].length > 5) {
-            // fallback: D=text
-            text = r[3];
-            name = r[2] || "";
-            date = r[r.length - 1] || "";
-          }
-          if (!text.trim()) continue;
-          // Filter out header-like rows
-          if (text.includes("사연") && text.length < 10) continue;
-          parsed.push({
-            name: name.trim(),
-            text: text.trim(),
-            date: date.trim().slice(0, 10), // keep YYYY-MM-DD part
-          });
+          if (r.every(c => !c.trim())) continue;
+          const rawDate = r[dateColIdx] || "";
+          const date = extractDate(rawDate);
+          if (!date) continue; // 날짜 없으면 스킵 (헤더 잔여 행 등)
+          const text = r[textColIdx]?.trim() || "";
+          const name = nameColIdx >= 0 ? (r[nameColIdx]?.trim() || "") : "";
+          parsed.push({ name, text, date });
         }
+
         if (parsed.length > 0) {
           setResponseData(parsed);
           try { localStorage.setItem(`interest_response_data_${campaignId}`, JSON.stringify(parsed)); } catch {}
-          setSyncMessage(`✅ ${parsed.length}건 응답 데이터 연동 완료!`);
+          setSyncMessage(`✅ ${parsed.length}건 응답 (${new Set(parsed.map(r => r.date)).size}일) 연동 완료!`);
         } else {
           setSyncMessage("✅ 이벤트 응답 시트 URL이 저장되었습니다. (응답 데이터 없음)");
         }
@@ -1570,10 +1591,26 @@ export default function InterestPage() {
   const eventActivities = useMemo(() => activities.filter(a => a.activityType !== "팝업"), [activities]);
   const popupActivities = useMemo(() => activities.filter(a => a.activityType === "팝업"), [activities]);
 
-  const eventStats = useMemo(() => ({
-    participants: eventActivities.reduce((s, a) => s + a.participants, 0),
-    traffic: eventActivities.reduce((s, a) => s + a.visitors, 0),
-  }), [eventActivities]);
+  // 응답 데이터가 있으면 실제 응답 건수 기준, 없으면 activities 수동 입력값 사용
+  const eventStats = useMemo(() => {
+    const participants = responseData && responseData.length > 0
+      ? responseData.length
+      : eventActivities.reduce((s, a) => s + a.participants, 0);
+    const traffic = eventActivities.reduce((s, a) => s + a.visitors, 0);
+    return { participants, traffic };
+  }, [responseData, eventActivities]);
+
+  // 응답 일자별 집계 (responseData 기반)
+  const responseDailyMap = useMemo(() => {
+    if (!responseData || responseData.length === 0) return null;
+    const map = new Map<string, number>();
+    responseData.forEach(r => {
+      if (!r.date) return;
+      const key = r.date.slice(5).replace("-", "/"); // "MM/DD"
+      map.set(key, (map.get(key) || 0) + 1);
+    });
+    return map;
+  }, [responseData]);
 
   const popupStats = useMemo(() => ({
     visitors: popupActivities.reduce((s, a) => s + a.participants, 0),
@@ -1602,11 +1639,19 @@ export default function InterestPage() {
       }
     }
 
-    eventActivities.forEach(a => {
-      const date = a.startDate ? a.startDate.slice(5).replace("-", "/") : "미상";
-      if (!map.has(date)) map.set(date, { name: date, 이벤트참여자: 0, 팝업방문객: 0, VIP방문객: 0 });
-      map.get(date).이벤트참여자 += a.participants;
-    });
+    // 이벤트 참여자: responseData 응답 일자별 집계 우선, 없으면 activities 수동값
+    if (responseDailyMap && responseDailyMap.size > 0) {
+      responseDailyMap.forEach((count, dateKey) => {
+        if (!map.has(dateKey)) map.set(dateKey, { name: dateKey, 이벤트참여자: 0, 팝업방문객: 0, VIP방문객: 0 });
+        map.get(dateKey).이벤트참여자 += count;
+      });
+    } else {
+      eventActivities.forEach(a => {
+        const date = a.startDate ? a.startDate.slice(5).replace("-", "/") : "미상";
+        if (!map.has(date)) map.set(date, { name: date, 이벤트참여자: 0, 팝업방문객: 0, VIP방문객: 0 });
+        map.get(date).이벤트참여자 += a.participants;
+      });
+    }
 
     popupActivities.forEach(a => {
       const date = a.startDate ? a.startDate.slice(5).replace("-", "/") : "미상";
@@ -1617,7 +1662,7 @@ export default function InterestPage() {
 
     const arr = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
     return arr;
-  }, [eventActivities, popupActivities, campaign]);
+  }, [eventActivities, popupActivities, campaign, responseDailyMap]);
 
   useEffect(() => {
     const handler = (e: ClipboardEvent) => {
@@ -2089,9 +2134,38 @@ export default function InterestPage() {
                   .map(([text, count]) => ({text, weight: Math.round(count / total * 100)}));
               })();
 
+              // 일자별 집계
+              const dailyCounts = (() => {
+                const map = new Map<string, number>();
+                responseData.forEach(r => { if (r.date) map.set(r.date, (map.get(r.date) || 0) + 1); });
+                return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+              })();
+
               return (
                 <GlassCard className="p-6">
                   <div className="flex flex-col gap-6">
+
+                    {/* 일자별 참여 현황 */}
+                    <div>
+                      <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
+                        <CalendarDays className="w-4 h-4 text-red-600" /> 응답 일자별 참여 현황
+                        <span className="text-xs font-normal text-gray-400">총 {responseData.length}건 · {dailyCounts.length}일</span>
+                      </h4>
+                      {dailyCounts.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {dailyCounts.map(([date, count]) => (
+                            <div key={date} className="flex flex-col items-center bg-red-50 border border-red-100 rounded-lg px-3 py-2 min-w-[64px]">
+                              <span className="text-[11px] text-gray-500 font-mono">{date.slice(5).replace("-", "/")}</span>
+                              <span className="text-lg font-bold text-fursys-red leading-tight">{count}</span>
+                              <span className="text-[10px] text-gray-400">건</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-400">날짜 데이터가 없습니다.</p>
+                      )}
+                    </div>
+
                     <div>
                       <h4 className="text-sm font-bold text-gray-900 mb-1 flex items-center gap-2">
                         <MessageCircle className="w-4 h-4 text-red-600" /> 사연 신청 키워드 분석
