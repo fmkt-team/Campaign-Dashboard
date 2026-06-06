@@ -1021,6 +1021,46 @@ export default function InterestPage() {
   // ── 이벤트 응답 분석 실제 데이터 ──
   const [responseData, setResponseData] = useState<{name: string; text: string; date: string}[] | null>(null);
 
+  // ── 마이크로사이트 세션 수 가져오기 (이벤트 누적 트래픽용) ──
+  const [micrositeTraffic, setMicrositeTraffic] = useState<number | null>(null);
+
+  const resolvedGa4Id = useMemo(() => {
+    if (campaign?.microGa4Id) return campaign.microGa4Id as string;
+    try { return localStorage.getItem(`microGa4Id_${campaignId}`) ?? ""; } catch { return ""; }
+  }, [campaign?.microGa4Id, campaignId]);
+
+  const fetchMicrositeTraffic = useCallback(async () => {
+    if (!resolvedGa4Id || !campaign?.startDate) return;
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      const endDate = campaign.endDate && campaign.endDate < today ? campaign.endDate : today;
+      const res = await fetch("/api/ga4-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          startDate: campaign.startDate,
+          endDate,
+          timeUnit: "month",
+          propertyId: resolvedGa4Id,
+          metrics: [{ name: "sessions" }],
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.rows?.length) {
+        const total = data.rows.reduce((s: number, r: any) => s + (r.sessions || 0), 0);
+        setMicrositeTraffic(Math.round(total));
+      } else if (res.ok) {
+        setMicrositeTraffic(0);
+      }
+    } catch (e) {
+      console.error("[GA4 Traffic] fetch 실패:", e);
+    }
+  }, [resolvedGa4Id, campaign?.startDate, campaign?.endDate]);
+
+  useEffect(() => {
+    fetchMicrositeTraffic();
+  }, [fetchMicrositeTraffic]);
+
   // ── 팝업 AI 매핑 (이벤트 신청 + 팝업 예약 일자별) ──
   type PopupMappingData = {
     url: string;
@@ -1781,11 +1821,11 @@ export default function InterestPage() {
     return visitorAllRows.filter(r => {
       const d = normalizeDate(r.date);
       if (!d) return true;
-      if (visitorDateFrom && d < visitorDateFrom) return false;
-      if (visitorDateTo   && d > visitorDateTo)   return false;
+      if (reservationDateFrom && d < reservationDateFrom) return false;
+      if (reservationDateTo   && d > reservationDateTo)   return false;
       return true;
     });
-  }, [visitorAllRows, visitorDateFrom, visitorDateTo]);
+  }, [visitorAllRows, reservationDateFrom, reservationDateTo]);
 
   const eventActivities = useMemo(() => activities.filter(a => a.activityType !== "팝업" && a.activityType !== "팝업일별데이터"), [activities]);
   const popupActivities = useMemo(() => activities.filter(a => a.activityType === "팝업" || a.activityType === "팝업일별데이터"), [activities]);
@@ -1851,6 +1891,19 @@ export default function InterestPage() {
 
     return { generalCount, generalPeople, vipCount, vipPeople, totalPeople };
   }, [reservationRows]);
+
+  // 날짜 필터 연동 팝업 누적 방문자 합계 계산
+  const visitorStats = useMemo(() => {
+    let actual = 0;
+    let vipActual = 0;
+    if (visitorRows) {
+      visitorRows.forEach(row => {
+        actual += row.actual || 0;
+        vipActual += row.vipActual || 0;
+      });
+    }
+    return { actual, vipActual };
+  }, [visitorRows]);
 
   const combinedChartData = useMemo(() => {
     const map = new Map<string, any>();
@@ -2278,7 +2331,9 @@ export default function InterestPage() {
                 onChange={v => updateCardLabel("eventDesc", v)}
                 className="text-[11px] text-gray-400"
                 editMode={isCardEditMode}
-              />: <span className="font-mono text-gray-600 font-semibold">{eventStats.traffic.toLocaleString()}</span>
+              />: <span className="font-mono text-gray-600 font-semibold">
+                {micrositeTraffic !== null ? micrositeTraffic.toLocaleString() : eventStats.traffic.toLocaleString()}
+              </span>
             </p>
           </GlassCard>
 
@@ -2501,54 +2556,6 @@ export default function InterestPage() {
 
         {activeTab === "popup" && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {/* ── 누적 예약 현황 요약 카드 (날짜 필터 연동) ── */}
-            {reservationAllRows && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <GlassCard className="p-5 flex flex-col justify-between border-l-4 border-l-blue-500 bg-white">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-8 h-8 rounded-full bg-blue-50 flex items-center justify-center">
-                      <CalendarDays className="w-4 h-4 text-blue-600" />
-                    </div>
-                    <span className="text-xs font-semibold text-gray-500">일반 예약 신청 (누적)</span>
-                  </div>
-                  <p className="text-2xl font-bold font-mono text-gray-900 mt-1">
-                    {reservationStats.generalCount.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">건</span>
-                    <span className="text-gray-300 mx-2">/</span>
-                    {reservationStats.generalPeople.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">명</span>
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-2">* 조회 기간 내 일반 사전예약 신청 합계</p>
-                </GlassCard>
-
-                <GlassCard className="p-5 flex flex-col justify-between border-l-4 border-l-amber-500 bg-amber-50/5">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-8 h-8 rounded-full bg-amber-50/50 flex items-center justify-center">
-                      <Crown className="w-4 h-4 text-amber-600" />
-                    </div>
-                    <span className="text-xs font-semibold text-gray-500">VIP 예약 신청 (누적)</span>
-                  </div>
-                  <p className="text-2xl font-bold font-mono text-amber-700 mt-1">
-                    {reservationStats.vipCount.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">건</span>
-                    <span className="text-gray-300 mx-2">/</span>
-                    {reservationStats.vipPeople.toLocaleString()}<span className="text-xs font-sans text-gray-400 font-medium ml-0.5">명</span>
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-2">* 조회 기간 내 VIP 사전예약 신청 합계</p>
-                </GlassCard>
-
-                <GlassCard className="p-5 flex flex-col justify-between border-l-4 border-l-gray-900 bg-gray-50/50">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
-                      <Users className="w-4 h-4 text-gray-900" />
-                    </div>
-                    <span className="text-xs font-semibold text-gray-500">총 예약 신청 인원 (누적)</span>
-                  </div>
-                  <p className="text-2xl font-bold font-mono text-gray-900 mt-1">
-                    {reservationStats.totalPeople.toLocaleString()}<span className="text-sm font-sans text-gray-400 font-medium ml-0.5">명</span>
-                  </p>
-                  <p className="text-[10px] text-gray-400 mt-2">* 조회 기간 내 일반 및 VIP 합산 총 예약 인원</p>
-                </GlassCard>
-              </div>
-            )}
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
               {/* ── 일자별 예약 신청 건 수 ── */}
@@ -2644,6 +2651,20 @@ export default function InterestPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
+                    {reservationRows && reservationRows.length > 0 && (
+                      <TableRow className="bg-gray-100/70 font-bold border-b-2 border-gray-250 text-sm hover:bg-gray-100/70">
+                        <TableCell className="text-gray-950 font-bold py-3">누계 (합계)</TableCell>
+                        <TableCell className="text-right font-mono text-gray-950 py-3">
+                          {reservationStats.generalCount.toLocaleString()} / {reservationStats.generalPeople.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-yellow-700 bg-yellow-50/20 py-3">
+                          {reservationStats.vipCount.toLocaleString()} / {reservationStats.vipPeople.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-gray-950 font-extrabold bg-gray-100/50 py-3">
+                          {reservationStats.totalPeople.toLocaleString()}
+                        </TableCell>
+                      </TableRow>
+                    )}
                     {reservationRows && reservationRows.length > 0 ? (
                       reservationRows.map((row: any, i: number) => {
                         const hasPeople = (row.people ?? 0) > 0 || (row.vipPeople ?? 0) > 0;
@@ -2695,20 +2716,20 @@ export default function InterestPage() {
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <input
                         type="date"
-                        value={visitorDateFrom}
+                        value={reservationDateFrom}
                         onChange={e => {
-                          setVisitorDateFrom(e.target.value);
-                          localStorage.setItem(`popup_visitor_from_${campaignId}`, e.target.value);
+                          setReservationDateFrom(e.target.value);
+                          localStorage.setItem(`popup_reservation_from_${campaignId}`, e.target.value);
                         }}
                         className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400 bg-white"
                       />
                       <span className="text-xs text-gray-400">~</span>
                       <input
                         type="date"
-                        value={visitorDateTo}
+                        value={reservationDateTo}
                         onChange={e => {
-                          setVisitorDateTo(e.target.value);
-                          localStorage.setItem(`popup_visitor_to_${campaignId}`, e.target.value);
+                          setReservationDateTo(e.target.value);
+                          localStorage.setItem(`popup_reservation_to_${campaignId}`, e.target.value);
                         }}
                         className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400 bg-white"
                       />
@@ -2778,6 +2799,23 @@ export default function InterestPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
+                    {visitorRows && visitorRows.length > 0 && (
+                      <TableRow className="bg-gray-100/70 font-bold border-b-2 border-gray-250 text-sm hover:bg-gray-100/70">
+                        <TableCell className="text-gray-950 font-bold py-3">누계 (합계)</TableCell>
+                        <TableCell className="text-right font-mono text-gray-950 py-3">
+                          {(visitorStats.actual - visitorStats.vipActual).toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-yellow-700 bg-yellow-50/20 py-3">
+                          {visitorStats.vipActual.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-gray-950 font-extrabold bg-gray-100/50 py-3">
+                          {visitorStats.actual.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-gray-900 bg-gray-50/50 py-3">
+                          —
+                        </TableCell>
+                      </TableRow>
+                    )}
                     {visitorRows && visitorRows.length > 0 ? (
                       visitorRows.map((row, i) => (
                         <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
