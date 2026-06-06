@@ -1162,7 +1162,7 @@ export default function InterestPage() {
     if (refreshTrigger !== lastRefresh) {
       setLastRefresh(refreshTrigger);
       // 흥미 상세 — 저장된 시트 URL로 자동 재동기화
-      (["event", "popup", "vip"] as const).forEach(type => {
+      (["event", "popup", "vip", "response"] as const).forEach(type => {
         try {
           const savedUrl = localStorage.getItem(`interest_${type}_sheet_${campaignId}`);
           if (savedUrl) syncFromSheet(type, savedUrl);
@@ -1260,23 +1260,34 @@ export default function InterestPage() {
         const nameColIdx = hdr.findIndex(h => ["이름","name","성명"].some(k => h.includes(k)));
         // 긴 텍스트 컬럼 = 사연/내용
         const textColIdx = (() => {
-          // 헤더 키워드 우선
-          const ki = hdr.findIndex(h => ["사연","내용","text","응답","내용"].some(k => h.includes(k)));
-          if (ki >= 0) return ki;
-          // 가장 긴 평균 컨텐츠를 가진 열
-          const colLens = rows[0].map((_, ci) =>
-            dataRows.slice(0, 20).reduce((s, r) => s + (r[ci]?.length || 0), 0)
+          // 헤더 키워드 우선 (이름과 날짜 컬럼은 제외)
+          const ki = hdr.findIndex((h, idx) => 
+            idx !== dateColIdx && 
+            idx !== nameColIdx && 
+            ["사연", "내용", "text", "응답", "의견", "피드백", "한마디", "바라는", "신청", "이유", "소개", "스토리", "story", "comment", "주관식", "건의", "글"].some(k => h.includes(k))
           );
-          return colLens.indexOf(Math.max(...colLens));
+          if (ki >= 0) return ki;
+          // 가장 긴 평균 컨텐츠를 가진 열 (이름과 날짜 열 제외)
+          const colLens = rows[0].map((_, ci) => {
+            if (ci === dateColIdx || ci === nameColIdx) return -1;
+            return dataRows.slice(0, 20).reduce((s, r) => s + (r[ci]?.length || 0), 0);
+          });
+          const maxLen = Math.max(...colLens);
+          return maxLen > 0 ? colLens.indexOf(maxLen) : (rows[0].length - 1);
         })();
 
         const parsed: {name: string; text: string; date: string}[] = [];
         for (const r of dataRows) {
           if (r.every(c => !c.trim())) continue;
-          const rawDate = r[dateColIdx] || "";
-          const date = extractDate(rawDate);
-          if (!date) continue; // 날짜 없으면 스킵 (헤더 잔여 행 등)
           const text = r[textColIdx]?.trim() || "";
+          if (!text) continue; // 사연 본문이 없는 행은 제외
+          
+          const rawDate = r[dateColIdx] || "";
+          let date = extractDate(rawDate);
+          if (!date) {
+            // 날짜 파싱이 불가능한 경우 캠페인 시작일 또는 오늘 날짜로 폴백하여 데이터 유실 방지
+            date = campaign?.startDate ? campaign.startDate.split("T")[0] : new Date().toISOString().split("T")[0];
+          }
           const name = nameColIdx >= 0 ? (r[nameColIdx]?.trim() || "") : "";
           parsed.push({ name, text, date });
         }
@@ -1722,8 +1733,8 @@ export default function InterestPage() {
     });
   }, [visitorAllRows, visitorDateFrom, visitorDateTo]);
 
-  const eventActivities = useMemo(() => activities.filter(a => a.activityType !== "팝업"), [activities]);
-  const popupActivities = useMemo(() => activities.filter(a => a.activityType === "팝업"), [activities]);
+  const eventActivities = useMemo(() => activities.filter(a => a.activityType !== "팝업" && a.activityType !== "팝업일별데이터"), [activities]);
+  const popupActivities = useMemo(() => activities.filter(a => a.activityType === "팝업" || a.activityType === "팝업일별데이터"), [activities]);
 
   // 응답 데이터가 있으면 실제 응답 건수 기준, 없으면 activities 수동 입력값 사용
   const eventStats = useMemo(() => {
@@ -1746,11 +1757,25 @@ export default function InterestPage() {
     return map;
   }, [responseData]);
 
-  const popupStats = useMemo(() => ({
-    visitors: popupActivities.reduce((s, a) => s + a.participants, 0),
-    vipVisitors: popupActivities.reduce((s, a) => s + (a.vipCount ?? 0), 0),
-    reservations: popupActivities.reduce((s, a) => s + a.visitors, 0),
-  }), [popupActivities]);
+  const popupStats = useMemo(() => {
+    let visitors = 0;
+    let vipVisitors = 0;
+    let reservations = 0;
+
+    popupActivities.forEach(a => {
+      if (a.activityType === "팝업일별데이터") {
+        visitors += a.actualVisitCount ?? 0;
+        vipVisitors += a.vipActualVisitCount ?? 0;
+        reservations += (a.generalReservePeople ?? 0) + (a.vipReservePeople ?? 0);
+      } else {
+        visitors += a.participants;
+        vipVisitors += a.vipCount ?? 0;
+        reservations += a.visitors;
+      }
+    });
+
+    return { visitors, vipVisitors, reservations };
+  }, [popupActivities]);
 
   const combinedChartData = useMemo(() => {
     const map = new Map<string, any>();
@@ -1790,8 +1815,13 @@ export default function InterestPage() {
     popupActivities.forEach(a => {
       const date = a.startDate ? a.startDate.slice(5).replace("-", "/") : "미상";
       if (!map.has(date)) map.set(date, { name: date, 이벤트참여자: 0, 팝업방문객: 0, VIP방문객: 0 });
-      map.get(date).팝업방문객 += a.participants;
-      map.get(date).VIP방문객 += a.vipCount ?? 0;
+      if (a.activityType === "팝업일별데이터") {
+        map.get(date).팝업방문객 += a.actualVisitCount ?? 0;
+        map.get(date).VIP방문객 += a.vipActualVisitCount ?? 0;
+      } else {
+        map.get(date).팝업방문객 += a.participants;
+        map.get(date).VIP방문객 += a.vipCount ?? 0;
+      }
     });
 
     const arr = Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -2486,7 +2516,7 @@ export default function InterestPage() {
                 <Table>
                   <TableHeader className="bg-gray-50/50">
                     <TableRow className="border-gray-100 hover:bg-transparent">
-                      <TableHead className="text-gray-500 text-xs font-semibold">신청 일자</TableHead>
+                      <TableHead className="text-gray-500 text-xs font-semibold">방문 희망일자</TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 신청 (건/명)</TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">
                         <span className="flex items-center justify-end gap-1"><Crown className="w-3 h-3 text-yellow-500" />VIP (건/명)</span>
