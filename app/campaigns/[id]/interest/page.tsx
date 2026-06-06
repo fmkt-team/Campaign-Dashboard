@@ -1244,58 +1244,97 @@ export default function InterestPage() {
         // response type — 실제 응답 건수 기반 파싱
         localStorage.setItem(`interest_response_sheet_${campaignId}`, url);
 
-        // 헤더 행에서 날짜/이름/사연 컬럼 자동 감지
-        const hdr = rows[0].map(h => h.toLowerCase());
-        const dateColIdx = (() => {
-          // 타임스탬프(A열)가 가장 우선
-          if (extractDate(dataRows[0]?.[0] || "")) return 0;
-          // 헤더 키워드
-          const ki = hdr.findIndex(h => ["timestamp","타임스탬프","날짜","일시","응답일","접수일"].some(k => h.includes(k)));
-          if (ki >= 0) return ki;
-          // 마지막 열 폴백
-          return rows[0].length - 1;
-        })();
-        const nameColIdx = hdr.findIndex(h => ["이름","name","성명"].some(k => h.includes(k)));
-        // 긴 텍스트 컬럼 = 사연/내용
-        const textColIdx = (() => {
-          // 헤더 키워드 우선 (이름과 날짜 컬럼은 제외)
-          const ki = hdr.findIndex((h, idx) => 
-            idx !== dateColIdx && 
-            idx !== nameColIdx && 
-            ["사연", "내용", "text", "응답", "의견", "피드백", "한마디", "바라는", "신청", "이유", "소개", "스토리", "story", "comment", "주관식", "건의", "글"].some(k => h.includes(k))
-          );
-          if (ki >= 0) return ki;
-          // 가장 긴 평균 컨텐츠를 가진 열 (이름과 날짜 열 제외)
-          const colLens = rows[0].map((_, ci) => {
-            if (ci === dateColIdx || ci === nameColIdx) return -1;
-            return dataRows.slice(0, 20).reduce((s, r) => s + (r[ci]?.length || 0), 0);
-          });
-          const maxLen = Math.max(...colLens);
-          return maxLen > 0 ? colLens.indexOf(maxLen) : (rows[0].length - 1);
-        })();
-
-        const parsed: {name: string; text: string; date: string}[] = [];
-        for (const r of dataRows) {
-          if (r.every(c => !c.trim())) continue;
-          const text = r[textColIdx]?.trim() || "";
-          if (!text) continue; // 사연 본문이 없는 행은 제외
-          
-          const rawDate = r[dateColIdx] || "";
-          let date = extractDate(rawDate);
-          if (!date) {
-            // 날짜 파싱이 불가능한 경우 캠페인 시작일 또는 오늘 날짜로 폴백하여 데이터 유실 방지
-            date = campaign?.startDate ? campaign.startDate.split("T")[0] : new Date().toISOString().split("T")[0];
+        // ── 데이터 패턴 분석 기반 컬럼 자동 감지 (헤더 없는 시트도 지원) ──
+        // Step A: 타이틀/설명 행 스킵 — 실제 데이터 시작 행 찾기
+        let dataStartIdx = 0;
+        for (let i = 0; i < rows.length; i++) {
+          const filledCols = rows[i].filter(c => c.trim()).length;
+          // 3개 이상 열에 값이 있는 행 = 데이터 행 후보
+          if (filledCols >= 3) {
+            // 이 행에 날짜 패턴이 있으면 데이터 행, 없으면 타이틀 행이므로 스킵
+            const hasDate = rows[i].some(c => extractDate(c));
+            if (hasDate) { dataStartIdx = i; break; }
+            // 타이틀 행은 스킵하고 다음 행 검사
+            continue;
           }
-          const name = nameColIdx >= 0 ? (r[nameColIdx]?.trim() || "") : "";
-          parsed.push({ name, text, date });
+        }
+        const actualDataRows = rows.slice(dataStartIdx).filter(r => r.some(c => c.trim()));
+
+        // Step B: 각 열의 데이터 패턴 분석 (최대 30행 샘플)
+        const colCount = Math.max(...actualDataRows.slice(0, 30).map(r => r.length), 0);
+        type ColProfile = { idx: number; numericRate: number; phoneRate: number; dateRate: number; nameRate: number; avgLen: number; emptyRate: number };
+        const colProfiles: ColProfile[] = [];
+
+        for (let ci = 0; ci < colCount; ci++) {
+          const samples = actualDataRows.slice(0, 30).map(r => r[ci]?.trim() || "");
+          const nonEmpty = samples.filter(v => v);
+          const total = nonEmpty.length || 1;
+          colProfiles.push({
+            idx: ci,
+            numericRate: nonEmpty.filter(v => /^\d+$/.test(v)).length / total,
+            phoneRate: nonEmpty.filter(v => /01[0-9]/.test(v)).length / total,
+            dateRate: nonEmpty.filter(v => !!extractDate(v)).length / total,
+            nameRate: nonEmpty.filter(v => /^[가-힣]{2,4}$/.test(v)).length / total,
+            avgLen: nonEmpty.reduce((s, v) => s + v.length, 0) / total,
+            emptyRate: (samples.length - nonEmpty.length) / (samples.length || 1),
+          });
         }
 
-        if (parsed.length > 0) {
-          setResponseData(parsed);
-          try { localStorage.setItem(`interest_response_data_${campaignId}`, JSON.stringify(parsed)); } catch {}
-          setSyncMessage(`✅ ${parsed.length}건 응답 (${new Set(parsed.map(r => r.date)).size}일) 연동 완료!`);
+        // Step C: 컬럼 타입 분류 (번호/전화번호 → 제외, 날짜/이름/사연 → 할당)
+        const excludedCols = new Set<number>();
+        // 빈 열 제외
+        colProfiles.filter(p => p.emptyRate > 0.8).forEach(p => excludedCols.add(p.idx));
+        // 순수 숫자열 (1,2,3... = 번호) 제외
+        colProfiles.filter(p => p.numericRate > 0.7 && !excludedCols.has(p.idx)).forEach(p => excludedCols.add(p.idx));
+        // 전화번호열 제외
+        colProfiles.filter(p => p.phoneRate > 0.5 && !excludedCols.has(p.idx)).forEach(p => excludedCols.add(p.idx));
+
+        // 날짜열: dateRate 가장 높은 열 (제외 대상 아닌 것 중)
+        const dateCandidates = colProfiles.filter(p => p.dateRate > 0.3 && !excludedCols.has(p.idx));
+        const dateColIdx = dateCandidates.length > 0
+          ? dateCandidates.sort((a, b) => b.dateRate - a.dateRate)[0].idx
+          : -1;
+
+        // 이름열: nameRate 가장 높은 열 (제외 대상 + 날짜열 아닌 것 중)
+        const nameCandidates = colProfiles.filter(p => p.nameRate > 0.3 && !excludedCols.has(p.idx) && p.idx !== dateColIdx);
+        const nameColIdx = nameCandidates.length > 0
+          ? nameCandidates.sort((a, b) => b.nameRate - a.nameRate)[0].idx
+          : -1;
+
+        // 사연열: 나머지 중 avgLen이 가장 긴 열
+        const textCandidates = colProfiles.filter(p => !excludedCols.has(p.idx) && p.idx !== dateColIdx && p.idx !== nameColIdx);
+        const textColIdx = textCandidates.length > 0
+          ? textCandidates.sort((a, b) => b.avgLen - a.avgLen)[0].idx
+          : -1;
+
+        // 열 이름 문자열 (디버그용)
+        const colLetter = (idx: number) => idx >= 0 ? String.fromCharCode(65 + idx) + "열" : "?";
+
+        if (textColIdx < 0) {
+          setSyncMessage("⚠️ 사연 텍스트 열을 자동 감지할 수 없습니다. 시트 구조를 확인해주세요.");
         } else {
-          setSyncMessage("✅ 이벤트 응답 시트 URL이 저장되었습니다. (응답 데이터 없음)");
+          const parsed: {name: string; text: string; date: string}[] = [];
+          for (const r of actualDataRows) {
+            if (r.every(c => !c.trim())) continue;
+            const text = r[textColIdx]?.trim() || "";
+            if (!text) continue;
+
+            const rawDate = dateColIdx >= 0 ? (r[dateColIdx] || "") : "";
+            let date = extractDate(rawDate);
+            if (!date) {
+              date = campaign?.startDate ? campaign.startDate.split("T")[0] : new Date().toISOString().split("T")[0];
+            }
+            const name = nameColIdx >= 0 ? (r[nameColIdx]?.trim() || "") : "";
+            parsed.push({ name, text, date });
+          }
+
+          if (parsed.length > 0) {
+            setResponseData(parsed);
+            try { localStorage.setItem(`interest_response_data_${campaignId}`, JSON.stringify(parsed)); } catch {}
+            setSyncMessage(`✅ ${parsed.length}건 응답 (${new Set(parsed.map(r => r.date)).size}일) 연동 완료! [날짜=${colLetter(dateColIdx)}, 이름=${colLetter(nameColIdx)}, 사연=${colLetter(textColIdx)}]`);
+          } else {
+            setSyncMessage("✅ 이벤트 응답 시트 URL이 저장되었습니다. (응답 데이터 없음)");
+          }
         }
       }
     } catch (e: any) {
@@ -1491,12 +1530,27 @@ export default function InterestPage() {
       }
       if (dateCols.length === 0) continue;
 
+      // 듀얼 컬럼 감지: 날짜 간 컬럼 간격이 2 이상이면 건수/명수가 분리된 구조
+      const colSpan = dateCols.length >= 2 ? dateCols[1].col - dateCols[0].col : 1;
+      const isDualCol = colSpan >= 2;
+
+      // 듀얼/싱글 컬럼에 따라 건수와 명수를 읽는 헬퍼
+      const readCountPeople = (row: string[], col: number) => {
+        if (isDualCol) {
+          // 듀얼 컬럼: col=건수, col+1=명수
+          const count = processNumber(row[col] || "");
+          const people = processNumber(row[col + 1] || "");
+          return { count, people };
+        }
+        // 싱글 컬럼: 기존 parseSlashValue 방식
+        return parseSlashValue(row[col] || "");
+      };
+
       // 일반 예약
       const gIdx = toIdx(dr.generalReserve, hi);
       if (gIdx >= 0 && allRows[gIdx]) {
         for (const {col, date} of dateCols) {
-          const rawVal = allRows[gIdx][col] || "";
-          const { count, people } = parseSlashValue(rawVal);
+          const { count, people } = readCountPeople(allRows[gIdx], col);
           if (count > 0 || people > 0) generalRes.push({date, count, people});
         }
       }
@@ -1505,28 +1559,24 @@ export default function InterestPage() {
       const vIdx = toIdx(dr.vipReserve, hi);
       if (vIdx >= 0 && allRows[vIdx]) {
         for (const {col, date} of dateCols) {
-          const rawVal = allRows[vIdx][col] || "";
-          const { count, people } = parseSlashValue(rawVal);
+          const { count, people } = readCountPeople(allRows[vIdx], col);
           if (count > 0 || people > 0) vipRes.push({date, count, people});
         }
       }
 
-      // 총 방문객 / 실제 방문 (방문자 수도 "실제방문 / 예약" 형태로 들어올 수 있으므로 분리 파싱 적용)
+      // 총 방문객 / 실제 방문
       const tvIdx = toIdx(dr.totalVisit, hi);
       const avIdx = toIdx(dr.actualVisit, hi);
       const useVisitIdx = tvIdx >= 0 ? tvIdx : avIdx;
       if (useVisitIdx >= 0 && allRows[useVisitIdx]) {
         for (const {col, date} of dateCols) {
-          const rawVal = allRows[useVisitIdx][col] || "";
-          const { count: actual } = parseSlashValue(rawVal);
+          const { count: actual } = readCountPeople(allRows[useVisitIdx], col);
 
           let vipActual = 0;
-          if (avIdx >= 0 && allRows[avIdx]) {
-            const rawVipVal = allRows[avIdx][col + 1] || "";
-            // 만약 VIP 실제 방문자수가 단일 셀에 분리되어 있다면 col+1에서 가져오고, 
-            // 그렇지 않고 슬래시 형태로 묶여 있을 수 있으므로 parseSlashValue 처리
-            const parsedVip = parseSlashValue(rawVipVal);
-            vipActual = parsedVip.count;
+          // VIP 실제 방문: 듀얼 컬럼이면 col+1이 이미 명수이므로, VIP 행의 col 값을 사용
+          if (avIdx >= 0 && avIdx !== useVisitIdx && allRows[avIdx]) {
+            const { count: vipVal } = readCountPeople(allRows[avIdx], col);
+            vipActual = vipVal;
           }
 
           if (actual > 0 || vipActual > 0) {
