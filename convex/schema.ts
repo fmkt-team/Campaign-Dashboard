@@ -190,6 +190,13 @@ export default defineSchema({
     participants: v.number(),
     budget: v.number(),
     vipCount: v.optional(v.number()),
+    // 팝업 상세 예약/방문 데이터용 필드 (Optional)
+    generalReserveCount: v.optional(v.number()),
+    generalReservePeople: v.optional(v.number()),
+    vipReserveCount: v.optional(v.number()),
+    vipReservePeople: v.optional(v.number()),
+    actualVisitCount: v.optional(v.number()),
+    vipActualVisitCount: v.optional(v.number()),
   }).index("by_campaign", ["campaignId"]),
 
   campaignInsights: defineTable({

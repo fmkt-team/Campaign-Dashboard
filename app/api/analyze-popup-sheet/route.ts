@@ -69,6 +69,7 @@ ${formattedData}`;
       notes: "AI 분석 실패",
     };
 
+    let aiSuccess = false;
     try {
       const aiRes = await openai.chat.completions.create({
         model: "gpt-4o-mini",
@@ -77,18 +78,96 @@ ${formattedData}`;
         temperature: 0.1,
       });
       const parsed = JSON.parse(aiRes.choices[0].message.content || "{}");
-      if (parsed.dateHeaderRows) mapping = parsed;
+      if (parsed.dateHeaderRows && parsed.dateHeaderRows.length > 0) {
+        mapping = parsed;
+        aiSuccess = true;
+      }
     } catch (aiErr: any) {
       console.warn("[analyze-popup-sheet] AI 분석 실패:", aiErr.message);
+    }
+
+    // AI 분석이 실패했거나 신뢰할 수 없는 경우 규칙 기반 정적 분석 수행
+    if (!aiSuccess || mapping.confidence < 40 || mapping.dateHeaderRows.length === 0) {
+      const fallbackMapping = analyzeSheetStatistically(allRows);
+      if (fallbackMapping.dateHeaderRows.length > 0) {
+        mapping = fallbackMapping;
+      }
     }
 
     return NextResponse.json({
       success: true,
       mapping,
       totalRows: allRows.length,
+      previewRows: allRows.slice(0, 30),
     });
   } catch (e: any) {
     console.error("[analyze-popup-sheet] Error:", e);
     return NextResponse.json({ success: false, error: e.message }, { status: 500 });
   }
+}
+
+function analyzeSheetStatistically(allRows: string[][]) {
+  const dateHeaderRows: number[] = [];
+  const eventApply: number[] = [];
+  const vipReserve: number[] = [];
+  const generalReserve: number[] = [];
+  const actualVisit: number[] = [];
+  const walkin: number[] = [];
+  const totalVisit: number[] = [];
+  const awardEvent: number[] = [];
+
+  const datePattern = /(\d{1,2})[\/\.]\s*(\d{1,2})/;
+
+  allRows.forEach((row, idx) => {
+    const rowNum = idx + 1; // 1-based
+    const rowStr = row.join(" ").toLowerCase();
+
+    // 1. 날짜 헤더 감지 (행 내에 날짜 포맷이 3개 이상 들어있으면 날짜 헤더로 추정)
+    let dateCount = 0;
+    row.forEach(cell => {
+      if (datePattern.test(cell)) dateCount++;
+    });
+    if (dateCount >= 3) {
+      dateHeaderRows.push(rowNum);
+      return;
+    }
+
+    // 2. 각 항목별 키워드 매칭
+    if (rowStr.includes("사연") || (rowStr.includes("이벤트") && (rowStr.includes("신청") || rowStr.includes("참여")))) {
+      eventApply.push(rowNum);
+    }
+    if (rowStr.includes("vip") && (rowStr.includes("예약") || rowStr.includes("신청"))) {
+      vipReserve.push(rowNum);
+    }
+    if (rowStr.includes("일반") && (rowStr.includes("예약") || rowStr.includes("신청"))) {
+      generalReserve.push(rowNum);
+    }
+    if (rowStr.includes("실 방문") || rowStr.includes("실방문") || rowStr.includes("실제 방문") || rowStr.includes("實 방문") || rowStr.includes("실제방문")) {
+      actualVisit.push(rowNum);
+    }
+    if (rowStr.includes("워크인") || rowStr.includes("현장")) {
+      walkin.push(rowNum);
+    }
+    if (rowStr.includes("총 방문") || rowStr.includes("총방문") || (rowStr.includes("방문객") && rowStr.includes("총"))) {
+      totalVisit.push(rowNum);
+    }
+    if (rowStr.includes("시상") || rowStr.includes("어워드")) {
+      awardEvent.push(rowNum);
+    }
+  });
+
+  return {
+    dateHeaderRows,
+    dataRows: {
+      eventApply,
+      vipReserve,
+      generalReserve,
+      actualVisit,
+      walkin,
+      totalVisit,
+      awardEvent
+    },
+    confidence: 80,
+    notes: "규칙 기반 정적 분석 결과가 자동 적용되었습니다."
+  };
 }

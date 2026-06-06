@@ -89,16 +89,31 @@ function parseCsv(text: string): string[][] {
 // 날짜 문자열 → YYYY-MM-DD 정규화 (MM/DD, YYYY/MM/DD 등 처리)
 function normalizeDate(raw: string): string {
   if (!raw) return "";
+  raw = raw.trim();
+  
+  // 1. YYYY-MM-DD 형식 검증
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  if (/^\d{4}\/\d{2}\/\d{2}$/.test(raw)) return raw.replace(/\//g, "-");
-  const mmdd = raw.match(/^(\d{1,2})\/(\d{1,2})$/);
-  if (mmdd) {
-    const y = new Date().getFullYear();
-    return `${y}-${mmdd[1].padStart(2, "0")}-${mmdd[2].padStart(2, "0")}`;
+  
+  // 2. YYYY.MM.DD 또는 YYYY/MM/DD 형식 처리
+  const ymdMatch = raw.match(/^(\d{4})[\/\.](\d{1,2})[\/\.](\d{1,2})/);
+  if (ymdMatch) {
+    return `${ymdMatch[1]}-${ymdMatch[2].padStart(2, "0")}-${ymdMatch[3].padStart(2, "0")}`;
   }
+  
+  // 3. MM/DD 또는 MM.DD 형식 처리 (뒤에 요일이나 설명이 붙어있어도 매치되도록)
+  const mmddMatch = raw.match(/^(\d{1,2})[\/\.]\s*(\d{1,2})/);
+  if (mmddMatch) {
+    const y = new Date().getFullYear();
+    return `${y}-${mmddMatch[1].padStart(2, "0")}-${mmddMatch[2].padStart(2, "0")}`;
+  }
+  
+  // 4. 일반적인 Date 파싱 시도 (KST 안전 처리를 위해 T00:00:00 추가)
   try {
-    const d = new Date(raw);
-    if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+    const cleaned = raw.replace(/[^\d\-\/]/g, "");
+    if (cleaned) {
+      const d = new Date(cleaned.includes("-") ? cleaned + "T00:00:00" : (cleaned.includes("/") ? cleaned : cleaned.slice(0, 4) + "-" + cleaned.slice(4, 6) + "-" + cleaned.slice(6, 8) + "T00:00:00"));
+      if (!isNaN(d.getTime())) return d.toISOString().split("T")[0];
+    }
   } catch {}
   return "";
 }
@@ -247,9 +262,18 @@ function EditableText({
 }
 
 // ─── 키워드 버블 차트 ────────────────────────────────────────────────
-function KeywordBubbles({ keywords }: { keywords: { text: string; weight: number }[] }) {
+function KeywordBubbles({
+  keywords,
+  selectedKeyword,
+  onSelectKeyword
+}: {
+  keywords: { text: string; weight: number }[];
+  selectedKeyword: string | null;
+  onSelectKeyword: (kw: string | null) => void;
+}) {
   const max = Math.max(...keywords.map(k => k.weight));
   const colors = ["#e50010", "#ef4444", "#f97316", "#f59e0b", "#8b5cf6", "#6366f1", "#3b82f6"];
+  const isAnySelected = selectedKeyword !== null;
   return (
     <div className="flex flex-wrap gap-3 items-end py-3">
       {[...keywords].sort((a, b) => b.weight - a.weight).map((kw, i) => {
@@ -257,21 +281,33 @@ function KeywordBubbles({ keywords }: { keywords: { text: string; weight: number
         const fontSize = Math.round(11 + ratio * 11);
         const px = Math.round(10 + ratio * 8);
         const py = Math.round(5 + ratio * 5);
+        const isSelected = selectedKeyword === kw.text;
+        const isDimmed = isAnySelected && !isSelected;
         return (
-          <div key={i} className="flex flex-col items-center gap-1 transition-transform hover:scale-105">
+          <button
+            key={i}
+            type="button"
+            onClick={() => onSelectKeyword(isSelected ? null : kw.text)}
+            className={cn(
+              "flex flex-col items-center gap-1 transition-all duration-200 active:scale-95 outline-none cursor-pointer",
+              isDimmed ? "opacity-35" : "opacity-100 hover:scale-105"
+            )}
+          >
             <span
-              className="rounded-full font-bold text-white shadow-md whitespace-nowrap"
+              className={cn(
+                "rounded-full font-bold text-white shadow-md whitespace-nowrap border-2",
+                isSelected ? "border-gray-900 scale-105" : "border-transparent"
+              )}
               style={{
                 backgroundColor: colors[i % colors.length],
                 fontSize: `${fontSize}px`,
                 padding: `${py}px ${px}px`,
-                opacity: 0.75 + ratio * 0.25,
               }}
             >
               {kw.text}
             </span>
             <span className="text-[10px] font-mono text-gray-400 font-semibold">{kw.weight}%</span>
-          </div>
+          </button>
         );
       })}
     </div>
@@ -372,13 +408,17 @@ const KR_STOPWORDS = new Set([
   "방향","수준","이상","이하","기준","측면","입장","관계",
 ]);
 
-// 조사·어미 제거 (공간을→공간, 한강이→한강)
+// 조사·어미 제거 (공간을→공간, 한강이→한강, 봄이→봄)
 function stripParticle(word: string): string {
   const endings = [
-    "을","를","이","가","은","는","에","의","로","와","과","도","만","서","게","고","며","나","라","야","아","까","으로","상","적",
+    "으로", "에서", "에게", "부터", "까지", "인가",
+    "을","를","이","가","은","는","에","의","로","와","과","도","만","서","게","고","며","나","라","야","아","까","상","적",
   ];
   for (const e of endings) {
-    if (word.endsWith(e) && word.length > 2) return word.slice(0, -e.length);
+    if (word.endsWith(e) && word.length > e.length) {
+      const stripped = word.slice(0, -e.length);
+      if (stripped.length >= 2) return stripped;
+    }
   }
   return word;
 }
@@ -410,21 +450,34 @@ function isNounLike(word: string): boolean {
 }
 
 function extractKwFromText(text: string): string[] {
-  // 2~5자 한글 시퀀스만 추출 (대부분의 한국어 명사는 2-4자, 복합명사는 5자 이하)
+  // 우선적으로 매칭할 빈출 마케팅 테마 키워드들 (사연/예약 관련)
+  const THEME_KEYWORDS = [
+    "체험", "포토존", "사은품", "안내", "직원", "대기", "주차", "대기시간", 
+    "사전예약", "방문", "이벤트", "기념품", "굿즈", "프로그램", "대관", 
+    "분위기", "가구", "의자", "퍼시스", "트로피", "브랜드", "공간", "성수", "렉처", "시상식"
+  ];
+
+  const foundKeywords = new Set<string>();
+  
+  // 1. 빈출 테마 키워드 사전 매칭
+  THEME_KEYWORDS.forEach(kw => {
+    if (text.includes(kw)) {
+      foundKeywords.add(kw);
+    }
+  });
+
+  // 2. 일반 2~5자 한글 명사구 정제 매칭
   const raw = text.match(/[가-힣]{2,5}/g) || [];
-  const seen = new Set<string>();
-  const result: string[] = [];
   for (const w of raw) {
     const clean = stripParticle(w);
     if (clean.length < 2) continue;
     if (KR_STOPWORDS.has(clean)) continue;
     if (!isNounLike(clean)) continue;
-    if (seen.has(clean)) continue;
-    seen.add(clean);
-    result.push(clean);
-    if (result.length >= 5) break;
+    foundKeywords.add(clean);
   }
-  return result;
+
+  // 최대 6개 키워드만 반환 (다양성 제공)
+  return Array.from(foundKeywords).slice(0, 6);
 }
 
 function buildAnalysis(rawReviews: { text: string; date: string; rating: number; keywords: string[] }[]) {
@@ -992,6 +1045,8 @@ export default function InterestPage() {
   const [popupSyncing, setPopupSyncing]             = useState(false);
   // 행 번호 편집용 임시 문자열 (comma-separated)
   const [draftRows, setDraftRows] = useState<Record<string, string>>({});
+  const [previewRows, setPreviewRows] = useState<string[][]>([]);
+  const [selectedKeyword, setSelectedKeyword] = useState<string | null>(null);
 
   // ── 팝업 예약 신청 시트 (일자별 예약 신청 건 수) ──
   const [reservationUrl, setReservationUrl] = useState("");
@@ -1071,6 +1126,31 @@ export default function InterestPage() {
     if (savedVisTo)   setVisitorDateTo(savedVisTo);
     if (savedVisAll)  { try { setVisitorAllRows(JSON.parse(savedVisAll)); } catch {} }
   }, [campaignId]);
+
+  // DB의 팝업 일별 데이터를 reservationAllRows / visitorAllRows 상태에 동기화
+  useEffect(() => {
+    if (!activities) return;
+    const popupDays = activities.filter(a => a.activityType === "팝업일별데이터");
+    if (popupDays.length === 0) return;
+
+    const resRows = popupDays.map(a => ({
+      date: a.startDate,
+      count: a.generalReserveCount ?? a.visitors, // fallback
+      people: a.generalReservePeople ?? a.participants,
+      vipCount: a.vipReserveCount ?? a.vipCount ?? 0,
+      vipPeople: a.vipReservePeople ?? 0,
+    })).filter(r => r.count > 0 || r.people > 0 || r.vipCount > 0);
+
+    const visRows = popupDays.map(a => ({
+      date: a.startDate,
+      actual: a.actualVisitCount ?? a.visitors,
+      vipActual: a.vipActualVisitCount ?? 0,
+      rate: "—",
+    })).filter(r => r.actual > 0 || r.vipActual > 0);
+
+    if (resRows.length > 0) setReservationAllRows(resRows as any);
+    if (visRows.length > 0) setVisitorAllRows(visRows as any);
+  }, [activities]);
 
   const updateCardLabel = (key: keyof typeof defaultCardLabels, value: string) => {
     const next = { ...cardLabels, [key]: value };
@@ -1362,7 +1442,7 @@ export default function InterestPage() {
   // ── 캘린더 형식 시트 파서 + 동기화 ──
   // ── AI 매핑으로 시트 파싱 (공통 파서) ──────────────────────────────
   const parseSheetWithMapping = useCallback((allRows: string[][], mapping: any) => {
-    const datePattern = /^(\d{1,2})\/(\d{1,2})/;
+    const datePattern = /^(\d{1,2})[\/\.]\s*(\d{1,2})/;
     const year = new Date().getFullYear();
 
     const eventSignups: {date: string; count: number}[] = [];
@@ -1450,34 +1530,72 @@ export default function InterestPage() {
       const { eventSignups, generalRes, vipRes, visitorRows_ } = parseSheetWithMapping(allRows, mapping);
       const msgs: string[] = [];
 
-      // 이벤트 신청 → Convex activities
-      if (eventSignups.length > 0) {
-        const keep = activities
-          .filter(a => a.activityType !== "이벤트")
-          .map(a => ({
-            activityType: a.activityType, title: a.title, locationOrTarget: a.locationOrTarget,
-            startDate: a.startDate, endDate: a.endDate,
-            visitors: a.visitors, participants: a.participants, budget: a.budget, vipCount: a.vipCount,
-          }));
-        await syncActivities({ campaignId, rows: [
-          ...keep,
-          ...eventSignups.map(({date, count}) => ({
-            activityType: "이벤트", title: "사연 신청",
-            locationOrTarget: "", startDate: date, endDate: date,
-            visitors: 0, participants: count, budget: 0,
-          })),
-        ]});
-        msgs.push(`이벤트 신청 ${eventSignups.length}건`);
-      }
+      // 팝업 예약 및 방문 데이터 병합
+      const allPopupDates = Array.from(new Set([
+        ...generalRes.map(r => r.date),
+        ...vipRes.map(r => r.date),
+        ...visitorRows_.map(r => r.date)
+      ])).sort();
 
-      // 팝업 예약 → reservationAllRows
+      const popupDayRows = allPopupDates.map(date => {
+        const g = generalRes.find(r => r.date === date);
+        const v = vipRes.find(r => r.date === date);
+        const vis = visitorRows_.find(r => r.date === date);
+        return {
+          activityType: "팝업일별데이터",
+          title: "팝업 일별 성과",
+          locationOrTarget: "",
+          startDate: date,
+          endDate: date,
+          visitors: vis?.actual ?? 0,
+          participants: g?.people ?? 0,
+          budget: 0,
+          vipCount: v?.count ?? 0,
+          generalReserveCount: g?.count ?? 0,
+          generalReservePeople: g?.people ?? 0,
+          vipReserveCount: v?.count ?? 0,
+          vipReservePeople: v?.people ?? 0,
+          actualVisitCount: vis?.actual ?? 0,
+          vipActualVisitCount: vis?.vipActual ?? 0,
+        };
+      });
+
+      // 기존 activities 중 이벤트 및 팝업일별데이터 제외한 행들 보존
+      const keep = activities
+        .filter(a => a.activityType !== "이벤트" && a.activityType !== "팝업일별데이터")
+        .map(a => ({
+          activityType: a.activityType, title: a.title, locationOrTarget: a.locationOrTarget,
+          startDate: a.startDate, endDate: a.endDate,
+          visitors: a.visitors, participants: a.participants, budget: a.budget, vipCount: a.vipCount,
+          generalReserveCount: a.generalReserveCount,
+          generalReservePeople: a.generalReservePeople,
+          vipReserveCount: a.vipReserveCount,
+          vipReservePeople: a.vipReservePeople,
+          actualVisitCount: a.actualVisitCount,
+          vipActualVisitCount: a.vipActualVisitCount,
+        }));
+
+      // 최종 동기화 행 구성
+      const finalRows = [
+        ...keep,
+        ...eventSignups.map(({date, count}) => ({
+          activityType: "이벤트", title: "사연 신청",
+          locationOrTarget: "", startDate: date, endDate: date,
+          visitors: 0, participants: count, budget: 0,
+        })),
+        ...popupDayRows
+      ];
+
+      await syncActivities({ campaignId, rows: finalRows });
+
+      // 이벤트 메시지 추가
+      if (eventSignups.length > 0) msgs.push(`이벤트 신청 ${eventSignups.length}건`);
+
+      // 팝업 예약 로컬 상태 설정
       if (generalRes.length > 0 || vipRes.length > 0) {
-        const vipMap = new Map(vipRes.map(r => [r.date, r]));
-        const allDates = Array.from(new Set([...generalRes.map(r => r.date), ...vipRes.map(r => r.date)])).sort();
-        const merged = allDates.map(date => {
-          const g = generalRes.find(r => r.date === date);
-          const v = vipMap.get(date);
-          return { date, count: g?.count ?? 0, people: g?.people ?? 0, vipCount: v?.count ?? 0, vipPeople: v?.people ?? 0 };
+        const merged = generalRes.map(g => {
+          const v = vipRes.find(r => r.date === g.date);
+          return { date: g.date, count: g.count, people: g.people, vipCount: v?.count ?? 0, vipPeople: v?.people ?? 0 };
         });
         setReservationAllRows(merged as any);
         localStorage.setItem(`popup_reservation_url_${campaignId}`, mapping.url);
@@ -1485,7 +1603,7 @@ export default function InterestPage() {
         msgs.push(`팝업 예약 ${merged.length}일`);
       }
 
-      // 방문자 → visitorAllRows
+      // 방문자 로컬 상태 설정
       if (visitorRows_.length > 0) {
         const visRows = visitorRows_.map(r => ({ date: r.date, actual: r.actual, vipActual: r.vipActual, rate: "—" }));
         setVisitorAllRows(visRows);
@@ -1517,6 +1635,7 @@ export default function InterestPage() {
       if (!json.success) throw new Error(json.error || "분석 실패");
       const m = { ...json.mapping, url: popupAnalysisUrl };
       setPopupDraftMapping(m);
+      setPreviewRows(json.previewRows || []);
       // draftRows 초기화 (comma-separated 문자열)
       const dr = m.dataRows || {};
       setDraftRows({
@@ -1539,6 +1658,21 @@ export default function InterestPage() {
   // 행 번호 문자열 → 숫자 배열 파서
   const parseRowNums = (s: string): number[] =>
     s.split(/[,\s]+/).map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n > 0);
+
+  const toggleRowMapping = (key: string, rowNum: number) => {
+    setDraftRows(prev => {
+      const currentVal = prev[key] || "";
+      const nums = currentVal.split(/[,\s]+/).map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n > 0);
+      const exists = nums.includes(rowNum);
+      let nextNums: number[];
+      if (exists) {
+        nextNums = nums.filter(n => n !== rowNum);
+      } else {
+        nextNums = [...nums, rowNum].sort((a, b) => a - b);
+      }
+      return { ...prev, [key]: nextNums.join(", ") };
+    });
+  };
 
   // ── 매핑 확정 & 저장 ──────────────────────────────────────────────
   const confirmPopupMapping = useCallback(async () => {
@@ -1731,8 +1865,6 @@ export default function InterestPage() {
             {([
               { type: "event"    as const, label: "📋 이벤트 신청 데이터",              url: eventSheetUrl,    setUrl: setEventSheetUrl,    accentClass: "focus:border-indigo-400", btnClass: "bg-indigo-600 hover:bg-indigo-700", action: "동기화" },
               { type: "response" as const, label: "📝 이벤트 응답 분석 데이터",         url: responseSheetUrl, setUrl: setResponseSheetUrl, accentClass: "focus:border-violet-400", btnClass: "bg-violet-600 hover:bg-violet-700", action: "저장" },
-              { type: "popup"    as const, label: "🏬 팝업 일반 고객 예약/방문 데이터", url: popupSheetUrl,    setUrl: setPopupSheetUrl,    accentClass: "focus:border-amber-400",  btnClass: "bg-amber-600 hover:bg-amber-700",  action: "동기화" },
-              { type: "vip"      as const, label: "👑 팝업 VIP 고객 예약/방문 데이터",  url: vipSheetUrl,      setUrl: setVipSheetUrl,      accentClass: "focus:border-yellow-400", btnClass: "bg-yellow-600 hover:bg-yellow-700", action: "동기화" },
             ]).map(({ type, label, url, setUrl, accentClass, btnClass, action }) => (
               <div key={type} className="flex flex-col gap-2">
                 {/* 레이블 행 — 삭제 확인 시 교체 */}
@@ -1887,6 +2019,68 @@ export default function InterestPage() {
                   ))}
                 </div>
                 <p className="text-[10px] text-gray-400 mb-3">행 번호는 쉼표로 구분. 날짜 블록이 여러 개면 순서대로 입력 (예: 7, 15, 23)</p>
+
+                {/* 시트 데이터 미리보기 & 클릭 매핑 도구 */}
+                {previewRows && previewRows.length > 0 && (
+                  <div className="mt-4 border-t border-orange-100 pt-4 mb-4">
+                    <h5 className="text-[11px] font-bold text-orange-800 mb-2">📋 시트 데이터 미리보기 (각 행 좌측의 뱃지를 클릭하여 매핑을 쉽고 빠르게 설정하세요)</h5>
+                    <div className="overflow-x-auto border border-orange-200 rounded-xl max-h-[300px] overflow-y-auto bg-white">
+                      <table className="w-full text-left border-collapse text-[10px]">
+                        <thead>
+                          <tr className="bg-orange-50/50 sticky top-0 border-b border-orange-100 z-20">
+                            <th className="p-2 border-r border-orange-100 font-bold text-orange-950 w-[120px] text-center bg-orange-50/80 sticky left-0 z-30">행번호 / 매핑 설정</th>
+                            {previewRows[0]?.map((_, colIdx) => (
+                              <th key={colIdx} className="p-2 font-bold text-gray-500 min-w-[100px]">{String.fromCharCode(65 + colIdx)}열</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {previewRows.map((row, rowIdx) => {
+                            const rowNum = rowIdx + 1;
+                            return (
+                              <tr key={rowIdx} className="border-b border-orange-100/50 hover:bg-orange-50/20 transition-colors">
+                                <td className="p-2 border-r border-orange-100 sticky left-0 bg-white font-mono text-center flex flex-col gap-1 items-center justify-center min-h-[45px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] z-10">
+                                  <span className="font-bold text-gray-700 text-[9px]">{rowNum} 행</span>
+                                  <div className="flex flex-wrap gap-0.5 justify-center max-w-[110px]">
+                                    {([
+                                      { key: "dateHeaderRows",  label: "날짜", color: "bg-blue-600 border-blue-600 text-white" },
+                                      { key: "eventApply",      label: "사연", color: "bg-purple-600 border-purple-600 text-white" },
+                                      { key: "generalReserve",  label: "일반", color: "bg-amber-600 border-amber-600 text-white" },
+                                      { key: "vipReserve",      label: "VIP",  color: "bg-yellow-600 border-yellow-600 text-white" },
+                                      { key: "actualVisit",     label: "방문", color: "bg-green-600 border-green-600 text-white" },
+                                    ] as const).map(({ key, label, color }) => {
+                                      const isActive = parseRowNums(draftRows[key] || "").includes(rowNum);
+                                      return (
+                                        <button
+                                          key={key}
+                                          type="button"
+                                          onClick={() => toggleRowMapping(key, rowNum)}
+                                          className={cn(
+                                            "px-1 py-0.5 text-[8px] rounded border font-medium transition-all duration-150 active:scale-95",
+                                            isActive
+                                              ? `${color} font-bold shadow-sm`
+                                              : "bg-gray-50 text-gray-400 border-gray-200 hover:border-gray-400 hover:text-gray-600"
+                                          )}
+                                        >
+                                          {label}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </td>
+                                {row.map((cell, colIdx) => (
+                                  <td key={colIdx} className="p-2 text-gray-600 truncate max-w-[160px] font-sans" title={cell}>
+                                    {cell}
+                                  </td>
+                                ))}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <Button size="sm" onClick={confirmPopupMapping}
                     className="bg-orange-600 hover:bg-orange-700 text-white border-0 gap-1">
@@ -2134,37 +2328,9 @@ export default function InterestPage() {
                   .map(([text, count]) => ({text, weight: Math.round(count / total * 100)}));
               })();
 
-              // 일자별 집계
-              const dailyCounts = (() => {
-                const map = new Map<string, number>();
-                responseData.forEach(r => { if (r.date) map.set(r.date, (map.get(r.date) || 0) + 1); });
-                return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-              })();
-
               return (
                 <GlassCard className="p-6">
                   <div className="flex flex-col gap-6">
-
-                    {/* 일자별 참여 현황 */}
-                    <div>
-                      <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
-                        <CalendarDays className="w-4 h-4 text-red-600" /> 응답 일자별 참여 현황
-                        <span className="text-xs font-normal text-gray-400">총 {responseData.length}건 · {dailyCounts.length}일</span>
-                      </h4>
-                      {dailyCounts.length > 0 ? (
-                        <div className="flex flex-wrap gap-2">
-                          {dailyCounts.map(([date, count]) => (
-                            <div key={date} className="flex flex-col items-center bg-red-50 border border-red-100 rounded-lg px-3 py-2 min-w-[64px]">
-                              <span className="text-[11px] text-gray-500 font-mono">{date.slice(5).replace("-", "/")}</span>
-                              <span className="text-lg font-bold text-fursys-red leading-tight">{count}</span>
-                              <span className="text-[10px] text-gray-400">건</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-gray-400">날짜 데이터가 없습니다.</p>
-                      )}
-                    </div>
 
                     <div>
                       <h4 className="text-sm font-bold text-gray-900 mb-1 flex items-center gap-2">
@@ -2173,24 +2339,40 @@ export default function InterestPage() {
                       </h4>
                       <p className="text-xs text-gray-400 mb-3">실제 사연 내용에서 추출한 키워드 빈도입니다.</p>
                       {realKeywords.length > 0
-                        ? <KeywordBubbles keywords={realKeywords} />
+                        ? <KeywordBubbles keywords={realKeywords} selectedKeyword={selectedKeyword} onSelectKeyword={setSelectedKeyword} />
                         : <p className="text-xs text-gray-400">키워드를 추출할 수 없습니다.</p>
                       }
                     </div>
                     <div>
                       <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
                         <Quote className="w-4 h-4 text-red-600" /> 사연 신청 원문
+                        {selectedKeyword && (
+                          <button
+                            onClick={() => setSelectedKeyword(null)}
+                            className="bg-red-50 hover:bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded-full font-bold ml-2 transition-colors flex items-center gap-1 border border-red-200"
+                          >
+                            "{selectedKeyword}" 필터 해제 ✕
+                          </button>
+                        )}
                       </h4>
                       <div className="space-y-3 overflow-y-auto pr-2 custom-scrollbar max-h-[360px]">
-                        {responseData.map((r, i) => (
-                          <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg p-3">
-                            <div className="flex items-center gap-2 mb-1">
-                              {r.name && <span className="text-xs font-semibold text-gray-700">{r.name}</span>}
-                              {r.date && <span className="text-xs text-gray-400 font-mono">{r.date}</span>}
+                        {(() => {
+                          const filtered = selectedKeyword
+                            ? responseData.filter(r => r.text.includes(selectedKeyword))
+                            : responseData;
+                          if (filtered.length === 0) {
+                            return <p className="text-xs text-gray-400 py-4 text-center">해당 키워드가 포함된 사연이 없습니다.</p>;
+                          }
+                          return filtered.map((r, i) => (
+                            <div key={i} className="bg-gray-50 border border-gray-100 rounded-lg p-3">
+                              <div className="flex items-center gap-2 mb-1">
+                                {r.name && <span className="text-xs font-semibold text-gray-700">{r.name}</span>}
+                                {r.date && <span className="text-xs text-gray-400 font-mono">{r.date}</span>}
+                              </div>
+                              <p className="text-sm text-gray-700 leading-relaxed">"{r.text}"</p>
                             </div>
-                            <p className="text-sm text-gray-700 leading-relaxed">"{r.text}"</p>
-                          </div>
-                        ))}
+                          ));
+                        })()}
                       </div>
                     </div>
                   </div>

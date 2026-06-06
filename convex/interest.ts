@@ -27,6 +27,12 @@ export const syncInterestActivities = mutation({
         participants: v.number(),
         budget: v.number(),
         vipCount: v.optional(v.number()),
+        generalReserveCount: v.optional(v.number()),
+        generalReservePeople: v.optional(v.number()),
+        vipReserveCount: v.optional(v.number()),
+        vipReservePeople: v.optional(v.number()),
+        actualVisitCount: v.optional(v.number()),
+        vipActualVisitCount: v.optional(v.number()),
       })
     ),
   },
