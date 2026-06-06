@@ -1410,8 +1410,14 @@ export default function AwarenessPage() {
           return { date, platform: platform || "-", creator: creator || "-", title: "-", views: 0, likes: 0, comments: 0, url: rawUrl, thumbnailUrl: undefined };
         });
 
-      setSyncStatus("URL 성과 데이터 실시간 수집 중...");
-      const enriched = await Promise.all(rows.map(async row => {
+      // URL이 있는 행만 저장 — 비어있거나 "-" 이거나 http 아닌 값은 완전 제외
+      const validRows = rows.filter(row => {
+        const u = (row.url || "").trim();
+        return u && u !== "-" && u.startsWith("http");
+      });
+
+      setSyncStatus(`URL 성과 데이터 실시간 수집 중... (총 ${validRows.length}건)`);
+      const enriched = await Promise.all(validRows.map(async row => {
         if (!row.url) return row;
         try {
           const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: row.url }) });
@@ -1429,7 +1435,7 @@ export default function AwarenessPage() {
       }));
 
       setSyncStatus("저장 중...");
-      await syncViralContents({ campaignId, rows: enriched });
+      await syncViralContents({ campaignId, rows: enriched.filter(r => r !== null) as any[] });
     } catch (e: any) { alert("동기화 실패: " + e.message); }
     finally { setIsSyncing(false); setPreviewData(null); setMapping({}); }
   };
@@ -1691,8 +1697,9 @@ export default function AwarenessPage() {
   const viralMonths    = Array.from(new Set(groupedViral.map(v => v.date?.substring(0, 7)))).filter(Boolean).sort().reverse();
   const viralPlatforms = Array.from(new Set(groupedViral.map(v => v.platform))).filter(Boolean).sort();
   const filteredViral  = groupedViral.filter(v => {
-    // http(s)로 시작하는 실제 URL이 있는 항목만 노출 (날짜 텍스트 등 잘못 저장된 값 제외)
-    if (!v.url || !v.url.startsWith("http")) return false;
+    // 유효한 URL(http로 시작, 비어있지 않음, "-" 아님)인 항목만 노출
+    const u = (v.url || "").trim();
+    if (!u || u === "-" || !u.startsWith("http")) return false;
     if (filterMonth !== "all" && v.date?.substring(0, 7) !== filterMonth) return false;
     if (filterPlatform !== "all" && v.platform !== filterPlatform) return false;
     return true;
