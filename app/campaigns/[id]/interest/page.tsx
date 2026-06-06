@@ -954,10 +954,30 @@ export default function InterestPage() {
   // ── 이벤트 응답 분석 실제 데이터 ──
   const [responseData, setResponseData] = useState<{name: string; text: string; date: string}[] | null>(null);
 
-  // ── 캘린더 형식 시트 (이벤트 신청 일자별 + 팝업 예약 일자별) ──
-  const [calendarSheetUrl, setCalendarSheetUrl] = useState("");
-  const [calendarSyncing, setCalendarSyncing] = useState(false);
-  const [calendarSyncMsg, setCalendarSyncMsg] = useState("");
+  // ── 팝업 AI 매핑 (이벤트 신청 + 팝업 예약 일자별) ──
+  type PopupMappingData = {
+    url: string;
+    dateHeaderRows: number[];
+    dataRows: {
+      eventApply: number[];
+      vipReserve: number[];
+      generalReserve: number[];
+      actualVisit: number[];
+      walkin: number[];
+      totalVisit: number[];
+      awardEvent: number[];
+    };
+    confidence: number;
+    notes: string;
+  };
+  const [popupAnalysisUrl, setPopupAnalysisUrl]     = useState("");
+  const [popupAnalysisStep, setPopupAnalysisStep]   = useState<"idle" | "analyzing" | "review" | "confirmed">("idle");
+  const [popupDraftMapping, setPopupDraftMapping]   = useState<PopupMappingData | null>(null);
+  const [popupConfirmedMapping, setPopupConfirmedMapping] = useState<PopupMappingData | null>(null);
+  const [popupAnalysisMsg, setPopupAnalysisMsg]     = useState("");
+  const [popupSyncing, setPopupSyncing]             = useState(false);
+  // 행 번호 편집용 임시 문자열 (comma-separated)
+  const [draftRows, setDraftRows] = useState<Record<string, string>>({});
 
   // ── 팝업 예약 신청 시트 (일자별 예약 신청 건 수) ──
   const [reservationUrl, setReservationUrl] = useState("");
@@ -1003,8 +1023,16 @@ export default function InterestPage() {
     if (savedResponse) setResponseSheetUrl(savedResponse);
     if (savedLabels) { try { setCardLabels(JSON.parse(savedLabels)); } catch {} }
 
-    const savedCalendar = localStorage.getItem(`interest_calendar_sheet_${campaignId}`);
-    if (savedCalendar) setCalendarSheetUrl(savedCalendar);
+    // 팝업 AI 매핑 복원
+    const savedPopupMapping = localStorage.getItem(`popup_ai_mapping_${campaignId}`);
+    if (savedPopupMapping) {
+      try {
+        const m = JSON.parse(savedPopupMapping);
+        setPopupConfirmedMapping(m);
+        setPopupAnalysisUrl(m.url || "");
+        setPopupAnalysisStep("confirmed");
+      } catch {}
+    }
 
     const savedResponseData = localStorage.getItem(`interest_response_data_${campaignId}`);
     if (savedResponseData) { try { setResponseData(JSON.parse(savedResponseData)); } catch {} }
@@ -1046,6 +1074,14 @@ export default function InterestPage() {
           if (savedUrl) syncFromSheet(type, savedUrl);
         } catch {}
       });
+      // 팝업 AI 매핑 — 저장된 매핑으로 자동 재동기화
+      try {
+        const savedMapping = localStorage.getItem(`popup_ai_mapping_${campaignId}`);
+        if (savedMapping) {
+          const m = JSON.parse(savedMapping);
+          syncWithPopupMapping(m);
+        }
+      } catch {}
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshTrigger, lastRefresh]);
@@ -1309,79 +1345,97 @@ export default function InterestPage() {
   }, [visitorUrl, campaignId]);
 
   // ── 캘린더 형식 시트 파서 + 동기화 ──
-  const syncCalendarSheet = useCallback(async () => {
-    if (!calendarSheetUrl) return;
-    const sheetId = extractSheetId(calendarSheetUrl);
-    if (!sheetId) { setCalendarSyncMsg("❌ 올바른 구글 시트 URL이 아닙니다."); return; }
+  // ── AI 매핑으로 시트 파싱 (공통 파서) ──────────────────────────────
+  const parseSheetWithMapping = useCallback((allRows: string[][], mapping: any) => {
+    const datePattern = /^(\d{1,2})\/(\d{1,2})/;
+    const year = new Date().getFullYear();
 
-    const gidMatch = calendarSheetUrl.match(/gid=([0-9]+)/);
-    const gid = gidMatch ? gidMatch[1] : "";
+    const eventSignups: {date: string; count: number}[] = [];
+    const generalRes: {date: string; count: number; people: number}[] = [];
+    const vipRes: {date: string; count: number; people: number}[] = [];
+    const visitorRows_: {date: string; actual: number; vipActual: number}[] = [];
 
-    setCalendarSyncing(true);
-    setCalendarSyncMsg("");
-    try {
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gid ? `&gid=${gid}` : ""}`;
-      const res = await fetch(csvUrl);
-      if (!res.ok) throw new Error("시트 접근 실패. 공유 설정을 확인하세요.");
-      const text = await res.text();
-      const allRows = parseCsv(text);
+    const dateHeaderRows: number[] = (mapping.dateHeaderRows || []).map((r: number) => r - 1); // 0-based
+    const dr = mapping.dataRows || {};
+    const toIdx = (arr: number[], i: number) => ((arr || [])[i] ?? 0) - 1;
 
-      // ── 캘린더 파서: 날짜 헤더 행을 찾아 이하 행에서 데이터 추출 ──
-      const datePattern = /^(\d{1,2})\/(\d{1,2})/;
-      const year = new Date().getFullYear();
+    for (let hi = 0; hi < dateHeaderRows.length; hi++) {
+      const headerRowIdx = dateHeaderRows[hi];
+      if (headerRowIdx < 0 || headerRowIdx >= allRows.length) continue;
+      const headerRow = allRows[headerRowIdx];
 
-      const eventSignups: {date: string; count: number}[] = [];
-      const generalRes: {date: string; count: number; people: number}[] = [];
-      const vipRes: {date: string; count: number; people: number}[] = [];
+      // 날짜 컬럼 추출
+      const dateCols: {col: number; date: string}[] = [];
+      for (let c = 0; c < headerRow.length; c++) {
+        const m = headerRow[c].match(datePattern);
+        if (m) dateCols.push({ col: c, date: `${year}-${m[1].padStart(2,"0")}-${m[2].padStart(2,"0")}` });
+      }
+      if (dateCols.length === 0) continue;
 
-      for (let i = 0; i < allRows.length; i++) {
-        const row = allRows[i];
-        // 날짜 헤더 행 감지: M/D 패턴 셀이 2개 이상
-        const dateCols: {col: number; date: string}[] = [];
-        for (let c = 0; c < row.length; c++) {
-          const m = row[c].match(datePattern);
-          if (m) {
-            const d = `${year}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
-            dateCols.push({col: c, date: d});
-          }
-        }
-        if (dateCols.length < 2) continue;
-
-        // 이하 ~12행 스캔
-        for (let j = i + 1; j < Math.min(i + 15, allRows.length); j++) {
-          const dr = allRows[j];
-          const label = dr.join(" ");
-
-          if (label.includes("박수트로피") && label.includes("신청")) {
-            for (const {col, date} of dateCols) {
-              const val = dr[col] || "";
-              if (val === "-" || val === "") continue;
-              const n = processNumber(val);
-              if (n > 0) eventSignups.push({date, count: n});
-            }
-          }
-
-          if (label.includes("일반") && label.includes("예약")) {
-            for (const {col, date} of dateCols) {
-              const count = processNumber(dr[col] || "0");
-              const people = processNumber(dr[col + 1] || "0");
-              if (count > 0 || people > 0) generalRes.push({date, count, people});
-            }
-          }
-
-          if (label.includes("VIP") && label.includes("예약")) {
-            for (const {col, date} of dateCols) {
-              const count = processNumber(dr[col] || "0");
-              const people = processNumber(dr[col + 1] || "0");
-              if (count > 0 || people > 0) vipRes.push({date, count, people});
-            }
-          }
+      // 이벤트 신청
+      const eIdx = toIdx(dr.eventApply, hi);
+      if (eIdx >= 0 && allRows[eIdx]) {
+        for (const {col, date} of dateCols) {
+          const n = processNumber(allRows[eIdx][col] || "0");
+          if (n > 0) eventSignups.push({date, count: n});
         }
       }
 
-      let msgs: string[] = [];
+      // 일반 예약
+      const gIdx = toIdx(dr.generalReserve, hi);
+      if (gIdx >= 0 && allRows[gIdx]) {
+        for (const {col, date} of dateCols) {
+          const count  = processNumber(allRows[gIdx][col]     || "0");
+          const people = processNumber(allRows[gIdx][col + 1] || "0");
+          if (count > 0 || people > 0) generalRes.push({date, count, people});
+        }
+      }
 
-      // 이벤트 신청 → activities 동기화
+      // VIP 예약
+      const vIdx = toIdx(dr.vipReserve, hi);
+      if (vIdx >= 0 && allRows[vIdx]) {
+        for (const {col, date} of dateCols) {
+          const count  = processNumber(allRows[vIdx][col]     || "0");
+          const people = processNumber(allRows[vIdx][col + 1] || "0");
+          if (count > 0 || people > 0) vipRes.push({date, count, people});
+        }
+      }
+
+      // 총 방문객 / 실제 방문
+      const tvIdx = toIdx(dr.totalVisit, hi);
+      const avIdx = toIdx(dr.actualVisit, hi);
+      const useVisitIdx = tvIdx >= 0 ? tvIdx : avIdx;
+      if (useVisitIdx >= 0 && allRows[useVisitIdx]) {
+        for (const {col, date} of dateCols) {
+          const actual    = processNumber(allRows[useVisitIdx][col]     || "0");
+          const vipActual = avIdx >= 0 && allRows[avIdx] ? processNumber(allRows[avIdx][col + 1] || "0") : 0;
+          if (actual > 0) visitorRows_.push({date, actual, vipActual});
+        }
+      }
+    }
+
+    return { eventSignups, generalRes, vipRes, visitorRows_ };
+  }, []);
+
+  // ── AI 매핑으로 데이터 저장 ──────────────────────────────────────
+  const syncWithPopupMapping = useCallback(async (mapping: any) => {
+    if (!mapping?.url) return;
+    setPopupSyncing(true);
+    setPopupAnalysisMsg("");
+    try {
+      const res = await fetch("/api/fetch-raw-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: mapping.url }),
+      });
+      const json = await res.json();
+      if (!json.success || !json.data) throw new Error(json.error || "시트 데이터 없음");
+
+      const allRows: string[][] = json.data;
+      const { eventSignups, generalRes, vipRes, visitorRows_ } = parseSheetWithMapping(allRows, mapping);
+      const msgs: string[] = [];
+
+      // 이벤트 신청 → Convex activities
       if (eventSignups.length > 0) {
         const keep = activities
           .filter(a => a.activityType !== "이벤트")
@@ -1390,53 +1444,111 @@ export default function InterestPage() {
             startDate: a.startDate, endDate: a.endDate,
             visitors: a.visitors, participants: a.participants, budget: a.budget, vipCount: a.vipCount,
           }));
-        const newRows = eventSignups.map(({date, count}) => ({
-          activityType: "이벤트",
-          title: "박수트로피 사연 신청",
-          locationOrTarget: "",
-          startDate: date, endDate: date,
-          visitors: 0, participants: count, budget: 0,
-        }));
-        await syncActivities({campaignId, rows: [...keep, ...newRows]});
+        await syncActivities({ campaignId, rows: [
+          ...keep,
+          ...eventSignups.map(({date, count}) => ({
+            activityType: "이벤트", title: "사연 신청",
+            locationOrTarget: "", startDate: date, endDate: date,
+            visitors: 0, participants: count, budget: 0,
+          })),
+        ]});
         msgs.push(`이벤트 신청 ${eventSignups.length}건`);
       }
 
-      // 팝업 예약 → reservationAllRows (명수 기준, vipPeople 포함)
+      // 팝업 예약 → reservationAllRows
       if (generalRes.length > 0 || vipRes.length > 0) {
         const vipMap = new Map(vipRes.map(r => [r.date, r]));
-        const allDates = Array.from(new Set([
-          ...generalRes.map(r => r.date),
-          ...vipRes.map(r => r.date),
-        ])).sort();
+        const allDates = Array.from(new Set([...generalRes.map(r => r.date), ...vipRes.map(r => r.date)])).sort();
         const merged = allDates.map(date => {
           const g = generalRes.find(r => r.date === date);
           const v = vipMap.get(date);
-          return {
-            date,
-            count:     g?.count   ?? 0,
-            people:    g?.people  ?? 0,
-            vipCount:  v?.count   ?? 0,
-            vipPeople: v?.people  ?? 0,
-          };
+          return { date, count: g?.count ?? 0, people: g?.people ?? 0, vipCount: v?.count ?? 0, vipPeople: v?.people ?? 0 };
         });
         setReservationAllRows(merged as any);
-        localStorage.setItem(`popup_reservation_url_${campaignId}`, calendarSheetUrl);
+        localStorage.setItem(`popup_reservation_url_${campaignId}`, mapping.url);
         localStorage.setItem(`popup_reservation_all_${campaignId}`, JSON.stringify(merged));
         msgs.push(`팝업 예약 ${merged.length}일`);
       }
 
-      localStorage.setItem(`interest_calendar_sheet_${campaignId}`, calendarSheetUrl);
-      if (msgs.length > 0) {
-        setCalendarSyncMsg(`✅ 동기화 완료: ${msgs.join(", ")}`);
-      } else {
-        setCalendarSyncMsg("⚠️ 파싱 가능한 데이터가 없습니다. 시트 구조를 확인하세요.");
+      // 방문자 → visitorAllRows
+      if (visitorRows_.length > 0) {
+        const visRows = visitorRows_.map(r => ({ date: r.date, actual: r.actual, vipActual: r.vipActual, rate: "—" }));
+        setVisitorAllRows(visRows);
+        localStorage.setItem(`popup_visitor_url_${campaignId}`, mapping.url);
+        localStorage.setItem(`popup_visitor_all_${campaignId}`, JSON.stringify(visRows));
+        msgs.push(`방문자 ${visRows.length}일`);
       }
+
+      setPopupAnalysisMsg(msgs.length > 0 ? `✅ 동기화 완료: ${msgs.join(", ")}` : "⚠️ 파싱된 데이터가 없습니다. 매핑을 확인해주세요.");
     } catch (e: any) {
-      setCalendarSyncMsg(`❌ ${e.message}`);
+      setPopupAnalysisMsg(`❌ ${e.message}`);
     } finally {
-      setCalendarSyncing(false);
+      setPopupSyncing(false);
     }
-  }, [calendarSheetUrl, campaignId, activities, syncActivities]);
+  }, [campaignId, activities, syncActivities, parseSheetWithMapping]);
+
+  // ── AI 시트 분석 ─────────────────────────────────────────────────
+  const analyzePopupSheet = useCallback(async () => {
+    if (!popupAnalysisUrl) return;
+    setPopupAnalysisStep("analyzing");
+    setPopupAnalysisMsg("");
+    try {
+      const res = await fetch("/api/analyze-popup-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: popupAnalysisUrl }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || "분석 실패");
+      const m = { ...json.mapping, url: popupAnalysisUrl };
+      setPopupDraftMapping(m);
+      // draftRows 초기화 (comma-separated 문자열)
+      const dr = m.dataRows || {};
+      setDraftRows({
+        dateHeaderRows:  (m.dateHeaderRows  || []).join(", "),
+        eventApply:      (dr.eventApply     || []).join(", "),
+        vipReserve:      (dr.vipReserve     || []).join(", "),
+        generalReserve:  (dr.generalReserve || []).join(", "),
+        actualVisit:     (dr.actualVisit    || []).join(", "),
+        walkin:          (dr.walkin         || []).join(", "),
+        totalVisit:      (dr.totalVisit     || []).join(", "),
+        awardEvent:      (dr.awardEvent     || []).join(", "),
+      });
+      setPopupAnalysisStep("review");
+    } catch (e: any) {
+      setPopupAnalysisMsg(`❌ ${e.message}`);
+      setPopupAnalysisStep("idle");
+    }
+  }, [popupAnalysisUrl]);
+
+  // 행 번호 문자열 → 숫자 배열 파서
+  const parseRowNums = (s: string): number[] =>
+    s.split(/[,\s]+/).map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n > 0);
+
+  // ── 매핑 확정 & 저장 ──────────────────────────────────────────────
+  const confirmPopupMapping = useCallback(async () => {
+    if (!popupDraftMapping) return;
+    const confirmed: any = {
+      url: popupAnalysisUrl,
+      dateHeaderRows: parseRowNums(draftRows.dateHeaderRows || ""),
+      dataRows: {
+        eventApply:     parseRowNums(draftRows.eventApply    || ""),
+        vipReserve:     parseRowNums(draftRows.vipReserve    || ""),
+        generalReserve: parseRowNums(draftRows.generalReserve|| ""),
+        actualVisit:    parseRowNums(draftRows.actualVisit   || ""),
+        walkin:         parseRowNums(draftRows.walkin        || ""),
+        totalVisit:     parseRowNums(draftRows.totalVisit    || ""),
+        awardEvent:     parseRowNums(draftRows.awardEvent    || ""),
+      },
+      confidence: popupDraftMapping.confidence,
+      notes: popupDraftMapping.notes,
+    };
+    setPopupConfirmedMapping(confirmed);
+    setPopupAnalysisStep("confirmed");
+    try { localStorage.setItem(`popup_ai_mapping_${campaignId}`, JSON.stringify(confirmed)); } catch {}
+    await syncWithPopupMapping(confirmed);
+  }, [popupDraftMapping, popupAnalysisUrl, draftRows, campaignId, syncWithPopupMapping]);
+
 
   // ── 기간 필터 적용된 행 ──
   const reservationRows = useMemo(() => {
@@ -1642,47 +1754,135 @@ export default function InterestPage() {
             <p className={`text-xs mt-2 ${syncMessage.startsWith("✅") ? "text-green-600" : "text-red-500"}`}>{syncMessage}</p>
           )}
 
-          {/* ── 캘린더 형식 시트 (이벤트 신청 일자별 + 팝업 예약 일자별) ── */}
+          {/* ── AI 팝업 시트 매핑 ── */}
           <div className="border-t border-indigo-100 pt-4 mt-2">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold text-gray-700">📅 이벤트 신청 일자별 / 팝업 예약 일자별 (캘린더 형식 시트)</label>
-              {calendarSheetUrl && (
-                <button
-                  onClick={() => {
-                    setCalendarSheetUrl("");
-                    setCalendarSyncMsg("");
-                    try { localStorage.removeItem(`interest_calendar_sheet_${campaignId}`); } catch {}
-                  }}
-                  className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500 transition-colors"
-                  title="캘린더 시트 데이터 삭제"
-                >
-                  <Trash2 className="w-3 h-3" /> 삭제
-                </button>
+              <label className="text-xs font-semibold text-gray-700">🤖 팝업 운영 현황 시트 (AI 자동 매핑)</label>
+              {popupAnalysisStep === "confirmed" && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-green-600 bg-green-50 border border-green-100 px-2 py-0.5 rounded-full">✓ 매핑 저장됨</span>
+                  <button
+                    onClick={() => {
+                      setPopupAnalysisStep("idle");
+                      setPopupDraftMapping(null);
+                      setPopupConfirmedMapping(null);
+                      setPopupAnalysisMsg("");
+                      try { localStorage.removeItem(`popup_ai_mapping_${campaignId}`); } catch {}
+                    }}
+                    className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500"
+                  ><Trash2 className="w-3 h-3" /> 초기화</button>
+                </div>
               )}
             </div>
-            <p className="text-[11px] text-gray-400 mb-2">
-              행 단위 캘린더 형식의 시트입니다. "박수트로피 사연 신청" 행 → 이벤트 신청 일자별, "일반/VIP 사전 예약" 행 → 팝업 예약 일자별로 자동 파싱됩니다.
-            </p>
-            <div className="flex gap-2">
+
+            {/* Step 1: URL 입력 + 분석 버튼 */}
+            <div className="flex gap-2 mb-2">
               <input
                 className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-orange-400 placeholder:text-gray-400"
-                placeholder="구글 시트 URL 입력 (gid 파라미터 포함)"
-                value={calendarSheetUrl}
-                onChange={e => { setCalendarSheetUrl(e.target.value); setCalendarSyncMsg(""); }}
+                placeholder="구글 시트 URL 입력 (gid 포함)"
+                value={popupAnalysisUrl}
+                onChange={e => { setPopupAnalysisUrl(e.target.value); setPopupAnalysisMsg(""); }}
               />
               <Button
                 size="sm"
-                disabled={calendarSyncing || !calendarSheetUrl}
-                onClick={syncCalendarSheet}
-                className="bg-orange-600 hover:bg-orange-700 text-white border-0 gap-1 px-3"
+                disabled={popupAnalysisStep === "analyzing" || !popupAnalysisUrl}
+                onClick={popupAnalysisStep === "confirmed" ? () => { setPopupAnalysisStep("idle"); setPopupDraftMapping(null); } : analyzePopupSheet}
+                className="bg-orange-600 hover:bg-orange-700 text-white border-0 gap-1 px-3 whitespace-nowrap"
               >
-                {calendarSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                동기화
+                {popupAnalysisStep === "analyzing"
+                  ? <><RefreshCw className="w-3 h-3 animate-spin" /> 분석 중...</>
+                  : popupAnalysisStep === "confirmed"
+                  ? <><RefreshCw className="w-3 h-3" /> 재분석</>
+                  : <><Settings2 className="w-3 h-3" /> AI 분석</>}
               </Button>
+              {popupAnalysisStep === "confirmed" && (
+                <Button
+                  size="sm"
+                  disabled={popupSyncing}
+                  onClick={() => popupConfirmedMapping && syncWithPopupMapping(popupConfirmedMapping)}
+                  className="bg-green-600 hover:bg-green-700 text-white border-0 gap-1 px-3"
+                >
+                  {popupSyncing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                  재동기화
+                </Button>
+              )}
             </div>
-            {calendarSyncMsg && (
-              <p className={`text-xs mt-2 ${calendarSyncMsg.startsWith("✅") ? "text-green-600" : calendarSyncMsg.startsWith("⚠️") ? "text-amber-600" : "text-red-500"}`}>
-                {calendarSyncMsg}
+
+            {/* Step 2: 분석 결과 검토 UI */}
+            {popupAnalysisStep === "review" && popupDraftMapping && (
+              <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 mt-2">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-orange-800">AI 분석 결과</span>
+                    <span className={cn(
+                      "text-[10px] px-2 py-0.5 rounded-full font-medium",
+                      (popupDraftMapping.confidence || 0) >= 70 ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
+                    )}>
+                      신뢰도 {popupDraftMapping.confidence ?? "?"}%
+                    </span>
+                  </div>
+                </div>
+                {popupDraftMapping.notes && (
+                  <p className="text-[11px] text-orange-600 bg-orange-100 rounded px-2 py-1 mb-3">{popupDraftMapping.notes}</p>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+                  {([
+                    { key: "dateHeaderRows",  label: "📅 날짜 헤더 행" },
+                    { key: "eventApply",      label: "📝 이벤트/사연 신청" },
+                    { key: "vipReserve",      label: "👑 VIP 사전 예약" },
+                    { key: "generalReserve",  label: "🏬 일반 사전 예약" },
+                    { key: "actualVisit",     label: "✅ 실제 방문자" },
+                    { key: "walkin",          label: "🚶 워크인 방문" },
+                    { key: "totalVisit",      label: "👥 총 방문객" },
+                    { key: "awardEvent",      label: "🏆 시상/이벤트 참여" },
+                  ] as const).map(({ key, label }) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 w-[130px] shrink-0">{label}</span>
+                      <input
+                        className="flex-1 bg-white border border-orange-200 rounded px-2 py-1 text-xs text-gray-900 outline-none focus:border-orange-400"
+                        value={draftRows[key] || ""}
+                        onChange={e => setDraftRows(prev => ({ ...prev, [key]: e.target.value }))}
+                        placeholder="행 번호 (예: 7, 15, 23)"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-400 mb-3">행 번호는 쉼표로 구분. 날짜 블록이 여러 개면 순서대로 입력 (예: 7, 15, 23)</p>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={confirmPopupMapping}
+                    className="bg-orange-600 hover:bg-orange-700 text-white border-0 gap-1">
+                    <Check className="w-3 h-3" /> 저장 및 동기화
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setPopupAnalysisStep("idle")}
+                    className="border-gray-200 text-gray-600">
+                    취소
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: 확정된 매핑 요약 */}
+            {popupAnalysisStep === "confirmed" && popupConfirmedMapping && (
+              <div className="bg-green-50 border border-green-100 rounded-lg p-3 mt-2">
+                <p className="text-[11px] text-green-700 font-semibold mb-1">✓ 저장된 매핑</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                  {([
+                    ["날짜 헤더", (popupConfirmedMapping.dateHeaderRows || []).join(", ")],
+                    ["이벤트 신청", (popupConfirmedMapping.dataRows?.eventApply || []).join(", ")],
+                    ["VIP 예약", (popupConfirmedMapping.dataRows?.vipReserve || []).join(", ")],
+                    ["일반 예약", (popupConfirmedMapping.dataRows?.generalReserve || []).join(", ")],
+                    ["실제 방문", (popupConfirmedMapping.dataRows?.actualVisit || []).join(", ")],
+                    ["총 방문객", (popupConfirmedMapping.dataRows?.totalVisit || []).join(", ")],
+                  ] as [string, string][]).map(([k, v]) => v && (
+                    <p key={k} className="text-[10px] text-gray-500"><span className="font-medium text-gray-600">{k}:</span> {v}행</p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {popupAnalysisMsg && (
+              <p className={cn("text-xs mt-2", popupAnalysisMsg.startsWith("✅") ? "text-green-600" : popupAnalysisMsg.startsWith("⚠️") ? "text-amber-600" : "text-red-500")}>
+                {popupAnalysisMsg}
               </p>
             )}
           </div>
