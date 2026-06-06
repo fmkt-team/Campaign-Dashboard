@@ -235,15 +235,36 @@ function AutoDataReport({
   }, [digitalKpis, weeks]);
 
   const interest = useMemo(() => {
-    const totalVisitors     = curActivities.reduce((s: number, a: any) => s + (a.visitors || 0), 0);
+    // 이벤트 참여 수 (participants 필드 합산)
     const totalParticipants = curActivities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
-    const totalBudget       = curActivities.reduce((s: number, a: any) => s + (a.budget || 0), 0);
+    // 팝업 방문객 수 (일반 / VIP / 총합)
+    const popupVisitGeneral = curActivities.reduce((s: number, a: any) => s + (a.actualVisitCount || 0), 0);
+    const popupVisitVip     = curActivities.reduce((s: number, a: any) => s + (a.vipActualVisitCount || 0), 0);
+    const popupVisitTotal   = popupVisitGeneral + popupVisitVip;
+    // 팝업 사전 예약 수 (일반 / VIP / 총합)
+    const reserveGeneral    = curActivities.reduce((s: number, a: any) => s + (a.generalReservePeople || a.generalReserveCount || 0), 0);
+    const reserveVip        = curActivities.reduce((s: number, a: any) => s + (a.vipReservePeople || a.vipReserveCount || 0), 0);
+    const reserveTotal      = reserveGeneral + reserveVip;
     const actCount          = curActivities.length;
-    const convRate = totalVisitors > 0 ? (totalParticipants / totalVisitors * 100).toFixed(1) : "0.0";
-    // 활동 유형 목록 (중복 제거)
-    const actTypes = [...new Set(curActivities.map((a: any) => a.activityType as string).filter(Boolean))];
-    return { totalVisitors, totalParticipants, totalBudget, actCount, convRate, actTypes };
+    return { totalParticipants, popupVisitGeneral, popupVisitVip, popupVisitTotal, reserveGeneral, reserveVip, reserveTotal, actCount };
   }, [curActivities]);
+
+  // 주차별 이벤트 참여자 수 + 팝업 방문객 수 추이 (흥미 성과 그래프용)
+  const interestChartData = useMemo(() => {
+    if (weeks.length === 0) return [];
+    return weeks.map(w => {
+      const weekActs = activities.filter((a: any) => {
+        const s = (a.startDate as string)?.slice(0, 10) ?? "";
+        const e = (a.endDate   as string)?.slice(0, 10) ?? s;
+        return s <= w.end && e >= w.start;
+      });
+      return {
+        label: w.label,
+        participants: weekActs.reduce((s: number, a: any) => s + (a.participants || 0), 0),
+        visitors: weekActs.reduce((s: number, a: any) => s + (a.actualVisitCount || 0) + (a.vipActualVisitCount || 0), 0),
+      };
+    }).filter(d => d.participants > 0 || d.visitors > 0);
+  }, [activities, weeks]);
 
   const inflow = useMemo(() => {
     const totalUsers    = curTraffic.reduce((s: number, r: any) => s + (r.users || 0), 0);
@@ -367,54 +388,71 @@ function AutoDataReport({
                 <Activity className="w-3.5 h-3.5 text-emerald-600" />
                 <span className="text-xs font-bold text-emerald-700">흥미 성과</span>
               </div>
-              {currentWeek && interest.actTypes.length > 0 && (
+              {currentWeek && interest.actCount > 0 && (
                 <span className="text-[9px] text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">이 주차</span>
               )}
             </div>
             {interest.actCount > 0 ? (
               <div className="space-y-2">
-                {/* 활동 유형 태그 */}
-                {interest.actTypes.length > 0 && (
-                  <div className="flex flex-wrap gap-1 pb-1 border-b border-emerald-100 mb-1">
-                    {interest.actTypes.map(t => (
-                      <span key={t} className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded">{t}</span>
-                    ))}
-                  </div>
-                )}
-                <div className="flex justify-between text-[11px]">
-                  <div>
-                    <span className="text-gray-500">오프라인/팝업 활동</span>
-                    <span className="ml-1 text-[9px] text-gray-400">(행사·이벤트 수)</span>
-                  </div>
-                  <span className="font-bold text-gray-900">{interest.actCount}건</span>
+                {/* 이벤트 참여 수 */}
+                <div className="flex justify-between items-center text-[11px]">
+                  <span className="text-gray-500">이벤트 참여 수</span>
+                  <span className="font-bold text-gray-900">{interest.totalParticipants.toLocaleString()}명</span>
                 </div>
-                <div className="flex justify-between text-[11px]">
-                  <div>
-                    <span className="text-gray-500">내방객 수</span>
-                    <span className="ml-1 text-[9px] text-gray-400">(행사장 방문자)</span>
+                {/* 팝업 방문객 수 (일반 / VIP / 총합) */}
+                <div className="pt-1 border-t border-emerald-100">
+                  <p className="text-[10px] text-emerald-600 font-semibold mb-1">팝업 방문객 수</p>
+                  <div className="grid grid-cols-3 gap-1 text-center">
+                    <div className="bg-white/60 rounded px-1 py-1">
+                      <p className="text-[9px] text-gray-400">일반</p>
+                      <p className="text-[11px] font-bold text-gray-900">{interest.popupVisitGeneral.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-yellow-50/60 rounded px-1 py-1">
+                      <p className="text-[9px] text-yellow-600">VIP</p>
+                      <p className="text-[11px] font-bold text-yellow-700">{interest.popupVisitVip.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-emerald-100/50 rounded px-1 py-1">
+                      <p className="text-[9px] text-emerald-600">총합</p>
+                      <p className="text-[11px] font-bold text-emerald-700">{interest.popupVisitTotal.toLocaleString()}</p>
+                    </div>
                   </div>
-                  <span className="font-bold text-gray-900">{interest.totalVisitors.toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between text-[11px]">
-                  <div>
-                    <span className="text-gray-500">체험 참여자</span>
-                    <span className="ml-1 text-[9px] text-gray-400">(직접 체험·신청)</span>
+                {/* 팝업 사전 예약 수 (일반 / VIP / 총합) */}
+                <div className="pt-1 border-t border-emerald-100">
+                  <p className="text-[10px] text-emerald-600 font-semibold mb-1">팝업 사전 예약 수</p>
+                  <div className="grid grid-cols-3 gap-1 text-center">
+                    <div className="bg-white/60 rounded px-1 py-1">
+                      <p className="text-[9px] text-gray-400">일반</p>
+                      <p className="text-[11px] font-bold text-gray-900">{interest.reserveGeneral.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-yellow-50/60 rounded px-1 py-1">
+                      <p className="text-[9px] text-yellow-600">VIP</p>
+                      <p className="text-[11px] font-bold text-yellow-700">{interest.reserveVip.toLocaleString()}</p>
+                    </div>
+                    <div className="bg-emerald-100/50 rounded px-1 py-1">
+                      <p className="text-[9px] text-emerald-600">총합</p>
+                      <p className="text-[11px] font-bold text-emerald-700">{interest.reserveTotal.toLocaleString()}</p>
+                    </div>
                   </div>
-                  <span className="font-bold text-gray-900">{interest.totalParticipants.toLocaleString()}</span>
                 </div>
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-gray-500">방문→참여 전환율</span>
-                  <span className="font-bold text-emerald-600">{interest.convRate}%</span>
-                </div>
-                {interest.totalBudget > 0 && (
-                  <div className="flex justify-between text-[11px]">
-                    <span className="text-gray-500">활동 예산</span>
-                    <span className="font-bold text-gray-900">₩{interest.totalBudget.toLocaleString()}</span>
-                  </div>
-                )}
               </div>
             ) : (
               <p className="text-[11px] text-gray-400">{currentWeek ? "이 주차 활동 없음" : "데이터 없음"}</p>
+            )}
+            {/* 이벤트 참여자 수 + 팝업 방문객 수 추이 미니 그래프 */}
+            {interestChartData.length > 1 && (
+              <div className="h-[70px] mt-3 pt-2 border-t border-emerald-100">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={interestChartData} margin={{ top: 0, right: 0, left: -30, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 8 }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fontSize: 8 }} tickLine={false} axisLine={false} />
+                    <Tooltip contentStyle={{ fontSize: "10px", borderRadius: "8px", border: "1px solid #d1fae5" }} />
+                    <Line type="monotone" dataKey="participants" stroke="#10b981" strokeWidth={1.5} dot={false} name="이벤트 참여자" />
+                    <Line type="monotone" dataKey="visitors" stroke="#f59e0b" strokeWidth={1.5} dot={false} name="팝업 방문객" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             )}
           </div>
 
@@ -540,10 +578,13 @@ function WeeklyNoteSection({
       const spend       = weekKpis.reduce((s: number, r: any) => s + (r.spend || 0), 0);
       const users       = weekTraffic.reduce((s: number, r: any) => s + (r.users || 0), 0);
       const sessions    = weekTraffic.reduce((s: number, r: any) => s + (r.sessions || 0), 0);
-      const visitors    = activities.reduce((s: number, a: any) => s + (a.visitors || 0), 0);
-      const participants = activities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
+      const participants    = activities.reduce((s: number, a: any) => s + (a.participants || 0), 0);
+      const popupVisitGen   = activities.reduce((s: number, a: any) => s + (a.actualVisitCount || 0), 0);
+      const popupVisitVip   = activities.reduce((s: number, a: any) => s + (a.vipActualVisitCount || 0), 0);
+      const reserveGen      = activities.reduce((s: number, a: any) => s + (a.generalReservePeople || a.generalReserveCount || 0), 0);
+      const reserveVip      = activities.reduce((s: number, a: any) => s + (a.vipReservePeople || a.vipReserveCount || 0), 0);
 
-      const hasData = impressions > 0 || views > 0 || users > 0 || visitors > 0;
+      const hasData = impressions > 0 || views > 0 || users > 0 || participants > 0;
 
       const prompt = `다음은 마케팅 캠페인 ${week.label} (${week.rangeLabel}) 성과 데이터입니다.
 
@@ -558,10 +599,10 @@ ${views > 0 ? `- CTR: ${(clicks / views * 100).toFixed(2)}%` : ""}
 - 유저: ${users.toLocaleString()}명
 - 세션: ${sessions.toLocaleString()}회
 
-흥미/체험 성과:
-- 방문자: ${visitors.toLocaleString()}명
-- 참여자: ${participants.toLocaleString()}명
-${visitors > 0 ? `- 참여 전환율: ${(participants / visitors * 100).toFixed(1)}%` : ""}
+흥미 성과:
+- 이벤트 참여 수: ${participants.toLocaleString()}명
+- 팝업 방문객 수: 일반 ${popupVisitGen.toLocaleString()}명, VIP ${popupVisitVip.toLocaleString()}명, 총합 ${(popupVisitGen + popupVisitVip).toLocaleString()}명
+- 팝업 사전 예약 수: 일반 ${reserveGen.toLocaleString()}명, VIP ${reserveVip.toLocaleString()}명, 총합 ${(reserveGen + reserveVip).toLocaleString()}명
 
 ${hasData
   ? "위 데이터를 바탕으로 마케팅 관점의 주간 인사이트를 3~4문장으로 작성해주세요. 핵심 성과 → 주목할 지표 → 개선점 또는 다음 주 방향 순으로 작성해주세요."
