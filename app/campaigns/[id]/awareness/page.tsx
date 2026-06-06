@@ -1106,9 +1106,8 @@ export default function AwarenessPage() {
   const [isGuessingCols, setIsGuessingCols] = useState(false);
 
   // ── 바이럴 필터·편집 ─────────────────────────────────────────
-  const [filterMonth,       setFilterMonth]       = useState("all");
-  const [filterPlatform,    setFilterPlatform]    = useState("all");
-  const [filterUploadedOnly, setFilterUploadedOnly] = useState(true);
+  const [filterMonth,    setFilterMonth]    = useState("all");
+  const [filterPlatform, setFilterPlatform] = useState("all");
   const [editingViralId, setEditingViralId] = useState<string | null>(null);
   const [editViralForm,  setEditViralForm]  = useState<any>({});
   const [isFetchingUrl,  setIsFetchingUrl]  = useState<string | null>(null);
@@ -1676,7 +1675,7 @@ export default function AwarenessPage() {
   const viralMonths    = Array.from(new Set(groupedViral.map(v => v.date?.substring(0, 7)))).filter(Boolean).sort().reverse();
   const viralPlatforms = Array.from(new Set(groupedViral.map(v => v.platform))).filter(Boolean).sort();
   const filteredViral  = groupedViral.filter(v => {
-    if (filterUploadedOnly && !v.url) return false;
+    if (!v.url) return false; // URL 없는 항목(미업로드)은 항상 제외
     if (filterMonth !== "all" && v.date?.substring(0, 7) !== filterMonth) return false;
     if (filterPlatform !== "all" && v.platform !== filterPlatform) return false;
     return true;
@@ -2865,16 +2864,6 @@ export default function AwarenessPage() {
             <div className="flex items-center gap-4">
               <h2 className="text-xl font-bold text-gray-900">바이럴 컨텐츠 성과</h2>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setFilterUploadedOnly(p => !p)}
-                  className={cn(
-                    "text-xs px-3 py-1.5 rounded border font-medium transition-colors",
-                    filterUploadedOnly
-                      ? "bg-fursys-red text-white border-fursys-red"
-                      : "bg-white text-gray-500 border-gray-200 hover:border-gray-300"
-                  )}>
-                  🔗 업로드된 것만
-                </button>
                 <select className="bg-white border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none"
                   value={filterMonth} onChange={e => setFilterMonth(e.target.value)}>
                   <option value="all">전체 월</option>
@@ -2971,14 +2960,51 @@ export default function AwarenessPage() {
                     return (
                       <TableRow key={row._id} className="border-gray-100 hover:bg-gray-50 text-sm">
                         <TableCell className="text-gray-400 font-mono text-xs">
-                          {isEditing
-                            ? <Input value={editViralForm.date || ""} onChange={e => setEditViralForm({ ...editViralForm, date: e.target.value })} placeholder="YYYY-MM-DD" className="h-6 text-xs w-28 bg-transparent border-gray-200" />
-                            : row.dateLabel}
+                          {isEditing ? (
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                <button className="flex items-center gap-1 text-xs border border-gray-200 rounded px-2 py-1 bg-white hover:border-gray-300 min-w-[100px]">
+                                  <CalendarIcon className="w-3 h-3 text-gray-400" />
+                                  {editViralForm.date || "날짜 선택"}
+                                </button>
+                              </PopoverTrigger>
+                              <PopoverContent className="w-auto p-0" align="start">
+                                <Calendar
+                                  mode="single"
+                                  selected={editViralForm.date ? new Date(editViralForm.date) : undefined}
+                                  onSelect={(d) => setEditViralForm({ ...editViralForm, date: d ? format(d, "yyyy-MM-dd") : "" })}
+                                  initialFocus
+                                />
+                              </PopoverContent>
+                            </Popover>
+                          ) : row.dateLabel}
                         </TableCell>
                         <TableCell>
-                          {isEditing
-                            ? <Input value={editViralForm.platform || ""} onChange={e => setEditViralForm({ ...editViralForm, platform: e.target.value })} placeholder="플랫폼" className="h-6 text-xs w-24 bg-transparent border-gray-200" />
-                            : <span className="bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-700">{row.platform}</span>}
+                          {isEditing ? (
+                            <div className="flex flex-col gap-1">
+                              <div className="flex flex-wrap gap-1">
+                                {["YouTube","Instagram","X","TikTok","네이버카페","기타"].map(p => (
+                                  <button key={p}
+                                    onClick={() => setEditViralForm({ ...editViralForm, platform: p, _platformCustom: p === "기타" ? (editViralForm._platformCustom || "") : undefined })}
+                                    className={cn("text-[10px] px-2 py-0.5 rounded border transition-colors",
+                                      editViralForm.platform === p || (p === "기타" && !["YouTube","Instagram","X","TikTok","네이버카페"].includes(editViralForm.platform) && editViralForm.platform)
+                                        ? "bg-fursys-red text-white border-fursys-red"
+                                        : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                                    )}>
+                                    {p}
+                                  </button>
+                                ))}
+                              </div>
+                              {editViralForm.platform === "기타" && (
+                                <Input
+                                  placeholder="플랫폼 직접 입력"
+                                  value={editViralForm._platformCustom || ""}
+                                  onChange={e => setEditViralForm({ ...editViralForm, _platformCustom: e.target.value, platform: e.target.value || "기타" })}
+                                  className="h-6 text-xs bg-transparent border-gray-200 w-28"
+                                />
+                              )}
+                            </div>
+                          ) : <span className="bg-gray-100 px-2 py-0.5 rounded text-xs text-gray-700">{row.platform}</span>}
                         </TableCell>
                         <TableCell className="font-medium text-gray-900">
                           {isEditing
@@ -3035,7 +3061,13 @@ export default function AwarenessPage() {
                           <div className="flex items-center justify-center gap-1">
                             {isEditing ? (
                               <>
-                                <button onClick={async () => { await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url, creator: editViralForm.creator, date: editViralForm.date || undefined, platform: editViralForm.platform || undefined, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } }); setEditingViralId(null); }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
+                                <button onClick={async () => {
+                                  const platformVal = editViralForm.platform === "기타"
+                                    ? (editViralForm._platformCustom?.trim() || "기타")
+                                    : (editViralForm.platform || undefined);
+                                  await updateViralRow({ viralId: editingViralId as Id<"viralContents">, updates: { url: editViralForm.url, creator: editViralForm.creator, date: editViralForm.date || undefined, platform: platformVal, views: processNumber(editViralForm.views), likes: processNumber(editViralForm.likes), comments: processNumber(editViralForm.comments) } });
+                                  setEditingViralId(null);
+                                }} className="p-1 rounded hover:bg-gray-100 text-green-500"><Check className="w-4 h-4" /></button>
                                 <button onClick={() => setEditingViralId(null)} className="p-1 rounded hover:bg-gray-100 text-gray-400"><X className="w-4 h-4" /></button>
                               </>
                             ) : (
@@ -3045,7 +3077,16 @@ export default function AwarenessPage() {
                                     {isFetchingUrl === row._id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
                                   </button>
                                 )}
-                                <button onClick={() => { setEditingViralId(row._id); setEditViralForm({ ...row }); }} className="p-1 rounded hover:bg-gray-100 text-gray-400"><Pencil className="w-4 h-4" /></button>
+                                <button onClick={() => {
+                                  const knownPlatforms = ["YouTube","Instagram","X","TikTok","네이버카페"];
+                                  const isKnown = knownPlatforms.includes(row.platform);
+                                  setEditingViralId(row._id);
+                                  setEditViralForm({
+                                    ...row,
+                                    platform: isKnown ? row.platform : "기타",
+                                    _platformCustom: isKnown ? undefined : (row.platform !== "-" ? row.platform : ""),
+                                  });
+                                }} className="p-1 rounded hover:bg-gray-100 text-gray-400"><Pencil className="w-4 h-4" /></button>
                                 <button onClick={() => { if (confirm("삭제하시겠습니까?")) deleteViralRow({ viralId: row._id }); }} className="p-1 rounded hover:bg-red-50 text-red-400"><Trash className="w-4 h-4" /></button>
                               </>
                             )}

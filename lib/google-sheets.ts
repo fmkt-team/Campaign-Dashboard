@@ -101,11 +101,12 @@ export async function fetchSpreadsheetDataWithHyperlinks(sheetUrl: string, range
       if (foundSheet?.properties?.title) targetSheetTitle = foundSheet.properties.title;
     }
 
-    // includeGridData: true → hyperlink 포함 전체 셀 데이터
+    // includeGridData: true + fields → hyperlink·수식 포함 전체 셀 데이터
     const response = await sheets.spreadsheets.get({
       spreadsheetId,
       ranges: [`'${targetSheetTitle}'!${range}`],
       includeGridData: true,
+      fields: "sheets.data.rowData.values(formattedValue,hyperlink,userEnteredValue.formulaValue,userEnteredFormat.textFormat.link,effectiveFormat.textFormat.link,textFormatRuns)",
     });
 
     const sheetData = response.data.sheets?.[0];
@@ -121,12 +122,36 @@ export async function fetchSpreadsheetDataWithHyperlinks(sheetUrl: string, range
     const values: string[][] = [];
     const hyperlinks: (string | null)[][] = [];
 
-    for (const rowData of gridData.rowData) {
+    for (const rowData of gridData.rowData ?? []) {
       const valueRow: string[] = [];
       const hlRow: (string | null)[] = [];
-      for (const cell of rowData.values || []) {
+      for (const cell of rowData.values ?? []) {
         valueRow.push(cell.formattedValue ?? "");
-        hlRow.push(cell.hyperlink ?? null);
+
+        // 하이퍼링크 추출 — 3가지 저장 방식 모두 커버
+        let hl: string | null = null;
+
+        // ① 직접 삽입 링크 (오른쪽 클릭 → 링크 삽입)
+        if (cell.hyperlink) {
+          hl = cell.hyperlink;
+        }
+
+        // ② =HYPERLINK("url","텍스트") 수식
+        if (!hl && cell.userEnteredValue?.formulaValue) {
+          const m = cell.userEnteredValue.formulaValue.match(/=HYPERLINK\s*\(\s*"([^"]+)"/i);
+          if (m) hl = m[1];
+        }
+
+        // ③ textFormat.link (리치 텍스트 형식)
+        if (!hl) {
+          const uri =
+            (cell as any).textFormatRuns?.[0]?.format?.link?.uri ??
+            (cell.userEnteredFormat as any)?.textFormat?.link?.uri ??
+            (cell.effectiveFormat as any)?.textFormat?.link?.uri;
+          if (uri) hl = uri;
+        }
+
+        hlRow.push(hl);
       }
       values.push(valueRow);
       hyperlinks.push(hlRow);
