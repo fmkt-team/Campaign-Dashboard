@@ -33,6 +33,7 @@ export const syncInterestActivities = mutation({
         vipReservePeople: v.optional(v.number()),
         actualVisitCount: v.optional(v.number()),
         vipActualVisitCount: v.optional(v.number()),
+        actualVisitCountTeam: v.optional(v.number()),
       })
     ),
   },

@@ -1204,7 +1204,7 @@ export default function InterestPage() {
   const [visitorUrl, setVisitorUrl] = useState("");
   const [visitorDateFrom, setVisitorDateFrom] = useState("");
   const [visitorDateTo, setVisitorDateTo] = useState("");
-  const [visitorAllRows, setVisitorAllRows] = useState<{ date: string; actual: number; vipActual: number; rate: string }[] | null>(null);
+  const [visitorAllRows, setVisitorAllRows] = useState<{ date: string; actual: number; vipActual: number; actualCount?: number; rate: string }[] | null>(null);
   const [visitorSyncing, setVisitorSyncing] = useState(false);
   const [showVisitorUrl, setShowVisitorUrl] = useState(false);
   const [visitorSyncMsg, setVisitorSyncMsg] = useState("");
@@ -1288,6 +1288,7 @@ export default function InterestPage() {
       date: a.startDate,
       actual: a.actualVisitCount ?? a.visitors,
       vipActual: a.vipActualVisitCount ?? 0,
+      actualCount: a.actualVisitCountTeam ?? 0,
       rate: "—",
     })).filter(r => r.actual > 0 || r.vipActual > 0);
 
@@ -1709,23 +1710,36 @@ export default function InterestPage() {
         }
       }
 
-      // 총 방문객 / 실제 방문
+      // 총 방문객(row22) / 실제 방문(row19)
+      // row22: E=총팀(건), F=총인원(명)
+      // row19: E=VIP방문명, F=일반방문명  (VIP/일반 순서)
       const tvIdx = toIdx(dr.totalVisit, hi);
       const avIdx = toIdx(dr.actualVisit, hi);
-      const useVisitIdx = tvIdx >= 0 ? tvIdx : avIdx;
-      if (useVisitIdx >= 0 && allRows[useVisitIdx]) {
-        for (const {col, date} of dateCols) {
-          const { count: actual } = readCountPeople(allRows[useVisitIdx], col);
 
-          let vipActual = 0;
-          // VIP 실제 방문: 듀얼 컬럼이면 col+1이 이미 명수이므로, VIP 행의 col 값을 사용
-          if (avIdx >= 0 && avIdx !== useVisitIdx && allRows[avIdx]) {
-            const { count: vipVal } = readCountPeople(allRows[avIdx], col);
-            vipActual = vipVal;
+      if (tvIdx >= 0 || avIdx >= 0) {
+        for (const {col, date} of dateCols) {
+          let actual = 0;      // 일반 방문 명수
+          let vipActual = 0;   // VIP 방문 명수
+          let actualCount = 0; // 총 방문 건수(팀수)
+
+          if (tvIdx >= 0 && allRows[tvIdx]) {
+            const { count: teams } = readCountPeople(allRows[tvIdx], col);
+            actualCount = teams; // E22 = 총 방문 팀수
           }
 
-          if (actual > 0 || vipActual > 0) {
-            visitorRows_.push({date, actual, vipActual});
+          if (avIdx >= 0 && allRows[avIdx]) {
+            // row19: 듀얼컬럼에서 count=VIP명, people=일반명
+            const { count: vipPpl, people: genPpl } = readCountPeople(allRows[avIdx], col);
+            vipActual = vipPpl;  // E19
+            actual    = genPpl;  // F19
+          } else if (tvIdx >= 0 && allRows[tvIdx]) {
+            // row19 없으면 row22 명수를 총방문으로 사용
+            const { people: totalPpl } = readCountPeople(allRows[tvIdx], col);
+            actual = totalPpl;
+          }
+
+          if (actual > 0 || vipActual > 0 || actualCount > 0) {
+            visitorRows_.push({date, actual, vipActual, actualCount});
           }
         }
       }
@@ -1779,6 +1793,7 @@ export default function InterestPage() {
           vipReservePeople: v?.people ?? 0,
           actualVisitCount: vis?.actual ?? 0,
           vipActualVisitCount: vis?.vipActual ?? 0,
+          actualVisitCountTeam: vis?.actualCount ?? 0,
         };
       });
 
@@ -1819,7 +1834,7 @@ export default function InterestPage() {
 
       // 방문자 로컬 상태 설정
       if (visitorRows_.length > 0) {
-        const visRows = visitorRows_.map(r => ({ date: r.date, actual: r.actual, vipActual: r.vipActual, rate: "—" }));
+        const visRows = visitorRows_.map(r => ({ date: r.date, actual: r.actual, vipActual: r.vipActual, actualCount: r.actualCount ?? 0, rate: "—" }));
         setVisitorAllRows(visRows);
         localStorage.setItem(`popup_visitor_url_${campaignId}`, mapping.url);
         localStorage.setItem(`popup_visitor_all_${campaignId}`, JSON.stringify(visRows));
@@ -2004,13 +2019,15 @@ export default function InterestPage() {
   const visitorStats = useMemo(() => {
     let actual = 0;
     let vipActual = 0;
+    let actualCount = 0;
     if (visitorRows) {
       visitorRows.forEach(row => {
         actual += row.actual || 0;
         vipActual += row.vipActual || 0;
+        actualCount += (row as any).actualCount || 0;
       });
     }
-    return { actual, vipActual };
+    return { actual, vipActual, actualCount };
   }, [visitorRows]);
 
   const combinedChartData = useMemo(() => {
@@ -2052,7 +2069,8 @@ export default function InterestPage() {
       const date = a.startDate ? a.startDate.slice(5).replace("-", "/") : "미상";
       if (!map.has(date)) map.set(date, { name: date, 이벤트참여자: 0, 팝업방문객: 0, VIP방문객: 0 });
       if (a.activityType === "팝업일별데이터") {
-        map.get(date).팝업방문객 += a.actualVisitCount ?? 0;
+        // 팝업방문객 = 일반+VIP 합산 (그래프에 총 방문자 표시)
+        map.get(date).팝업방문객 += (a.actualVisitCount ?? 0) + (a.vipActualVisitCount ?? 0);
         map.get(date).VIP방문객 += a.vipActualVisitCount ?? 0;
       } else {
         map.get(date).팝업방문객 += a.participants;
@@ -2898,11 +2916,11 @@ export default function InterestPage() {
                   <TableHeader className="bg-gray-50/50">
                     <TableRow className="border-gray-100 hover:bg-transparent">
                       <TableHead className="text-gray-500 text-xs font-semibold">방문 일자</TableHead>
-                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 방문자 수</TableHead>
+                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 방문자 수 (건/명)</TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">
-                        <span className="flex items-center justify-end gap-1"><Crown className="w-3 h-3 text-yellow-500" />VIP 방문</span>
+                        <span className="flex items-center justify-end gap-1"><Crown className="w-3 h-3 text-yellow-500" />VIP 방문 (명)</span>
                       </TableHead>
-                      <TableHead className="text-gray-500 text-xs font-semibold text-right">총 방문</TableHead>
+                      <TableHead className="text-gray-500 text-xs font-semibold text-right">총 방문 (명)</TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">방문율</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -2911,13 +2929,15 @@ export default function InterestPage() {
                       <TableRow className="bg-slate-700 font-bold border-b-2 border-slate-500 text-sm hover:bg-slate-700">
                         <TableCell className="text-white font-extrabold py-3.5 text-xs uppercase tracking-wider">누계 (합계)</TableCell>
                         <TableCell className="text-right font-mono text-slate-100 py-3.5 font-extrabold">
-                          {(visitorStats.actual - visitorStats.vipActual).toLocaleString()}
+                          {visitorStats.actualCount > 0
+                            ? `${visitorStats.actualCount.toLocaleString()} / ${visitorStats.actual.toLocaleString()}`
+                            : visitorStats.actual.toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right font-mono text-amber-300 py-3.5 font-extrabold">
                           {visitorStats.vipActual.toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right font-mono text-white font-black bg-slate-600 py-3.5 rounded-sm">
-                          {visitorStats.actual.toLocaleString()}
+                          {(visitorStats.actual + visitorStats.vipActual).toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right font-mono text-slate-300 bg-slate-600/50 py-3.5">
                           —
@@ -2928,9 +2948,13 @@ export default function InterestPage() {
                       visitorRows.map((row, i) => (
                         <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
                           <TableCell className="text-gray-600 font-mono font-medium">{row.date}</TableCell>
-                          <TableCell className="text-right font-mono text-gray-900">{(row.actual - row.vipActual).toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900">
+                            {(row as any).actualCount > 0
+                              ? `${((row as any).actualCount).toLocaleString()} / ${row.actual.toLocaleString()}`
+                              : row.actual.toLocaleString()}
+                          </TableCell>
                           <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{row.vipActual.toLocaleString()}</TableCell>
-                          <TableCell className="text-right font-mono text-gray-900 font-bold">{row.actual.toLocaleString()}</TableCell>
+                          <TableCell className="text-right font-mono text-gray-900 font-bold">{(row.actual + row.vipActual).toLocaleString()}</TableCell>
                           <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{row.rate}</TableCell>
                         </TableRow>
                       ))
