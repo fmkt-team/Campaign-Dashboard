@@ -1141,8 +1141,8 @@ export default function AwarenessPage() {
   const [headerRowIdx,   setHeaderRowIdx]   = useState(0);
   const [isGuessingCols, setIsGuessingCols] = useState(false);
 
-  // ── 소셜 키워드 분석 ─────────────────────────────────────────
-  const socialKeywords   = useQuery(api.socialKeywords.getSocialKeywords,   { campaignId }) ?? [];
+  // ── 소셜 키워드 분석 (Convex) ────────────────────────────────
+  const kwList           = useQuery(api.socialKeywords.getSocialKeywords,   { campaignId }) ?? [];
   const addSocialKw      = useMutation(api.socialKeywords.addSocialKeyword);
   const deleteSocialKw   = useMutation(api.socialKeywords.deleteSocialKeyword);
   const upsertSocialPosts= useMutation(api.socialKeywords.upsertSocialPosts);
@@ -1811,15 +1811,15 @@ export default function AwarenessPage() {
 
   // ── 소셜 크롤링 실행 ─────────────────────────────────────────
   const runSocialCrawl = async () => {
-    const kwList = socialKeywords.split(/[,\n]/).map(k => k.trim()).filter(Boolean);
-    if (kwList.length === 0) { setSocialError("키워드를 입력해주세요."); return; }
+    const kwInputList = socialKeywords.split(/[,\n]/).map(k => k.trim()).filter(Boolean);
+    if (kwInputList.length === 0) { setSocialError("키워드를 입력해주세요."); return; }
     setSocialLoading(true);
     setSocialError("");
     try {
       const res = await fetch("/api/social-crawl", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: socialPlatform, keywords: kwList, maxItems: 50 }),
+        body: JSON.stringify({ platform: socialPlatform, keywords: kwInputList, maxItems: 50 }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -1827,7 +1827,7 @@ export default function AwarenessPage() {
         if (data.requiresSetup) setSocialError(data.error + "\n\n💡 .env.local에 APIFY_API_TOKEN 또는 TWITTER_BEARER_TOKEN을 추가하세요.");
         return;
       }
-      const result = { ...data, keywords: kwList };
+      const result = { ...data, keywords: kwInputList };
       setSocialData(result);
       try {
         localStorage.setItem(SOCIAL_LS_KEY, JSON.stringify(result));
@@ -3321,7 +3321,7 @@ export default function AwarenessPage() {
             )}
 
             {/* 저장된 키워드 탭 */}
-            {socialKeywords.length > 0 ? (
+            {kwList.length > 0 ? (
               <div className="flex flex-col gap-4">
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
@@ -3331,7 +3331,7 @@ export default function AwarenessPage() {
                     )}>
                     전체
                   </button>
-                  {(socialKeywords as any[]).map((kw: any) => (
+                  {(kwList as any[]).map((kw: any) => (
                     <div key={kw._id} className="flex items-center gap-1">
                       <button
                         onClick={() => setSelectedKw(selectedKw === kw.keyword ? null : kw.keyword)}
@@ -3364,8 +3364,8 @@ export default function AwarenessPage() {
                   {isAdmin && (
                     <div className="flex gap-2 flex-wrap">
                       {(selectedKw
-                        ? [(socialKeywords as any[]).find((k: any) => k.keyword === selectedKw)].filter(Boolean)
-                        : socialKeywords as any[]
+                        ? [(kwList as any[]).find((k: any) => k.keyword === selectedKw)].filter(Boolean)
+                        : kwList as any[]
                       ).map((kw: any) => (
                         <div key={kw._id} className="flex flex-col gap-0.5">
                           <Button size="sm"
