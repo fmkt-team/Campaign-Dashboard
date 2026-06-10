@@ -24,13 +24,12 @@ export interface SocialPost {
 async function fetchTwitter(keywords: string[], maxItems = 30): Promise<{ posts: SocialPost[]; error?: string }> {
   if (!process.env.APIFY_API_TOKEN) return { posts: [], error: "APIFY_API_TOKEN 미설정" };
   try {
-    // 한국어 키워드는 따옴표 없이 OR 연결
+    // 한국어 키워드는 따옴표 없이 OR 연결, lang 필터 제거로 검색 범위 확대
     const query = keywords.map(k => k.replace(/^#/, "")).join(" OR ");
     const run = await apifyClient.actor("quacker/twitter-scraper").call({
       searchTerms: [query],
       maxItems,
       addUserInfo: true,
-      lang: "ko",
     }, { waitSecs: 90 });
     const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
     const posts = (items || []).map((item: any) => ({
