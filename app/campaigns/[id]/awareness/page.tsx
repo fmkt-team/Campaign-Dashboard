@@ -1824,11 +1824,11 @@ export default function AwarenessPage() {
         body: JSON.stringify({ platform: socialPlatform, keywords: kwInputList, maxItems: 30, dateFrom: kwDateFrom || undefined, dateTo: kwDateTo || undefined }),
       });
       const data = await res.json();
-      if (!res.ok || data.error) {
+      if (!res.ok || (data.error && !data.posts)) {
         setSocialError(data.error || "크롤링 실패");
         return;
       }
-      // 부분 오류도 표시 (X 실패해도 Naver Blog는 성공하는 등)
+      // 부분 오류: 에러 표시하되 다른 플랫폼 결과는 표시
       if (data.errors?.length) {
         setSocialError(`⚠ 일부 플랫폼 실패:\n${data.errors.join("\n")}`);
       }
@@ -3642,7 +3642,20 @@ export default function AwarenessPage() {
                   </Button>
                 )}
               </div>
-              {socialError && <p className="mt-2 text-xs text-red-600">{socialError}</p>}
+              {socialError && (
+                <div className={cn("mt-2 p-2 rounded-lg text-xs whitespace-pre-line",
+                  socialError.startsWith("⚠") ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-red-50 text-red-600 border border-red-100"
+                )}>
+                  {socialError}
+                  {socialError.includes("This Actor requires") && (
+                    <a href="https://console.apify.com/actors/u6ppkMWAx2E2MpEuF?approvePermissions=true"
+                      target="_blank" rel="noreferrer"
+                      className="block mt-1 font-semibold underline text-blue-600">
+                      👉 Apify 액터 권한 승인하러 가기
+                    </a>
+                  )}
+                </div>
+              )}
             </GlassCard>
 
             {/* ── 게시물 목록 ── */}
