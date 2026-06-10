@@ -183,6 +183,39 @@ export async function POST(req: Request) {
       } else {
         throw new Error("인스타그램 데이터를 찾을 수 없습니다.");
       }
+    } else if (url.includes("twitter.com") || url.includes("x.com")) {
+      if (!process.env.APIFY_API_TOKEN) {
+        return NextResponse.json({ error: "APIFY_API_TOKEN 환경 변수가 없어서 X/Twitter 스크랩을 할 수 없습니다." }, { status: 500 });
+      }
+      // oEmbed로 먼저 기본 정보 취득 (무료, 공개)
+      try {
+        const oembed = await fetch(`https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`);
+        if (oembed.ok) {
+          const data = await oembed.json();
+          stats.title = data.author_name ? `@${data.author_name}` : "-";
+        }
+      } catch {}
+      // Apify Twitter 스크래퍼로 상세 지표 수집
+      try {
+        const run = await apifyClient.actor("quacker/twitter-scraper").call({
+          startUrls: [{ url }],
+          maxItems: 1,
+          addUserInfo: false,
+        }, { waitSecs: 60 });
+        const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
+        if (items && items.length > 0) {
+          const item: any = items[0];
+          stats.views    = item.viewCount      || item.impressionCount || 0;
+          stats.likes    = item.likeCount      || item.favoriteCount   || 0;
+          stats.comments = item.replyCount     || 0;
+          stats.title    = item.author?.name   ? `@${item.author.name}` : (stats.title || "-");
+          if (item.createdAt) stats.date = new Date(item.createdAt).toISOString().split("T")[0];
+          stats.thumbnailUrl = item.author?.profileImageUrl || undefined;
+        }
+      } catch (e: any) {
+        console.warn("[X/Twitter] Apify 스크랩 실패:", e.message);
+        // Apify 실패 시 기본값(title만) 유지
+      }
     } else if (url.includes("blog.naver.com")) {
       stats = await fetchNaverBlogStats(url);
     } else {

@@ -18,6 +18,7 @@ import type * as interest from "../interest.js";
 import type * as phases from "../phases.js";
 import type * as sales from "../sales.js";
 import type * as shareLinks from "../shareLinks.js";
+import type * as socialKeywords from "../socialKeywords.js";
 
 import type {
   ApiFromModules,
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   phases: typeof phases;
   sales: typeof sales;
   shareLinks: typeof shareLinks;
+  socialKeywords: typeof socialKeywords;
 }>;
 
 /**

@@ -43,6 +43,9 @@ export default defineSchema({
     digitalSheetUrl: v.optional(v.string()),
     // 주간 요약 메모 (JSON 문자열: { "WEEK 1": "메모내용", ... })
     weeklyMemos: v.optional(v.string()),
+    // 팝업 기본 날짜 필터
+    popupDefaultDateFrom: v.optional(v.string()),
+    popupDefaultDateTo:   v.optional(v.string()),
   }),
 
   milestones: defineTable({
@@ -219,4 +222,30 @@ export default defineSchema({
     expiresAt: v.number(),
     createdBy: v.string(),
   }).index("by_token", ["token"]),
+
+  // ── 소셜 키워드 분석 ────────────────────────────────────────────
+  socialKeywords: defineTable({
+    campaignId: v.id("campaigns"),
+    keyword: v.string(),
+    platforms: v.array(v.string()), // ["X", "Instagram"]
+    createdAt: v.number(),
+  }).index("by_campaign", ["campaignId"]),
+
+  socialPosts: defineTable({
+    campaignId: v.id("campaigns"),
+    keyword: v.string(),
+    platform: v.string(),       // "X" | "Instagram"
+    postUrl: v.string(),
+    text: v.string(),
+    author: v.string(),
+    authorHandle: v.optional(v.string()),
+    date: v.string(),           // YYYY-MM-DD
+    likes: v.number(),
+    replies: v.number(),
+    reposts: v.optional(v.number()),
+    views: v.optional(v.number()),
+    thumbnailUrl: v.optional(v.string()),
+    fetchedAt: v.number(),
+  }).index("by_campaign", ["campaignId"])
+    .index("by_campaign_keyword", ["campaignId", "keyword"]),
 });

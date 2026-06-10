@@ -20,6 +20,7 @@ import {
   Pencil, Trash, Link as LinkIcon, SlidersHorizontal,
   MessageSquare, ThumbsUp, Eye, Target, TrendingUp, ArrowUpDown, ArrowUpRight,
   ChevronUp, ChevronDown, ChevronRight, Smile, Frown,
+  Hash, Search, Plus, ExternalLink, Twitter,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as xlsx from "xlsx";
@@ -1139,6 +1140,57 @@ export default function AwarenessPage() {
   const [mapping,        setMapping]        = useState<Record<string, string>>({});
   const [headerRowIdx,   setHeaderRowIdx]   = useState(0);
   const [isGuessingCols, setIsGuessingCols] = useState(false);
+
+  // ── 소셜 키워드 분석 ─────────────────────────────────────────
+  const socialKeywords   = useQuery(api.socialKeywords.getSocialKeywords,   { campaignId }) ?? [];
+  const addSocialKw      = useMutation(api.socialKeywords.addSocialKeyword);
+  const deleteSocialKw   = useMutation(api.socialKeywords.deleteSocialKeyword);
+  const upsertSocialPosts= useMutation(api.socialKeywords.upsertSocialPosts);
+  const deleteSocialPost = useMutation(api.socialKeywords.deleteSocialPost);
+
+  const [newKwInput,        setNewKwInput]        = useState("");
+  const [newKwPlatforms,    setNewKwPlatforms]     = useState<string[]>(["X", "Instagram"]);
+  const [selectedKw,        setSelectedKw]         = useState<string | null>(null);
+  const [kwDateFrom,        setKwDateFrom]         = useState("");
+  const [kwDateTo,          setKwDateTo]           = useState("");
+  const [kwFetching,        setKwFetching]         = useState<string | null>(null);   // 현재 수집 중인 keyword
+  const [kwFetchMsg,        setKwFetchMsg]         = useState<Record<string, string>>({});
+
+  const socialPostsAll = useQuery(
+    api.socialKeywords.getSocialPosts,
+    selectedKw ? { campaignId, keyword: selectedKw } : { campaignId }
+  ) ?? [];
+
+  // 기간 필터 적용
+  const socialPostsFiltered = socialPostsAll.filter((p: any) => {
+    if (kwDateFrom && p.date < kwDateFrom) return false;
+    if (kwDateTo   && p.date > kwDateTo)   return false;
+    return true;
+  });
+
+  const handleFetchSocialPosts = async (kw: string, platforms: string[]) => {
+    setKwFetching(kw);
+    setKwFetchMsg(prev => ({ ...prev, [kw]: "수집 중..." }));
+    try {
+      const res = await fetch("/api/fetch-social-posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword: kw, platforms, dateFrom: kwDateFrom, dateTo: kwDateTo, limit: 50 }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || "수집 실패");
+      if (data.posts?.length > 0) {
+        await upsertSocialPosts({ campaignId, keyword: kw, posts: data.posts });
+        setKwFetchMsg(prev => ({ ...prev, [kw]: `✅ ${data.posts.length}건 수집 완료` + (data.errors?.length ? ` (일부 실패: ${data.errors.join(", ")})` : "") }));
+      } else {
+        setKwFetchMsg(prev => ({ ...prev, [kw]: "⚠ 검색 결과가 없습니다." + (data.errors?.length ? ` ${data.errors.join(", ")}` : "") }));
+      }
+    } catch (e: any) {
+      setKwFetchMsg(prev => ({ ...prev, [kw]: `❌ ${e.message}` }));
+    } finally {
+      setKwFetching(null);
+    }
+  };
 
   // ── 바이럴 필터·편집 ─────────────────────────────────────────
   const [filterMonth,    setFilterMonth]    = useState("all");
@@ -3230,6 +3282,179 @@ export default function AwarenessPage() {
               comments={viralContents.flatMap((v: any) => v.commentsList || [])}
             />
           )}
+
+          {/* ── 소셜 키워드 분석 ──────────────────────────────── */}
+          <GlassCard className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                <Hash className="w-4 h-4 text-blue-500" /> 소셜 키워드 분석
+                <span className="text-[10px] text-gray-400 font-normal">X · Instagram 게시물 검색</span>
+              </h3>
+            </div>
+
+            {/* 키워드 추가 (관리자) */}
+            {isAdmin && (
+              <div className="flex gap-2 mb-4">
+                <Input
+                  placeholder="키워드 또는 #해시태그 입력"
+                  value={newKwInput}
+                  onChange={e => setNewKwInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && newKwInput.trim()) { addSocialKw({ campaignId, keyword: newKwInput.trim(), platforms: newKwPlatforms }); setNewKwInput(""); }}}
+                  className="h-8 text-xs"
+                />
+                <div className="flex gap-1">
+                  {(["X", "Instagram"] as const).map(p => (
+                    <button key={p} type="button"
+                      onClick={() => setNewKwPlatforms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
+                      className={cn("text-[10px] px-2 py-1 rounded border transition-colors",
+                        newKwPlatforms.includes(p) ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-500 border-gray-200"
+                      )}>
+                      {p === "X" ? "𝕏" : "IG"} {p}
+                    </button>
+                  ))}
+                </div>
+                <Button size="sm" className="h-8 bg-blue-600 hover:bg-blue-700 text-white gap-1 px-3 shrink-0"
+                  onClick={() => { if (newKwInput.trim()) { addSocialKw({ campaignId, keyword: newKwInput.trim(), platforms: newKwPlatforms }); setNewKwInput(""); }}}>
+                  <Plus className="w-3 h-3" /> 추가
+                </Button>
+              </div>
+            )}
+
+            {/* 저장된 키워드 탭 */}
+            {socialKeywords.length > 0 ? (
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setSelectedKw(null)}
+                    className={cn("text-xs px-3 py-1 rounded-full border transition-colors",
+                      selectedKw === null ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                    )}>
+                    전체
+                  </button>
+                  {(socialKeywords as any[]).map((kw: any) => (
+                    <div key={kw._id} className="flex items-center gap-1">
+                      <button
+                        onClick={() => setSelectedKw(selectedKw === kw.keyword ? null : kw.keyword)}
+                        className={cn("text-xs px-3 py-1 rounded-full border transition-colors",
+                          selectedKw === kw.keyword ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
+                        )}>
+                        {kw.keyword}
+                        <span className="ml-1 text-[9px] opacity-60">{(kw.platforms || []).map((p: string) => p === "Instagram" ? "IG" : p).join("·")}</span>
+                      </button>
+                      {isAdmin && (
+                        <button onClick={() => deleteSocialKw({ keywordId: kw._id })}
+                          className="text-gray-300 hover:text-red-400 transition-colors">
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* 기간 필터 + 수집 버튼 */}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-1 text-xs text-gray-500">
+                    <CalendarIcon className="w-3 h-3" />
+                    <input type="date" value={kwDateFrom} onChange={e => setKwDateFrom(e.target.value)}
+                      className="border border-gray-200 rounded px-2 py-1 text-xs outline-none focus:border-blue-300" />
+                    <span>~</span>
+                    <input type="date" value={kwDateTo} onChange={e => setKwDateTo(e.target.value)}
+                      className="border border-gray-200 rounded px-2 py-1 text-xs outline-none focus:border-blue-300" />
+                  </div>
+                  {isAdmin && (
+                    <div className="flex gap-2 flex-wrap">
+                      {(selectedKw
+                        ? [(socialKeywords as any[]).find((k: any) => k.keyword === selectedKw)].filter(Boolean)
+                        : socialKeywords as any[]
+                      ).map((kw: any) => (
+                        <div key={kw._id} className="flex flex-col gap-0.5">
+                          <Button size="sm"
+                            disabled={kwFetching === kw.keyword}
+                            onClick={() => handleFetchSocialPosts(kw.keyword, kw.platforms || ["X", "Instagram"])}
+                            className="h-7 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 gap-1 text-[11px] px-2">
+                            {kwFetching === kw.keyword
+                              ? <><RefreshCw className="w-3 h-3 animate-spin" /> 수집 중...</>
+                              : <><Search className="w-3 h-3" /> {kw.keyword} 수집</>}
+                          </Button>
+                          {kwFetchMsg[kw.keyword] && (
+                            <span className={cn("text-[10px]",
+                              kwFetchMsg[kw.keyword].startsWith("✅") ? "text-green-600" :
+                              kwFetchMsg[kw.keyword].startsWith("⚠") ? "text-amber-600" : "text-red-500"
+                            )}>{kwFetchMsg[kw.keyword]}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 게시물 목록 */}
+                {socialPostsFiltered.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[500px] overflow-y-auto pr-1">
+                    {(socialPostsFiltered as any[]).map((post: any) => (
+                      <div key={post._id} className="bg-white border border-gray-100 hover:border-gray-200 rounded-xl p-4 flex flex-col gap-2 group">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            {post.thumbnailUrl && (
+                              <img src={`/api/proxy-image?url=${encodeURIComponent(post.thumbnailUrl)}`}
+                                alt="" referrerPolicy="no-referrer"
+                                className="w-7 h-7 rounded-full object-cover shrink-0 border border-gray-100" />
+                            )}
+                            <div>
+                              <p className="text-xs font-semibold text-gray-800">{post.author}</p>
+                              {post.authorHandle && <p className="text-[10px] text-gray-400">@{post.authorHandle}</p>}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                              post.platform === "X" ? "bg-gray-900 text-white" : "bg-gradient-to-r from-purple-500 to-pink-500 text-white"
+                            )}>
+                              {post.platform === "X" ? "𝕏" : "IG"} {post.platform}
+                            </span>
+                            <span className="text-[10px] font-mono text-gray-400">{post.date}</span>
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-700 leading-snug line-clamp-3">{post.text}</p>
+                        <div className="flex items-center justify-between pt-1 border-t border-gray-50">
+                          <div className="flex gap-3 text-[11px] text-gray-500">
+                            <span className="flex items-center gap-0.5"><ThumbsUp className="w-3 h-3" /> {(post.likes || 0).toLocaleString()}</span>
+                            <span className="flex items-center gap-0.5"><MessageSquare className="w-3 h-3" /> {(post.replies || 0).toLocaleString()}</span>
+                            {post.views != null && <span className="flex items-center gap-0.5"><Eye className="w-3 h-3" /> {(post.views || 0).toLocaleString()}</span>}
+                          </div>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {post.postUrl && (
+                              <a href={post.postUrl} target="_blank" rel="noreferrer"
+                                className="p-1 text-blue-400 hover:text-blue-600">
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                            {isAdmin && (
+                              <button onClick={() => deleteSocialPost({ postId: post._id })}
+                                className="p-1 text-gray-300 hover:text-red-400">
+                                <Trash className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-blue-400 bg-blue-50 px-1.5 py-0.5 rounded self-start">{post.keyword}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 py-8 text-gray-400">
+                    <Search className="w-6 h-6 opacity-30" />
+                    <p className="text-xs">{selectedKw ? `"${selectedKw}" 게시물이 없습니다.` : "키워드를 선택하고 수집 버튼을 눌러주세요."}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 py-10 text-gray-400">
+                <Hash className="w-8 h-8 opacity-20" />
+                <p className="text-sm">키워드를 추가해 X · Instagram 게시물을 분석하세요.</p>
+                <p className="text-xs text-gray-300">#브랜드명, #캠페인태그, 경쟁사명 등</p>
+              </div>
+            )}
+          </GlassCard>
         </div>
       )}
 
