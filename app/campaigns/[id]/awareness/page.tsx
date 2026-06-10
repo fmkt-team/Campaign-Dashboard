@@ -1826,8 +1826,11 @@ export default function AwarenessPage() {
       const data = await res.json();
       if (!res.ok || data.error) {
         setSocialError(data.error || "크롤링 실패");
-        if (data.requiresSetup) setSocialError(data.error + "\n\n💡 .env.local에 APIFY_API_TOKEN 또는 TWITTER_BEARER_TOKEN을 추가하세요.");
         return;
+      }
+      // 부분 오류도 표시 (X 실패해도 Naver Blog는 성공하는 등)
+      if (data.errors?.length) {
+        setSocialError(`⚠ 일부 플랫폼 실패:\n${data.errors.join("\n")}`);
       }
       const result = { ...data, keywords: kwInputList };
       setSocialData(result);
