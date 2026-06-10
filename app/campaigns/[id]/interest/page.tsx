@@ -1598,7 +1598,7 @@ export default function InterestPage() {
     setPopupOpsSyncing(true);
     setPopupOpsSyncMsg("");
     try {
-      const apiRes = await fetch("/api/fetch-raw-sheet", {
+      const apiRes = await fetch("/api/fetch-public-csv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sheetUrl: popupOpsUrl }),
