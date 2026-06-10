@@ -1199,6 +1199,11 @@ export default function InterestPage() {
   const [showReservationUrl, setShowReservationUrl] = useState(false);
   const [reservationSyncMsg, setReservationSyncMsg] = useState("");
 
+  // ── 팝업 운영 현황 시트 (구분=일반/VIP 직접 연동) ──
+  const [popupOpsUrl, setPopupOpsUrl] = useState("");
+  const [popupOpsSyncing, setPopupOpsSyncing] = useState(false);
+  const [popupOpsSyncMsg, setPopupOpsSyncMsg] = useState("");
+
   // ── 팝업 방문자 시트 (일자별 방문자 수) ──
   const [visitorUrl, setVisitorUrl] = useState("");
   const [visitorDateFrom, setVisitorDateFrom] = useState("");
@@ -1257,6 +1262,10 @@ export default function InterestPage() {
     if (savedResFrom) setReservationDateFrom(savedResFrom);
     if (savedResTo)   setReservationDateTo(savedResTo);
     if (savedResAll)  { try { setReservationAllRows(JSON.parse(savedResAll)); } catch {} }
+
+    // 팝업 운영 현황 시트
+    const savedOpsUrl = localStorage.getItem(`popup_ops_url_${campaignId}`);
+    if (savedOpsUrl) setPopupOpsUrl(savedOpsUrl);
 
     // 팝업 방문자 시트
     const savedVisUrl  = localStorage.getItem(`popup_visitor_url_${campaignId}`);
@@ -1582,6 +1591,77 @@ export default function InterestPage() {
       setReservationSyncing(false);
     }
   }, [reservationUrl, campaignId]);
+
+  // ── 팝업 운영 현황 시트 동기화 (구분=일반/VIP 행 분리) ──
+  const syncPopupOpsSheet = useCallback(async () => {
+    if (!popupOpsUrl) return;
+    setPopupOpsSyncing(true);
+    setPopupOpsSyncMsg("");
+    try {
+      const apiRes = await fetch("/api/fetch-raw-sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: popupOpsUrl }),
+      });
+      const apiJson = await apiRes.json();
+      if (!apiJson.success || !apiJson.data) throw new Error(apiJson.error || "시트 데이터를 가져오지 못했습니다.");
+      const rows: string[][] = apiJson.data;
+
+      // 헤더 행 찾기: "일자"와 "구분" 컬럼이 있는 행
+      let headerIdx = rows.findIndex(r =>
+        r.some(c => /일자|날짜/i.test(c)) && r.some(c => /구분/i.test(c))
+      );
+      if (headerIdx < 0) throw new Error("헤더 행을 찾지 못했습니다. (일자/구분 컬럼 필요)");
+
+      const headers = rows[headerIdx].map(h => h.toLowerCase().trim());
+      const dateCol   = headers.findIndex(h => /일자|날짜/.test(h));
+      const typeCol   = headers.findIndex(h => /구분/.test(h));
+      const countCol  = headers.findIndex(h => /건수|건/.test(h));
+      const peopleCol = headers.findIndex(h => /인원|명수/.test(h));
+
+      if (dateCol < 0 || typeCol < 0) throw new Error("일자 또는 구분 컬럼을 찾지 못했습니다.");
+
+      // 일자별로 일반/VIP 집계
+      const map = new Map<string, { count: number; people: number; vipCount: number; vipPeople: number }>();
+      let lastDate = "";
+
+      for (const row of rows.slice(headerIdx + 1)) {
+        const rawDate = (row[dateCol] || "").trim();
+        const type    = (row[typeCol] || "").trim();
+        const count   = countCol  >= 0 ? (parseInt(row[countCol]  || "0", 10) || 0) : 0;
+        const people  = peopleCol >= 0 ? (parseInt(row[peopleCol] || "0", 10) || 0) : 0;
+
+        // "합계" 행 스킵
+        if (/합계|total/i.test(rawDate) || /합계|total/i.test(type)) continue;
+
+        const date = rawDate || lastDate;
+        if (!date) continue;
+        lastDate = rawDate || lastDate;
+
+        if (!map.has(date)) map.set(date, { count: 0, people: 0, vipCount: 0, vipPeople: 0 });
+        const entry = map.get(date)!;
+        if (/vip/i.test(type)) {
+          entry.vipCount  += count;
+          entry.vipPeople += people;
+        } else {
+          entry.count  += count;
+          entry.people += people;
+        }
+      }
+
+      if (map.size === 0) throw new Error("파싱된 데이터가 없습니다.");
+
+      const parsed = Array.from(map.entries()).map(([date, v]) => ({ date, ...v }));
+      setReservationAllRows(parsed);
+      localStorage.setItem(`popup_ops_url_${campaignId}`, popupOpsUrl);
+      localStorage.setItem(`popup_reservation_all_${campaignId}`, JSON.stringify(parsed));
+      setPopupOpsSyncMsg(`✅ ${parsed.length}일 데이터 동기화 완료!`);
+    } catch (e: any) {
+      setPopupOpsSyncMsg(`❌ ${e.message}`);
+    } finally {
+      setPopupOpsSyncing(false);
+    }
+  }, [popupOpsUrl, campaignId]);
 
   // ── 팝업 방문자 시트 동기화 ──
   const syncVisitorSheet = useCallback(async () => {
@@ -2186,6 +2266,47 @@ export default function InterestPage() {
           {syncMessage && (
             <p className={`text-xs mt-2 ${syncMessage.startsWith("✅") ? "text-green-600" : "text-red-500"}`}>{syncMessage}</p>
           )}
+
+          {/* ── 팝업 운영 현황 시트 (일반/VIP 직접 연동) ── */}
+          <div className="border-t border-indigo-100 pt-4 mt-2">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-semibold text-gray-700">🏪 팝업 운영 현황 시트 (일반/VIP 구분 자동 파싱)</label>
+              {reservationAllRows && popupOpsUrl && (
+                <button
+                  onClick={() => {
+                    setReservationAllRows(null);
+                    setPopupOpsUrl("");
+                    setPopupOpsSyncMsg("");
+                    try {
+                      localStorage.removeItem(`popup_ops_url_${campaignId}`);
+                      localStorage.removeItem(`popup_reservation_all_${campaignId}`);
+                    } catch {}
+                  }}
+                  className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-500"
+                ><Trash2 className="w-3 h-3" /> 초기화</button>
+              )}
+            </div>
+            <p className="text-[10px] text-gray-400 mb-2">일자(A), 구분(C: 일반/VIP), 예약 건수(D), 참여 인원(E) 형태의 시트를 지원합니다.</p>
+            <div className="flex gap-2">
+              <input
+                className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-teal-400 placeholder:text-gray-400"
+                placeholder="구글 시트 URL 입력 (링크 공개 필요)"
+                value={popupOpsUrl}
+                onChange={e => { setPopupOpsUrl(e.target.value); setPopupOpsSyncMsg(""); }}
+              />
+              <Button
+                size="sm"
+                disabled={popupOpsSyncing || !popupOpsUrl}
+                onClick={syncPopupOpsSheet}
+                className="bg-teal-600 hover:bg-teal-700 text-white border-0 gap-1 px-3 whitespace-nowrap"
+              >
+                {popupOpsSyncing ? <><RefreshCw className="w-3 h-3 animate-spin" /> 동기화 중...</> : <><Check className="w-3 h-3" /> 동기화</>}
+              </Button>
+            </div>
+            {popupOpsSyncMsg && (
+              <p className={`text-xs mt-1.5 ${popupOpsSyncMsg.startsWith("✅") ? "text-green-600" : "text-red-500"}`}>{popupOpsSyncMsg}</p>
+            )}
+          </div>
 
           {/* ── AI 팝업 시트 매핑 ── */}
           <div className="border-t border-indigo-100 pt-4 mt-2">
