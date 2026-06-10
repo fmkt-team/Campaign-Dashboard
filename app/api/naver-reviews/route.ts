@@ -249,10 +249,77 @@ async function fetchViaApify(placeUrl: string): Promise<{ reviews: any[]; total:
   }
 }
 
+// ─── 네이버 블로그 리뷰 GraphQL 쿼리 ──────────────────────────────────
+const BLOG_GQL_QUERY = `query getNaverBlogReviews($input: BlogReviewsInput) {
+  blogReviews(input: $input) {
+    total
+    items {
+      id
+      title
+      body
+      blogName
+      thumbnailUrl
+      url
+      created
+      author { nickname }
+      __typename
+    }
+    __typename
+  }
+}`;
+
+async function fetchNaverBlogReviews(
+  placeId: string,
+  display = 50
+): Promise<{ items: any[]; total: number } | null> {
+  try {
+    const body = JSON.stringify([{
+      operationName: "getNaverBlogReviews",
+      variables: {
+        input: {
+          businessId: placeId,
+          businessType: "place",
+          page: 1,
+          display,
+        },
+      },
+      query: BLOG_GQL_QUERY,
+    }]);
+
+    const res = await fetch("https://pcmap-api.place.naver.com/place/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": `https://pcmap.place.naver.com/place/${placeId}/review/blog`,
+        "Origin": "https://pcmap.place.naver.com",
+        "Accept": "*/*",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "sec-fetch-site": "same-site",
+        "sec-fetch-mode": "cors",
+      },
+      body,
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const br = data?.[0]?.data?.blogReviews;
+    if (!br) {
+      console.log(`[BlogGQL] No blogReviews in response`, JSON.stringify(data).slice(0, 200));
+      return null;
+    }
+    console.log(`[BlogGQL] items=${br.items?.length ?? 0} total=${br.total}`);
+    return { items: br.items || [], total: br.total || 0 };
+  } catch (e: any) {
+    console.log(`[BlogGQL] Error: ${e.message}`);
+    return null;
+  }
+}
+
 // ─── Route Handler ────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const { url } = await req.json();
+    const { url, reviewType = "visitor" } = await req.json();
     if (!url) {
       return NextResponse.json({ error: "URL이 필요합니다." }, { status: 400 });
     }
@@ -268,7 +335,37 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    console.log(`[Naver Reviews] Fetching reviews for place ID: ${placeId}`);
+    console.log(`[Naver Reviews] Fetching ${reviewType} reviews for place ID: ${placeId}`);
+
+    // ── 블로그 리뷰 처리 ──
+    if (reviewType === "blog") {
+      const blogResult = await fetchNaverBlogReviews(placeId, 50);
+      if (blogResult && blogResult.items.length > 0) {
+        const blogReviews = blogResult.items.map((r: any) => ({
+          id: r.id,
+          title: r.title || "",
+          text: r.body || r.title || "",
+          blogName: r.blogName || r.author?.nickname || "블로거",
+          url: r.url || "",
+          thumbnailUrl: r.thumbnailUrl || "",
+          date: r.created || "",
+          keywords: [] as string[],
+        }));
+        console.log(`[Naver Blog] ✅ ${blogReviews.length}건 / total: ${blogResult.total}`);
+        return NextResponse.json({
+          placeId,
+          reviewType: "blog",
+          reviews: blogReviews,
+          total: blogResult.total,
+          source: "graphql",
+        });
+      }
+      return NextResponse.json({
+        error: "블로그 리뷰를 가져올 수 없습니다. 직접 복사·붙여넣기 기능을 이용해주세요.",
+      }, { status: 422 });
+    }
+
+    // ── 방문자 리뷰 처리 (기존 로직) ──
 
     // 1차: 네이버 GraphQL API 직접 호출 (전체 페이지 수집)
     const gqlResult = await fetchViaNaverGraphQL(placeId);

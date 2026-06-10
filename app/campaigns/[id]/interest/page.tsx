@@ -556,6 +556,14 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
   const [pasteText, setPasteText] = useState("");
   const [showPasteArea, setShowPasteArea] = useState(false);
   const [extractingKw, setExtractingKw] = useState(false);
+  // 방문자 리뷰 탭 / 블로그 리뷰 탭
+  const [reviewTab, setReviewTab] = useState<"visitor" | "blog">("visitor");
+  const [blogPosts, setBlogPosts] = useState<null | {
+    total: number;
+    posts: { id: string; title: string; text: string; blogName: string; url: string; thumbnailUrl: string; date: string }[];
+    source?: string;
+  }>(null);
+  const BLOG_DATA_LS_KEY = `naverBlogData_${analyzerCampaignId}`;
   const [analyzed, setAnalyzed] = useState<null | {
     total: number;
     textTotal?: number;
@@ -576,6 +584,8 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
 
       const savedData = localStorage.getItem(NAVER_DATA_LS_KEY);
       if (savedData) setAnalyzed(JSON.parse(savedData));
+      const savedBlog = localStorage.getItem(BLOG_DATA_LS_KEY);
+      if (savedBlog) setBlogPosts(JSON.parse(savedBlog));
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyzerCampaignData, analyzerCampaignId]);
@@ -587,6 +597,13 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analyzed]);
+
+  useEffect(() => {
+    if (blogPosts) {
+      try { localStorage.setItem(BLOG_DATA_LS_KEY, JSON.stringify(blogPosts)); } catch {}
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blogPosts]);
 
   const saveNaverUrl = async () => {
     try {
@@ -619,8 +636,8 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
     }
   };
 
-  // ── 크롤링 ──
-  const crawl = async () => {
+  // ── 크롤링 (방문자 / 블로그 공통) ──
+  const crawl = async (type: "visitor" | "blog" = reviewTab) => {
     if (!naverUrl.trim()) return;
     setCrawling(true);
     setCrawlError("");
@@ -628,18 +645,26 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
       const res = await fetch("/api/naver-reviews", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: naverUrl.trim() }),
+        body: JSON.stringify({ url: naverUrl.trim(), reviewType: type }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
         setCrawlError(data.error || "크롤링 실패");
         return;
       }
-      await analyzeWithAI(data.reviews || [], {
-        total: data.total,
-        textTotal: data.textTotal,
-        source: data.source,
-      });
+      if (type === "blog") {
+        setBlogPosts({
+          total: data.total || (data.reviews?.length ?? 0),
+          posts: data.reviews || [],
+          source: data.source,
+        });
+      } else {
+        await analyzeWithAI(data.reviews || [], {
+          total: data.total,
+          textTotal: data.textTotal,
+          source: data.source,
+        });
+      }
     } catch (e: any) {
       setCrawlError(e.message || "네트워크 오류");
     } finally {
@@ -705,45 +730,71 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
   });
 
   const reset = () => {
-    setAnalyzed(null);
+    if (reviewTab === "blog") {
+      setBlogPosts(null);
+      try { localStorage.removeItem(BLOG_DATA_LS_KEY); } catch {}
+    } else {
+      setAnalyzed(null);
+      try { localStorage.removeItem(NAVER_DATA_LS_KEY); } catch {}
+    }
     setCrawlError("");
     setPasteText("");
-    try { localStorage.removeItem(NAVER_DATA_LS_KEY); } catch {}
   };
 
   return (
     <GlassCard className="p-6">
       {/* 헤더 */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-5 border-b border-gray-100 pb-4 gap-3">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 mb-5 border-b border-gray-100 pb-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-            <Star className="w-4 h-4 text-gray-900 fill-gray-900" /> 네이버 플레이스 방문자 리뷰 분석
+            <Star className="w-4 h-4 text-gray-900 fill-gray-900" /> 네이버 플레이스 리뷰 분석
           </h4>
-          {analyzed && (
-            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full font-bold">
-              총 {analyzed.total.toLocaleString()}건
-              {analyzed.textTotal !== undefined && analyzed.textTotal < analyzed.total && (
-                <span className="text-gray-400 font-normal ml-1">(글 작성 {analyzed.textTotal}건)</span>
-              )}
+          {reviewTab === "visitor" && analyzed && (
+            <div className="flex gap-2">
+              <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-md font-medium border border-green-100 flex items-center gap-1">
+                <Smile className="w-3 h-3" /> 긍정 {analyzed.posRate}%
+              </span>
+              <span className="text-xs bg-red-50 text-red-700 px-2 py-1 rounded-md font-medium border border-red-100 flex items-center gap-1">
+                <Frown className="w-3 h-3" /> 부정 {100 - analyzed.posRate}%
+              </span>
+            </div>
+          )}
+          {reviewTab === "blog" && blogPosts && (
+            <span className="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-md font-medium border border-blue-100">
+              블로그 리뷰 {blogPosts.posts.length}건
             </span>
-          )}
-          {analyzed?.source === "graphql" && (
-            <span className="text-[10px] bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">자동 크롤링</span>
-          )}
-          {analyzed?.source === "paste" && (
-            <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">직접 입력</span>
           )}
         </div>
-        {analyzed && (
-          <div className="flex gap-2">
-            <span className="text-xs bg-green-50 text-green-700 px-2 py-1 rounded-md font-medium border border-green-100 flex items-center gap-1">
-              <Smile className="w-3 h-3" /> 긍정 {analyzed.posRate}%
-            </span>
-            <span className="text-xs bg-red-50 text-red-700 px-2 py-1 rounded-md font-medium border border-red-100 flex items-center gap-1">
-              <Frown className="w-3 h-3" /> 부정 {100 - analyzed.posRate}%
-            </span>
-          </div>
-        )}
+        {/* 방문자 / 블로그 탭 */}
+        <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+          {([
+            { key: "visitor" as const, label: "👥 방문자 리뷰" },
+            { key: "blog"    as const, label: "📝 블로그 리뷰" },
+          ]).map(t => (
+            <button
+              key={t.key}
+              onClick={() => { setReviewTab(t.key); setCrawlError(""); }}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-xs font-semibold transition-all",
+                reviewTab === t.key
+                  ? "bg-white shadow-sm text-gray-900"
+                  : "text-gray-500 hover:text-gray-700"
+              )}
+            >
+              {t.label}
+              {t.key === "visitor" && analyzed && (
+                <span className="ml-1.5 bg-gray-200 text-gray-600 rounded-full px-1.5 text-[10px]">
+                  {analyzed.total.toLocaleString()}
+                </span>
+              )}
+              {t.key === "blog" && blogPosts && (
+                <span className="ml-1.5 bg-blue-100 text-blue-600 rounded-full px-1.5 text-[10px]">
+                  {blogPosts.total.toLocaleString()}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* URL 입력 + 크롤링 버튼 */}
@@ -855,7 +906,7 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
       )}
 
       {/* 빈 상태 */}
-      {!analyzed && !showPasteArea && (
+      {reviewTab === "visitor" && !analyzed && !showPasteArea && (
         <div className="flex flex-col items-center justify-center py-10 gap-3">
           <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center">
             <Star className="w-5 h-5 text-gray-400" />
@@ -867,8 +918,61 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
         </div>
       )}
 
-      {/* 분석 결과 */}
-      {analyzed && (
+      {reviewTab === "blog" && !blogPosts && !showPasteArea && (
+        <div className="flex flex-col items-center justify-center py-10 gap-3">
+          <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center">
+            <ArrowUpRight className="w-5 h-5 text-blue-400" />
+          </div>
+          <p className="text-sm text-gray-400 text-center">위 URL을 입력하고 블로그 리뷰 크롤링을 시작하세요</p>
+        </div>
+      )}
+
+      {/* 블로그 리뷰 목록 */}
+      {reviewTab === "blog" && blogPosts && blogPosts.posts.length > 0 && (
+        <>
+          <div className="flex items-center justify-between mb-3">
+            <h5 className="text-xs font-bold text-gray-700">
+              블로그 리뷰 목록
+              <span className="ml-1 text-gray-400 font-normal">총 {blogPosts.total.toLocaleString()}건</span>
+            </h5>
+            <button className="text-[10px] text-gray-400 hover:text-gray-600 underline" onClick={reset}>다시 불러오기</button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+            {blogPosts.posts.map((post, i) => (
+              <div key={i} className="bg-white border border-gray-100 hover:border-blue-200 transition-colors shadow-sm rounded-xl overflow-hidden flex flex-col">
+                {post.thumbnailUrl && (
+                  <div className="w-full h-28 bg-gray-100 overflow-hidden">
+                    <img src={post.thumbnailUrl} alt={post.title} className="w-full h-full object-cover" />
+                  </div>
+                )}
+                <div className="p-4 flex flex-col gap-2 flex-1">
+                  {post.title && (
+                    <h6 className="text-sm font-semibold text-gray-900 line-clamp-1">{post.title}</h6>
+                  )}
+                  {post.text && (
+                    <p className="text-xs text-gray-600 line-clamp-3 leading-relaxed">{post.text}</p>
+                  )}
+                  <div className="flex items-center justify-between mt-auto pt-2 border-t border-gray-50">
+                    <span className="text-[10px] text-blue-600 font-medium">{post.blogName}</span>
+                    <div className="flex items-center gap-2">
+                      {post.date && <span className="text-[10px] text-gray-400 font-mono">{post.date.slice(0, 10)}</span>}
+                      {post.url && (
+                        <a href={post.url} target="_blank" rel="noopener noreferrer"
+                          className="text-[10px] text-gray-400 hover:text-blue-600 flex items-center gap-0.5">
+                          <ExternalLink className="w-3 h-3" /> 원문
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* 방문자 리뷰 분석 결과 */}
+      {reviewTab === "visitor" && analyzed && (
         <>
           {/* ── 감성 분포 + 키워드 바 차트 ── */}
           <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-5 mb-6 items-start">

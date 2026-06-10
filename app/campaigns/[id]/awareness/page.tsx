@@ -18,7 +18,7 @@ import { Input } from "@/components/ui/input";
 import {
   Check, X, UploadCloud, FileSpreadsheet, RefreshCw, Settings2,
   Pencil, Trash, Link as LinkIcon, SlidersHorizontal,
-  MessageSquare, ThumbsUp, Eye, Target, TrendingUp, ArrowUpDown,
+  MessageSquare, ThumbsUp, Eye, Target, TrendingUp, ArrowUpDown, ArrowUpRight,
   ChevronUp, ChevronDown, ChevronRight, Smile, Frown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -28,7 +28,7 @@ import { useRefresh } from "@/lib/refresh-context";
 import { useAuth } from "@/lib/auth-context";
 
 type ViewMode  = "daily" | "weekly" | "monthly" | "total";
-type ActiveTab = "media" | "video" | "viral";
+type ActiveTab = "media" | "video" | "viral" | "social";
 
 const VIEW_MODE_LABELS: Record<ViewMode, string> = {
   daily: "일별", weekly: "주차별", monthly: "월별", total: "전체",
@@ -935,6 +935,30 @@ export default function AwarenessPage() {
   // ── 탭·뷰 ────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<ActiveTab>("media");
   const [viewMode,  setViewMode]  = useState<ViewMode>("daily");
+
+  // ── 소셜 키워드 분석 상태 ────────────────────────────────────
+  const SOCIAL_LS_KEY = `social_analysis_${campaignId}`;
+  const [socialPlatform, setSocialPlatform] = useState<"twitter" | "instagram" | "all">("all");
+  const [socialKeywords, setSocialKeywords] = useState<string>("");
+  const [socialLoading,  setSocialLoading]  = useState(false);
+  const [socialError,    setSocialError]    = useState("");
+  const [socialData, setSocialData] = useState<null | {
+    posts: any[];
+    total: number;
+    keywords: string[];
+    fetchedAt: string;
+    source: string;
+  }>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(SOCIAL_LS_KEY);
+    if (saved) { try { setSocialData(JSON.parse(saved)); } catch {} }
+    const savedKw = localStorage.getItem(`${SOCIAL_LS_KEY}_keywords`);
+    if (savedKw) setSocialKeywords(savedKw);
+    const savedPlatform = localStorage.getItem(`${SOCIAL_LS_KEY}_platform`) as any;
+    if (savedPlatform) setSocialPlatform(savedPlatform);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
   const [showCumulative, setShowCumulative] = useState(true);
 
   // ── 테이블 컬럼 설정 저장 키 ────────────────────────────────
@@ -1727,10 +1751,52 @@ export default function AwarenessPage() {
   const ytEngagePct     = ytTotalViews > 0 ? ((ytTotalLikes + ytTotalComments) / ytTotalViews) * 100 : 0;
 
   const TABS = [
-    { key: "media" as ActiveTab, label: "매체 퍼포먼스" },
-    { key: "video" as ActiveTab, label: "캠페인 광고 영상" },
-    { key: "viral" as ActiveTab, label: "바이럴 컨텐츠 성과" },
+    { key: "media"  as ActiveTab, label: "매체 퍼포먼스" },
+    { key: "video"  as ActiveTab, label: "캠페인 광고 영상" },
+    { key: "viral"  as ActiveTab, label: "바이럴 컨텐츠 성과" },
+    { key: "social" as ActiveTab, label: "소셜 키워드 분석" },
   ];
+
+  // ── 소셜 크롤링 실행 ─────────────────────────────────────────
+  const runSocialCrawl = async () => {
+    const kwList = socialKeywords.split(/[,\n]/).map(k => k.trim()).filter(Boolean);
+    if (kwList.length === 0) { setSocialError("키워드를 입력해주세요."); return; }
+    setSocialLoading(true);
+    setSocialError("");
+    try {
+      const res = await fetch("/api/social-crawl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: socialPlatform, keywords: kwList, maxItems: 50 }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setSocialError(data.error || "크롤링 실패");
+        if (data.requiresSetup) setSocialError(data.error + "\n\n💡 .env.local에 APIFY_API_TOKEN 또는 TWITTER_BEARER_TOKEN을 추가하세요.");
+        return;
+      }
+      const result = { ...data, keywords: kwList };
+      setSocialData(result);
+      try {
+        localStorage.setItem(SOCIAL_LS_KEY, JSON.stringify(result));
+        localStorage.setItem(`${SOCIAL_LS_KEY}_keywords`, socialKeywords);
+        localStorage.setItem(`${SOCIAL_LS_KEY}_platform`, socialPlatform);
+      } catch {}
+    } catch (e: any) {
+      setSocialError(e.message || "네트워크 오류");
+    } finally {
+      setSocialLoading(false);
+    }
+  };
+
+  // ── 소셜 감성 분석 헬퍼 (interest page 로직 재사용) ──────────
+  const POS_WORDS_SOCIAL = ["좋아","좋았","좋은","예쁘","친절","최고","대박","추천","만족","훌륭","깔끔","재밌","즐거","완벽","굿","멋지","감동","강추","재방문","설레"];
+  const NEG_WORDS_SOCIAL = ["불편","별로","아쉽","실망","나쁘","최악","더럽","불친절","불만","짜증","불쾌","후회","비추","다시는"];
+  const classifySocialSentiment = (text: string) => {
+    const pos = POS_WORDS_SOCIAL.reduce((s, w) => s + (text.includes(w) ? 1 : 0), 0);
+    const neg = NEG_WORDS_SOCIAL.reduce((s, w) => s + (text.includes(w) ? 1 : 0), 0);
+    return neg > pos ? "negative" as const : "positive" as const;
+  };
 
   return (
     <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -3163,6 +3229,183 @@ export default function AwarenessPage() {
               title="바이럴 컨텐츠 댓글 종합 분석"
               comments={viralContents.flatMap((v: any) => v.commentsList || [])}
             />
+          )}
+        </div>
+      )}
+
+      {/* ════════════════════════════════════════════════════
+          탭 4: 소셜 키워드 분석
+      ════════════════════════════════════════════════════ */}
+      {activeTab === "social" && (
+        <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {/* 검색 설정 */}
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-fursys-red" /> 소셜 키워드 검색 설정
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 items-end">
+              {/* 키워드 입력 */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-1 block">검색 키워드 (쉼표 또는 줄바꿈으로 구분)</label>
+                <textarea
+                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-gray-400 resize-none placeholder:text-gray-400"
+                  rows={2}
+                  placeholder={"퍼시스, FURSYS, 언씬어워드\n#fursys #언씬어워드"}
+                  value={socialKeywords}
+                  onChange={e => setSocialKeywords(e.target.value)}
+                />
+              </div>
+              {/* 플랫폼 선택 */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-1 block">플랫폼</label>
+                <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+                  {([
+                    { key: "all"       as const, label: "전체" },
+                    { key: "twitter"   as const, label: "𝕏" },
+                    { key: "instagram" as const, label: "IG" },
+                  ]).map(p => (
+                    <button
+                      key={p.key}
+                      onClick={() => setSocialPlatform(p.key)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap ${
+                        socialPlatform === p.key ? "bg-white shadow-sm text-gray-900" : "text-gray-500"
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* 검색 버튼 */}
+              <button
+                onClick={runSocialCrawl}
+                disabled={socialLoading || !socialKeywords.trim()}
+                className="flex items-center gap-2 px-4 py-2 bg-fursys-red text-white rounded-lg text-xs font-semibold hover:bg-red-700 disabled:opacity-50 transition-colors h-9"
+              >
+                {socialLoading
+                  ? <><RefreshCw className="w-3 h-3 animate-spin" /> 수집 중...</>
+                  : <><Target className="w-3 h-3" /> 크롤링</>
+                }
+              </button>
+            </div>
+            {/* 에러 */}
+            {socialError && (
+              <div className="mt-3 p-3 bg-red-50 border border-red-100 rounded-lg">
+                <p className="text-xs text-red-700 whitespace-pre-line">{socialError}</p>
+              </div>
+            )}
+            {/* 환경변수 안내 */}
+            <div className="mt-3 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
+              <p className="font-semibold mb-1">🔑 크롤링 사용 설정</p>
+              <p>• <span className="font-mono bg-blue-100 px-1 rounded">APIFY_API_TOKEN</span> — X·Instagram 크롤링 (Apify 계정 필요, 무료 $5 크레딧 포함)</p>
+              <p>• <span className="font-mono bg-blue-100 px-1 rounded">TWITTER_BEARER_TOKEN</span> — X 공식 API (Basic 플랜 $100/월, 무료 500건/월)</p>
+              <p className="mt-1 text-blue-500">.env.local 파일에 추가 후 재시작하세요.</p>
+            </div>
+          </div>
+
+          {/* 결과 */}
+          {socialData && socialData.posts.length > 0 && (() => {
+            const posts = socialData.posts;
+            const posCount = posts.filter(p => classifySocialSentiment(p.text) === "positive").length;
+            const posRate  = Math.round((posCount / posts.length) * 100);
+            const twPosts  = posts.filter(p => p.platform === "twitter");
+            const igPosts  = posts.filter(p => p.platform === "instagram");
+
+            return (
+              <>
+                {/* KPI 요약 */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {[
+                    { label: "총 수집 게시물",   value: posts.length.toLocaleString(),    sub: `최종 수집: ${socialData.fetchedAt?.slice(0, 10) || "-"}` },
+                    { label: "𝕏 게시물",         value: twPosts.length.toLocaleString(),  sub: `좋아요 ${twPosts.reduce((s, p) => s + (p.likes || 0), 0).toLocaleString()}` },
+                    { label: "인스타그램 게시물", value: igPosts.length.toLocaleString(),  sub: `좋아요 ${igPosts.reduce((s, p) => s + (p.likes || 0), 0).toLocaleString()}` },
+                    { label: "긍정 반응 비율",    value: `${posRate}%`,                    sub: `부정 ${100 - posRate}%` },
+                  ].map((kpi, i) => (
+                    <div key={i} className="bg-white border border-gray-200 rounded-xl p-4">
+                      <p className="text-xs text-gray-500 mb-1">{kpi.label}</p>
+                      <p className="text-2xl font-bold text-gray-900">{kpi.value}</p>
+                      <p className="text-[11px] text-gray-400 mt-0.5">{kpi.sub}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 게시물 목록 */}
+                <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
+                  <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+                    <h3 className="text-sm font-bold text-gray-900">수집된 게시물</h3>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400">키워드: {socialData.keywords?.join(", ")}</span>
+                      <button
+                        onClick={() => { setSocialData(null); localStorage.removeItem(SOCIAL_LS_KEY); }}
+                        className="text-xs text-gray-400 hover:text-red-500 underline"
+                      >초기화</button>
+                    </div>
+                  </div>
+                  <div className="divide-y divide-gray-50 max-h-[520px] overflow-y-auto">
+                    {posts.map((post: any, i: number) => {
+                      const sentiment = classifySocialSentiment(post.text);
+                      return (
+                        <div key={i} className="flex gap-4 px-5 py-4 hover:bg-gray-50 transition-colors">
+                          {/* 아바타 */}
+                          <div className="w-9 h-9 rounded-full bg-gray-100 overflow-hidden flex-shrink-0">
+                            {post.thumbnailUrl
+                              ? <img src={post.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                              : <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs font-bold">
+                                  {post.platform === "twitter" ? "𝕏" : "IG"}
+                                </div>
+                            }
+                          </div>
+                          {/* 본문 */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-semibold text-gray-900 truncate">{post.author}</span>
+                              {post.authorHandle && (
+                                <span className="text-[10px] text-gray-400">@{post.authorHandle}</span>
+                              )}
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ml-auto flex-shrink-0 ${
+                                sentiment === "positive" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600"
+                              }`}>
+                                {sentiment === "positive" ? "😊 긍정" : "😞 부정"}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-700 leading-relaxed line-clamp-3">{post.text}</p>
+                            <div className="flex items-center gap-3 mt-2 text-[10px] text-gray-400">
+                              {post.date && <span>{post.date.slice(0, 10)}</span>}
+                              {post.likes  > 0 && <span>❤️ {post.likes.toLocaleString()}</span>}
+                              {post.comments > 0 && <span>💬 {post.comments.toLocaleString()}</span>}
+                              {post.reposts  > 0 && <span>🔁 {post.reposts.toLocaleString()}</span>}
+                              {post.url && (
+                                <a href={post.url} target="_blank" rel="noopener noreferrer"
+                                  className="ml-auto hover:text-fursys-red flex items-center gap-0.5">
+                                  <ArrowUpRight className="w-3 h-3" /> 원문
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+
+          {socialData && socialData.posts.length === 0 && (
+            <div className="flex flex-col items-center py-12 text-gray-400 gap-2">
+              <MessageSquare className="w-8 h-8 opacity-30" />
+              <p className="text-sm">수집된 게시물이 없습니다. 키워드나 플랫폼을 변경해보세요.</p>
+            </div>
+          )}
+
+          {!socialData && !socialLoading && (
+            <div className="flex flex-col items-center py-16 text-gray-400 gap-3">
+              <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center">
+                <Target className="w-6 h-6 opacity-40" />
+              </div>
+              <p className="text-sm font-medium">키워드를 입력하고 크롤링을 시작하세요</p>
+              <p className="text-xs text-gray-300">X(트위터), 인스타그램에서 해당 키워드 언급을 수집하고<br />감성 분석 결과를 제공합니다</p>
+            </div>
           )}
         </div>
       )}
