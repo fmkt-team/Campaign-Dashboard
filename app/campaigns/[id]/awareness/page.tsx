@@ -1811,7 +1811,9 @@ export default function AwarenessPage() {
 
   // ── 소셜 크롤링 실행 ─────────────────────────────────────────
   const runSocialCrawl = async () => {
-    const kwInputList = socialKeywords.split(/[,\n]/).map(k => k.trim()).filter(Boolean);
+    const kwInputList = selectedKw
+      ? [selectedKw]
+      : socialKeywords.split(/[,\n]/).map(k => k.trim()).filter(Boolean);
     if (kwInputList.length === 0) { setSocialError("키워드를 입력해주세요."); return; }
     setSocialLoading(true);
     setSocialError("");
@@ -1819,7 +1821,7 @@ export default function AwarenessPage() {
       const res = await fetch("/api/social-crawl", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: socialPlatform, keywords: kwInputList, maxItems: 50 }),
+        body: JSON.stringify({ platform: socialPlatform, keywords: kwInputList, maxItems: 30, dateFrom: kwDateFrom || undefined, dateTo: kwDateTo || undefined }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -3461,179 +3463,274 @@ export default function AwarenessPage() {
       {/* ════════════════════════════════════════════════════
           탭 4: 소셜 키워드 분석
       ════════════════════════════════════════════════════ */}
-      {activeTab === "social" && (
-        <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-          {/* 검색 설정 */}
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-fursys-red" /> 소셜 키워드 검색 설정
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-3 items-end">
-              {/* 키워드 입력 */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 mb-1 block">검색 키워드 (쉼표 또는 줄바꿈으로 구분)</label>
-                <textarea
-                  className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-gray-400 resize-none placeholder:text-gray-400"
-                  rows={2}
-                  placeholder={"퍼시스, FURSYS, 언씬어워드\n#fursys #언씬어워드"}
-                  value={socialKeywords}
-                  onChange={e => setSocialKeywords(e.target.value)}
-                />
+      {activeTab === "social" && (() => {
+        // 현재 선택 키워드의 게시물 (Convex 저장 or 현재 수집 결과)
+        const displayPosts: any[] = (() => {
+          if (selectedKw) {
+            // Convex 저장 게시물 (기간 필터 적용)
+            return socialPostsFiltered as any[];
+          }
+          // 전체 모드: 현재 수집 결과 또는 Convex 전체
+          if (socialData) return socialData.posts;
+          return socialPostsFiltered as any[];
+        })();
+
+        const platformIcon = (p: string) => {
+          if (p === "twitter" || p === "X")      return "𝕏";
+          if (p === "instagram" || p === "Instagram") return "IG";
+          if (p === "naver_blog" || p === "Naver Blog") return "N";
+          return p.slice(0, 2).toUpperCase();
+        };
+        const platformColor = (p: string) => {
+          if (p === "twitter" || p === "X")      return "bg-gray-900 text-white";
+          if (p === "instagram" || p === "Instagram") return "bg-gradient-to-r from-purple-500 to-pink-500 text-white";
+          if (p === "naver_blog" || p === "Naver Blog") return "bg-green-600 text-white";
+          return "bg-gray-200 text-gray-700";
+        };
+
+        return (
+          <div className="flex flex-col gap-5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+
+            {/* ── 저장된 키워드 탭 + 추가 ── */}
+            <GlassCard className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <Hash className="w-4 h-4 text-blue-500" /> 키워드 관리
+                </h3>
               </div>
-              {/* 플랫폼 선택 */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 mb-1 block">플랫폼</label>
-                <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
-                  {([
-                    { key: "all"       as const, label: "전체" },
-                    { key: "twitter"   as const, label: "𝕏" },
-                    { key: "instagram" as const, label: "IG" },
-                  ]).map(p => (
+              {/* 저장된 키워드 탭 */}
+              <div className="flex items-center gap-2 flex-wrap mb-3">
+                <button
+                  onClick={() => { setSelectedKw(null); setSocialData(null); }}
+                  className={cn("text-xs px-3 py-1.5 rounded-full border transition-colors",
+                    selectedKw === null && !socialData ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-600 border-gray-200 hover:border-gray-400"
+                  )}>
+                  + 새 검색
+                </button>
+                {(kwList as any[]).map((kw: any) => (
+                  <div key={kw._id} className="flex items-center gap-1 group">
                     <button
-                      key={p.key}
-                      onClick={() => setSocialPlatform(p.key)}
-                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap ${
-                        socialPlatform === p.key ? "bg-white shadow-sm text-gray-900" : "text-gray-500"
-                      }`}
-                    >
-                      {p.label}
+                      onClick={() => { setSelectedKw(selectedKw === kw.keyword ? null : kw.keyword); setSocialData(null); }}
+                      className={cn("text-xs px-3 py-1.5 rounded-full border transition-colors flex items-center gap-1",
+                        selectedKw === kw.keyword ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
+                      )}>
+                      <Hash className="w-2.5 h-2.5" />
+                      {kw.keyword}
+                      <span className="text-[9px] opacity-60">{(kw.platforms || []).map((p: string) => platformIcon(p)).join("·")}</span>
                     </button>
-                  ))}
-                </div>
+                    {isAdmin && (
+                      <button onClick={() => { deleteSocialKw({ keywordId: kw._id }); if (selectedKw === kw.keyword) setSelectedKw(null); }}
+                        className="text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
-              {/* 검색 버튼 */}
-              <button
-                onClick={runSocialCrawl}
-                disabled={socialLoading || !socialKeywords.trim()}
-                className="flex items-center gap-2 px-4 py-2 bg-fursys-red text-white rounded-lg text-xs font-semibold hover:bg-red-700 disabled:opacity-50 transition-colors h-9"
-              >
-                {socialLoading
-                  ? <><RefreshCw className="w-3 h-3 animate-spin" /> 수집 중...</>
-                  : <><Target className="w-3 h-3" /> 크롤링</>
-                }
-              </button>
-            </div>
-            {/* 에러 */}
-            {socialError && (
-              <div className="mt-3 p-3 bg-red-50 border border-red-100 rounded-lg">
-                <p className="text-xs text-red-700 whitespace-pre-line">{socialError}</p>
+              {/* 키워드 추가 */}
+              {isAdmin && (
+                <div className="flex gap-2 pt-2 border-t border-gray-100">
+                  <Input
+                    placeholder="새 키워드 입력 (예: 퍼시스, #FURSYS)"
+                    value={newKwInput}
+                    onChange={e => setNewKwInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && newKwInput.trim()) { addSocialKw({ campaignId, keyword: newKwInput.trim(), platforms: newKwPlatforms }); setNewKwInput(""); }}}
+                    className="h-8 text-xs flex-1"
+                  />
+                  <div className="flex gap-1">
+                    {(["X", "Instagram", "Naver Blog"] as const).map(p => (
+                      <button key={p} type="button"
+                        onClick={() => setNewKwPlatforms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
+                        className={cn("text-[10px] px-2 py-1 rounded border transition-colors whitespace-nowrap",
+                          newKwPlatforms.includes(p) ? "bg-blue-600 text-white border-blue-600" : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
+                        )}>
+                        {platformIcon(p)} {p === "Naver Blog" ? "Naver" : p}
+                      </button>
+                    ))}
+                  </div>
+                  <Button size="sm" className="h-8 bg-blue-600 hover:bg-blue-700 text-white gap-1 px-3 shrink-0"
+                    onClick={() => { if (newKwInput.trim()) { addSocialKw({ campaignId, keyword: newKwInput.trim(), platforms: newKwPlatforms }); setNewKwInput(""); }}}>
+                    <Plus className="w-3 h-3" /> 저장
+                  </Button>
+                </div>
+              )}
+            </GlassCard>
+
+            {/* ── 검색 설정 패널 ── */}
+            <GlassCard className="p-4">
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto_auto_auto] gap-3 items-end">
+                {/* 키워드 입력 (새 검색 or 저장 키워드 선택 시) */}
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">
+                    {selectedKw ? `"${selectedKw}" 게시물 검색` : "검색 키워드 (쉼표 구분)"}
+                  </label>
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder={selectedKw || "퍼시스, FURSYS, #언씬어워드"}
+                    value={selectedKw ?? socialKeywords}
+                    onChange={e => { if (!selectedKw) setSocialKeywords(e.target.value); }}
+                    readOnly={!!selectedKw}
+                  />
+                </div>
+                {/* 플랫폼 */}
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">플랫폼</label>
+                  <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+                    {([
+                      { key: "all"        as const, label: "전체" },
+                      { key: "twitter"    as const, label: "𝕏" },
+                      { key: "instagram"  as const, label: "IG" },
+                      { key: "naver_blog" as const, label: "N" },
+                    ]).map(p => (
+                      <button key={p.key} onClick={() => setSocialPlatform(p.key as any)}
+                        className={cn("px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all",
+                          socialPlatform === (p.key as any) ? "bg-white shadow-sm text-gray-900" : "text-gray-500"
+                        )}>
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* 기간 필터 */}
+                <div>
+                  <label className="text-xs font-semibold text-gray-600 mb-1 block">기간</label>
+                  <div className="flex items-center gap-1">
+                    <input type="date" value={kwDateFrom} onChange={e => setKwDateFrom(e.target.value)}
+                      className="border border-gray-200 rounded px-2 py-1.5 text-xs outline-none focus:border-blue-300 h-8" />
+                    <span className="text-gray-400 text-xs">~</span>
+                    <input type="date" value={kwDateTo} onChange={e => setKwDateTo(e.target.value)}
+                      className="border border-gray-200 rounded px-2 py-1.5 text-xs outline-none focus:border-blue-300 h-8" />
+                  </div>
+                </div>
+                {/* 검색 버튼 */}
+                <button
+                  onClick={runSocialCrawl}
+                  disabled={socialLoading || (!socialKeywords.trim() && !selectedKw)}
+                  className="flex items-center gap-2 px-4 py-2 bg-fursys-red text-white rounded-lg text-xs font-semibold hover:bg-red-700 disabled:opacity-50 transition-colors h-8">
+                  {socialLoading ? <><RefreshCw className="w-3 h-3 animate-spin" /> 수집 중...</> : <><Search className="w-3 h-3" /> 검색</>}
+                </button>
+                {/* 결과 저장 */}
+                {isAdmin && socialData && socialData.posts.length > 0 && (
+                  <Button size="sm" className="h-8 bg-blue-600 hover:bg-blue-700 text-white gap-1 px-3"
+                    onClick={async () => {
+                      const kw = selectedKw || (socialData.keywords?.[0] ?? socialKeywords.split(/[,\s]/)[0].trim());
+                      if (!kw) return;
+                      await upsertSocialPosts({ campaignId, keyword: kw, posts: socialData.posts.map((p: any) => ({
+                        platform: p.platform || "unknown",
+                        postUrl: p.url || "",
+                        text: p.text || "",
+                        author: p.author || "",
+                        authorHandle: p.authorHandle || undefined,
+                        date: p.date?.slice(0, 10) || "",
+                        likes: p.likes || 0,
+                        replies: p.comments || 0,
+                        reposts: p.reposts || undefined,
+                        views: undefined,
+                        thumbnailUrl: p.thumbnailUrl || undefined,
+                      }))});
+                      // 키워드 없으면 자동 저장
+                      if (!(kwList as any[]).find((k: any) => k.keyword === kw)) {
+                        await addSocialKw({ campaignId, keyword: kw, platforms: [socialPlatform === "all" ? "X" : socialPlatform] });
+                      }
+                      setSelectedKw(kw);
+                      setSocialData(null);
+                    }}>
+                    <Check className="w-3 h-3" /> 키워드로 저장
+                  </Button>
+                )}
+              </div>
+              {socialError && <p className="mt-2 text-xs text-red-600">{socialError}</p>}
+            </GlassCard>
+
+            {/* ── 게시물 목록 ── */}
+            {displayPosts.length > 0 && (() => {
+              const twPosts = displayPosts.filter((p: any) => p.platform === "twitter" || p.platform === "X");
+              const igPosts = displayPosts.filter((p: any) => p.platform === "instagram" || p.platform === "Instagram");
+              const nbPosts = displayPosts.filter((p: any) => p.platform === "naver_blog" || p.platform === "Naver Blog");
+              const posCount = displayPosts.filter((p: any) => classifySocialSentiment(p.text) === "positive").length;
+              return (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {[
+                      { label: "총 게시물",  value: displayPosts.length, sub: selectedKw ? `키워드: ${selectedKw}` : (socialData?.fetchedAt?.slice(0,10) || "") },
+                      { label: "𝕏 Twitter",  value: twPosts.length,   sub: `좋아요 ${twPosts.reduce((s:number,p:any)=>s+(p.likes||0),0).toLocaleString()}` },
+                      { label: "Instagram",  value: igPosts.length,   sub: `좋아요 ${igPosts.reduce((s:number,p:any)=>s+(p.likes||0),0).toLocaleString()}` },
+                      { label: "Naver Blog", value: nbPosts.length,   sub: `긍정 ${Math.round(posCount/displayPosts.length*100)}%` },
+                    ].map((kpi, i) => (
+                      <GlassCard key={i} className="p-4">
+                        <p className="text-xs text-gray-500 mb-1">{kpi.label}</p>
+                        <p className="text-2xl font-bold text-gray-900">{kpi.value.toLocaleString()}</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">{kpi.sub}</p>
+                      </GlassCard>
+                    ))}
+                  </div>
+                  <GlassCard className="p-0 overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+                      <h3 className="text-sm font-bold text-gray-900">게시물 목록</h3>
+                      {socialData && (
+                        <button onClick={() => { setSocialData(null); localStorage.removeItem(SOCIAL_LS_KEY); }}
+                          className="text-xs text-gray-400 hover:text-red-500">초기화</button>
+                      )}
+                    </div>
+                    <div className="divide-y divide-gray-50 max-h-[560px] overflow-y-auto">
+                      {displayPosts.map((post: any, i: number) => {
+                        const sentiment = classifySocialSentiment(post.text);
+                        return (
+                          <div key={i} className="flex gap-3 px-5 py-4 hover:bg-gray-50/70">
+                            <div className="w-8 h-8 rounded-full bg-gray-100 overflow-hidden flex-shrink-0 flex items-center justify-center">
+                              {post.thumbnailUrl
+                                ? <img src={post.thumbnailUrl} alt="" className="w-full h-full object-cover" />
+                                : <span className="text-[10px] font-bold text-gray-500">{platformIcon(post.platform)}</span>
+                              }
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                <span className="text-xs font-semibold text-gray-900 truncate">{post.author || post.authorHandle}</span>
+                                {post.authorHandle && post.authorHandle !== post.author && <span className="text-[10px] text-gray-400">@{post.authorHandle}</span>}
+                                <span className={cn("text-[9px] px-1.5 py-0.5 rounded-full font-medium shrink-0", platformColor(post.platform))}>
+                                  {platformIcon(post.platform)} {post.platform === "naver_blog" ? "Naver" : post.platform}
+                                </span>
+                                <span className={cn("text-[9px] px-1.5 py-0.5 rounded-full ml-auto shrink-0",
+                                  sentiment === "positive" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-500"
+                                )}>{sentiment === "positive" ? "😊" : "😞"}</span>
+                              </div>
+                              {(post.title || post.text) && (
+                                <p className="text-xs text-gray-700 leading-snug line-clamp-2">{post.title || post.text}</p>
+                              )}
+                              <div className="flex items-center gap-3 mt-1.5 text-[10px] text-gray-400 flex-wrap">
+                                {post.date && <span className="font-mono">{post.date.slice(0, 10)}</span>}
+                                {(post.likes || 0) > 0 && <span>❤️ {post.likes.toLocaleString()}</span>}
+                                {(post.comments || post.replies || 0) > 0 && <span>💬 {(post.comments || post.replies || 0).toLocaleString()}</span>}
+                                {(post.reposts || 0) > 0 && <span>🔁 {post.reposts.toLocaleString()}</span>}
+                                {(post.url || post.postUrl) && (
+                                  <a href={post.url || post.postUrl} target="_blank" rel="noopener noreferrer"
+                                    className="ml-auto hover:text-fursys-red flex items-center gap-0.5">
+                                    <ExternalLink className="w-3 h-3" /> 원문
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </GlassCard>
+                </>
+              );
+            })()}
+
+            {!socialLoading && displayPosts.length === 0 && (
+              <div className="flex flex-col items-center py-16 text-gray-400 gap-3">
+                <Target className="w-8 h-8 opacity-30" />
+                <p className="text-sm font-medium">
+                  {selectedKw ? `"${selectedKw}" 저장된 게시물이 없습니다. 검색 후 저장해 주세요.` : "키워드를 입력하고 검색하세요"}
+                </p>
+                <p className="text-xs text-gray-300">X · Instagram · 네이버블로그에서 캠페인 키워드를 수집합니다</p>
               </div>
             )}
-            {/* 환경변수 안내 */}
-            <div className="mt-3 p-3 bg-blue-50 border border-blue-100 rounded-lg text-xs text-blue-700">
-              <p className="font-semibold mb-1">🔑 크롤링 사용 설정</p>
-              <p>• <span className="font-mono bg-blue-100 px-1 rounded">APIFY_API_TOKEN</span> — X·Instagram 크롤링 (Apify 계정 필요, 무료 $5 크레딧 포함)</p>
-              <p>• <span className="font-mono bg-blue-100 px-1 rounded">TWITTER_BEARER_TOKEN</span> — X 공식 API (Basic 플랜 $100/월, 무료 500건/월)</p>
-              <p className="mt-1 text-blue-500">.env.local 파일에 추가 후 재시작하세요.</p>
-            </div>
           </div>
-
-          {/* 결과 */}
-          {socialData && socialData.posts.length > 0 && (() => {
-            const posts = socialData.posts;
-            const posCount = posts.filter(p => classifySocialSentiment(p.text) === "positive").length;
-            const posRate  = Math.round((posCount / posts.length) * 100);
-            const twPosts  = posts.filter(p => p.platform === "twitter");
-            const igPosts  = posts.filter(p => p.platform === "instagram");
-
-            return (
-              <>
-                {/* KPI 요약 */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {[
-                    { label: "총 수집 게시물",   value: posts.length.toLocaleString(),    sub: `최종 수집: ${socialData.fetchedAt?.slice(0, 10) || "-"}` },
-                    { label: "𝕏 게시물",         value: twPosts.length.toLocaleString(),  sub: `좋아요 ${twPosts.reduce((s, p) => s + (p.likes || 0), 0).toLocaleString()}` },
-                    { label: "인스타그램 게시물", value: igPosts.length.toLocaleString(),  sub: `좋아요 ${igPosts.reduce((s, p) => s + (p.likes || 0), 0).toLocaleString()}` },
-                    { label: "긍정 반응 비율",    value: `${posRate}%`,                    sub: `부정 ${100 - posRate}%` },
-                  ].map((kpi, i) => (
-                    <div key={i} className="bg-white border border-gray-200 rounded-xl p-4">
-                      <p className="text-xs text-gray-500 mb-1">{kpi.label}</p>
-                      <p className="text-2xl font-bold text-gray-900">{kpi.value}</p>
-                      <p className="text-[11px] text-gray-400 mt-0.5">{kpi.sub}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {/* 게시물 목록 */}
-                <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden shadow-sm">
-                  <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                    <h3 className="text-sm font-bold text-gray-900">수집된 게시물</h3>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-gray-400">키워드: {socialData.keywords?.join(", ")}</span>
-                      <button
-                        onClick={() => { setSocialData(null); localStorage.removeItem(SOCIAL_LS_KEY); }}
-                        className="text-xs text-gray-400 hover:text-red-500 underline"
-                      >초기화</button>
-                    </div>
-                  </div>
-                  <div className="divide-y divide-gray-50 max-h-[520px] overflow-y-auto">
-                    {posts.map((post: any, i: number) => {
-                      const sentiment = classifySocialSentiment(post.text);
-                      return (
-                        <div key={i} className="flex gap-4 px-5 py-4 hover:bg-gray-50 transition-colors">
-                          {/* 아바타 */}
-                          <div className="w-9 h-9 rounded-full bg-gray-100 overflow-hidden flex-shrink-0">
-                            {post.thumbnailUrl
-                              ? <img src={post.thumbnailUrl} alt="" className="w-full h-full object-cover" />
-                              : <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs font-bold">
-                                  {post.platform === "twitter" ? "𝕏" : "IG"}
-                                </div>
-                            }
-                          </div>
-                          {/* 본문 */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-xs font-semibold text-gray-900 truncate">{post.author}</span>
-                              {post.authorHandle && (
-                                <span className="text-[10px] text-gray-400">@{post.authorHandle}</span>
-                              )}
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ml-auto flex-shrink-0 ${
-                                sentiment === "positive" ? "bg-green-50 text-green-600" : "bg-red-50 text-red-600"
-                              }`}>
-                                {sentiment === "positive" ? "😊 긍정" : "😞 부정"}
-                              </span>
-                            </div>
-                            <p className="text-xs text-gray-700 leading-relaxed line-clamp-3">{post.text}</p>
-                            <div className="flex items-center gap-3 mt-2 text-[10px] text-gray-400">
-                              {post.date && <span>{post.date.slice(0, 10)}</span>}
-                              {post.likes  > 0 && <span>❤️ {post.likes.toLocaleString()}</span>}
-                              {post.comments > 0 && <span>💬 {post.comments.toLocaleString()}</span>}
-                              {post.reposts  > 0 && <span>🔁 {post.reposts.toLocaleString()}</span>}
-                              {post.url && (
-                                <a href={post.url} target="_blank" rel="noopener noreferrer"
-                                  className="ml-auto hover:text-fursys-red flex items-center gap-0.5">
-                                  <ArrowUpRight className="w-3 h-3" /> 원문
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
-            );
-          })()}
-
-          {socialData && socialData.posts.length === 0 && (
-            <div className="flex flex-col items-center py-12 text-gray-400 gap-2">
-              <MessageSquare className="w-8 h-8 opacity-30" />
-              <p className="text-sm">수집된 게시물이 없습니다. 키워드나 플랫폼을 변경해보세요.</p>
-            </div>
-          )}
-
-          {!socialData && !socialLoading && (
-            <div className="flex flex-col items-center py-16 text-gray-400 gap-3">
-              <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center">
-                <Target className="w-6 h-6 opacity-40" />
-              </div>
-              <p className="text-sm font-medium">키워드를 입력하고 크롤링을 시작하세요</p>
-              <p className="text-xs text-gray-300">X(트위터), 인스타그램에서 해당 키워드 언급을 수집하고<br />감성 분석 결과를 제공합니다</p>
-            </div>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── 항목 편집 모달 (두 가지 설정: 뷰어 노출 + 기본 체크) ── */}
       {isAdmin && showItemEditPanel && (

@@ -184,37 +184,62 @@ export async function POST(req: Request) {
         throw new Error("인스타그램 데이터를 찾을 수 없습니다.");
       }
     } else if (url.includes("twitter.com") || url.includes("x.com")) {
-      if (!process.env.APIFY_API_TOKEN) {
-        return NextResponse.json({ error: "APIFY_API_TOKEN 환경 변수가 없어서 X/Twitter 스크랩을 할 수 없습니다." }, { status: 500 });
+      // 트윗 ID 추출
+      const tweetIdMatch = url.match(/\/status\/(\d+)/);
+      const tweetId = tweetIdMatch?.[1];
+
+      // ① Twitter API v2 (Bearer Token 있을 때 우선)
+      if (tweetId && process.env.TWITTER_BEARER_TOKEN) {
+        try {
+          const apiUrl = `https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=name,username,profile_image_url`;
+          const res = await fetch(apiUrl, {
+            headers: { Authorization: `Bearer ${process.env.TWITTER_BEARER_TOKEN}` },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const tweet = data.data;
+            const user = data.includes?.users?.[0];
+            stats.views    = tweet?.public_metrics?.impression_count || 0;
+            stats.likes    = tweet?.public_metrics?.like_count       || 0;
+            stats.comments = tweet?.public_metrics?.reply_count      || 0;
+            stats.title    = user ? `@${user.username}` : "-";
+            if (tweet?.created_at) stats.date = tweet.created_at.slice(0, 10);
+            stats.thumbnailUrl = user?.profile_image_url || undefined;
+          }
+        } catch (e: any) {
+          console.warn("[X/Twitter API]", e.message);
+        }
       }
-      // oEmbed로 먼저 기본 정보 취득 (무료, 공개)
-      try {
-        const oembed = await fetch(`https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`);
-        if (oembed.ok) {
-          const data = await oembed.json();
-          stats.title = data.author_name ? `@${data.author_name}` : "-";
+      // ② Apify apidojo/tweet-scraper 폴백
+      if (stats.likes === 0 && stats.views === 0 && process.env.APIFY_API_TOKEN) {
+        try {
+          const run = await apifyClient.actor("apidojo/tweet-scraper").call({
+            searchTerms: [tweetId ? `conversation_id:${tweetId}` : url],
+            maxItems: 1,
+            queryType: "Latest",
+          }, { waitSecs: 60 });
+          const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
+          if (items?.length > 0) {
+            const item: any = items[0];
+            stats.views    = item.viewCount      || item.views          || 0;
+            stats.likes    = item.likeCount      || item.favorite_count || 0;
+            stats.comments = item.replyCount     || item.reply_count    || 0;
+            const uname = item.author?.userName  || item.user?.screen_name || "";
+            if (uname) stats.title = `@${uname}`;
+            const dt = item.createdAt || item.created_at;
+            if (dt) stats.date = new Date(dt).toISOString().slice(0, 10);
+            stats.thumbnailUrl = item.author?.profileImageUrl || item.user?.profile_image_url || undefined;
+          }
+        } catch (e: any) {
+          console.warn("[X/Twitter Apify]", e.message);
         }
-      } catch {}
-      // Apify Twitter 스크래퍼로 상세 지표 수집
-      try {
-        const run = await apifyClient.actor("quacker/twitter-scraper").call({
-          startUrls: [{ url }],
-          maxItems: 1,
-          addUserInfo: false,
-        }, { waitSecs: 60 });
-        const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
-        if (items && items.length > 0) {
-          const item: any = items[0];
-          stats.views    = item.viewCount      || item.impressionCount || 0;
-          stats.likes    = item.likeCount      || item.favoriteCount   || 0;
-          stats.comments = item.replyCount     || 0;
-          stats.title    = item.author?.name   ? `@${item.author.name}` : (stats.title || "-");
-          if (item.createdAt) stats.date = new Date(item.createdAt).toISOString().split("T")[0];
-          stats.thumbnailUrl = item.author?.profileImageUrl || undefined;
-        }
-      } catch (e: any) {
-        console.warn("[X/Twitter] Apify 스크랩 실패:", e.message);
-        // Apify 실패 시 기본값(title만) 유지
+      }
+      // ③ 최소한 oEmbed로 작성자명이라도 표시
+      if (!stats.title || stats.title === "-") {
+        try {
+          const oe = await fetch(`https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`);
+          if (oe.ok) { const d = await oe.json(); stats.title = d.author_name ? `@${d.author_name}` : "-"; }
+        } catch {}
       }
     } else if (url.includes("blog.naver.com")) {
       stats = await fetchNaverBlogStats(url);
