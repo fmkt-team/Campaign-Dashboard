@@ -811,7 +811,7 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
             <Button
               size="sm"
               disabled={!naverUrl.trim() || crawling || extractingKw}
-              onClick={crawl}
+              onClick={() => crawl()}
               className="bg-green-600 text-white hover:bg-green-700 border-0 gap-1.5 px-4 shrink-0"
             >
               {crawling
