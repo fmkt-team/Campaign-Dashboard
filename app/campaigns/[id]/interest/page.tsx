@@ -1641,7 +1641,7 @@ export default function InterestPage() {
 
     const generalRes: {date: string; count: number; people: number}[] = [];
     const vipRes: {date: string; count: number; people: number}[] = [];
-    const visitorRows_: {date: string; actual: number; vipActual: number}[] = [];
+    const visitorRows_: {date: string; actual: number; vipActual: number; actualCount: number}[] = [];
 
     // "건수 / 인원" 형태로 한 셀에 입력된 수치를 분리하는 헬퍼 함수
     const parseSlashValue = (val: string) => {
