@@ -560,10 +560,14 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
   const [reviewTab, setReviewTab] = useState<"visitor" | "blog">("visitor");
   const [blogPosts, setBlogPosts] = useState<null | {
     total: number;
-    posts: { id: string; title: string; text: string; blogName: string; url: string; thumbnailUrl: string; date: string }[];
+    posts: { id: string; title: string; text: string; blogName: string; url: string; thumbnailUrl: string; date: string; manual?: boolean }[];
     source?: string;
     searchQuery?: string;
   }>(null);
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [addLinkUrl, setAddLinkUrl] = useState("");
+  const [addLinkLoading, setAddLinkLoading] = useState(false);
+  const [addLinkPreview, setAddLinkPreview] = useState<{ title: string; text: string; thumbnailUrl: string; blogName: string; date: string } | null>(null);
   const BLOG_DATA_LS_KEY = `naverBlogData_${analyzerCampaignId}`;
   const [analyzed, setAnalyzed] = useState<null | {
     total: number;
@@ -743,6 +747,44 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
     setPasteText("");
   };
 
+  const fetchLinkPreview = async (url: string) => {
+    if (!url.trim()) return;
+    setAddLinkLoading(true);
+    setAddLinkPreview(null);
+    try {
+      const res = await fetch(`/api/fetch-og?url=${encodeURIComponent(url.trim())}`);
+      const data = await res.json();
+      setAddLinkPreview({
+        title: data.title || url,
+        text: data.text || "",
+        thumbnailUrl: data.thumbnailUrl || "",
+        blogName: data.blogName || new URL(url).hostname.replace("www.", ""),
+        date: data.date || "",
+      });
+    } catch {
+      setAddLinkPreview({ title: url, text: "", thumbnailUrl: "", blogName: "", date: "" });
+    } finally {
+      setAddLinkLoading(false);
+    }
+  };
+
+  const confirmAddLink = () => {
+    if (!addLinkPreview) return;
+    const newPost = {
+      id: addLinkUrl.trim(),
+      url: addLinkUrl.trim(),
+      ...addLinkPreview,
+      manual: true,
+    };
+    const updated = blogPosts
+      ? { ...blogPosts, posts: [newPost, ...blogPosts.posts], total: blogPosts.total + 1 }
+      : { posts: [newPost], total: 1, source: "manual" };
+    setBlogPosts(updated);
+    setAddLinkUrl("");
+    setAddLinkPreview(null);
+    setShowAddLink(false);
+  };
+
   return (
     <GlassCard className="p-6">
       {/* 헤더 */}
@@ -920,18 +962,119 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
         </div>
       )}
 
-      {reviewTab === "blog" && !blogPosts && !showPasteArea && (
+      {reviewTab === "blog" && !blogPosts && !showPasteArea && !showAddLink && (
         <div className="flex flex-col items-center justify-center py-10 gap-3">
           <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center">
             <ArrowUpRight className="w-5 h-5 text-blue-400" />
           </div>
           <p className="text-sm text-gray-400 text-center">위 URL을 입력하고 블로그 리뷰 크롤링을 시작하세요</p>
+          <button
+            onClick={() => setShowAddLink(true)}
+            className="text-xs text-blue-500 hover:text-blue-700 underline underline-offset-2"
+          >
+            + 블로그 링크 직접 추가
+          </button>
+        </div>
+      )}
+
+      {/* 블로그 링크 수동 추가 */}
+      {reviewTab === "blog" && showAddLink && (
+        <div className="mb-4 bg-blue-50 border border-blue-100 rounded-xl p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-blue-800">블로그 링크 추가</span>
+            <button onClick={() => { setShowAddLink(false); setAddLinkUrl(""); setAddLinkPreview(null); }}
+              className="text-gray-400 hover:text-gray-600">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="flex-1 bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-blue-400 placeholder:text-gray-400"
+              placeholder="블로그 URL 붙여넣기 (예: https://blog.naver.com/...)"
+              value={addLinkUrl}
+              onChange={e => { setAddLinkUrl(e.target.value); setAddLinkPreview(null); }}
+              onKeyDown={e => e.key === "Enter" && fetchLinkPreview(addLinkUrl)}
+            />
+            <Button size="sm"
+              disabled={!addLinkUrl.trim() || addLinkLoading}
+              onClick={() => fetchLinkPreview(addLinkUrl)}
+              className="bg-blue-600 text-white hover:bg-blue-700 border-0 shrink-0 gap-1.5 px-3"
+            >
+              {addLinkLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : "미리보기"}
+            </Button>
+          </div>
+          {addLinkPreview && (
+            <div className="bg-white border border-blue-100 rounded-lg p-3 flex gap-3 items-start">
+              {addLinkPreview.thumbnailUrl && (
+                <img src={addLinkPreview.thumbnailUrl} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-gray-900 line-clamp-2 mb-1">{addLinkPreview.title}</p>
+                {addLinkPreview.text && <p className="text-[11px] text-gray-500 line-clamp-2">{addLinkPreview.text}</p>}
+                <div className="flex items-center gap-2 mt-1">
+                  {addLinkPreview.blogName && <span className="text-[10px] text-blue-600">{addLinkPreview.blogName}</span>}
+                  {addLinkPreview.date && <span className="text-[10px] text-gray-400">{addLinkPreview.date}</span>}
+                </div>
+              </div>
+              <Button size="sm" onClick={confirmAddLink}
+                className="bg-blue-600 text-white hover:bg-blue-700 border-0 shrink-0 text-xs px-3">
+                추가
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
       {/* 블로그 리뷰 목록 */}
       {reviewTab === "blog" && blogPosts && blogPosts.posts.length > 0 && (
         <>
+          {/* 목록이 있을 때 링크 추가 폼 */}
+          {showAddLink && (
+            <div className="mb-4 bg-blue-50 border border-blue-100 rounded-xl p-4 flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-blue-800">블로그 링크 추가</span>
+                <button onClick={() => { setShowAddLink(false); setAddLinkUrl(""); setAddLinkPreview(null); }}
+                  className="text-gray-400 hover:text-gray-600">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-blue-400 placeholder:text-gray-400"
+                  placeholder="블로그 URL 붙여넣기 (예: https://blog.naver.com/...)"
+                  value={addLinkUrl}
+                  onChange={e => { setAddLinkUrl(e.target.value); setAddLinkPreview(null); }}
+                  onKeyDown={e => e.key === "Enter" && fetchLinkPreview(addLinkUrl)}
+                />
+                <Button size="sm"
+                  disabled={!addLinkUrl.trim() || addLinkLoading}
+                  onClick={() => fetchLinkPreview(addLinkUrl)}
+                  className="bg-blue-600 text-white hover:bg-blue-700 border-0 shrink-0 gap-1.5 px-3"
+                >
+                  {addLinkLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : "미리보기"}
+                </Button>
+              </div>
+              {addLinkPreview && (
+                <div className="bg-white border border-blue-100 rounded-lg p-3 flex gap-3 items-start">
+                  {addLinkPreview.thumbnailUrl && (
+                    <img src={addLinkPreview.thumbnailUrl} alt="" className="w-16 h-16 object-cover rounded shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-gray-900 line-clamp-2 mb-1">{addLinkPreview.title}</p>
+                    {addLinkPreview.text && <p className="text-[11px] text-gray-500 line-clamp-2">{addLinkPreview.text}</p>}
+                    <div className="flex items-center gap-2 mt-1">
+                      {addLinkPreview.blogName && <span className="text-[10px] text-blue-600">{addLinkPreview.blogName}</span>}
+                      {addLinkPreview.date && <span className="text-[10px] text-gray-400">{addLinkPreview.date}</span>}
+                    </div>
+                  </div>
+                  <Button size="sm" onClick={confirmAddLink}
+                    className="bg-blue-600 text-white hover:bg-blue-700 border-0 shrink-0 text-xs px-3">
+                    추가
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
           <div className="flex items-center justify-between mb-3">
             <h5 className="text-xs font-bold text-gray-700">
               블로그 리뷰 목록
@@ -940,25 +1083,50 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
                 <span className="ml-2 text-[10px] text-blue-500 font-normal">검색어: &quot;{blogPosts.searchQuery}&quot;</span>
               )}
             </h5>
-            <button className="text-[10px] text-gray-400 hover:text-gray-600 underline" onClick={reset}>다시 불러오기</button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => { setShowAddLink(v => !v); setAddLinkUrl(""); setAddLinkPreview(null); }}
+                className="text-[10px] text-blue-500 hover:text-blue-700 flex items-center gap-0.5"
+              >
+                + 링크 추가
+              </button>
+              <button className="text-[10px] text-gray-400 hover:text-gray-600 underline" onClick={reset}>다시 불러오기</button>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
             {blogPosts.posts.map((post, i) => (
-              <div key={i} className="bg-white border border-gray-100 hover:border-blue-200 transition-colors shadow-sm rounded-xl overflow-hidden flex flex-col">
+              <div key={i} className={`bg-white border shadow-sm rounded-xl overflow-hidden flex flex-col transition-colors ${post.manual ? "border-blue-200 hover:border-blue-400" : "border-gray-100 hover:border-blue-200"}`}>
                 {post.thumbnailUrl && (
                   <div className="w-full h-28 bg-gray-100 overflow-hidden">
                     <img src={post.thumbnailUrl} alt={post.title} className="w-full h-full object-cover" />
                   </div>
                 )}
                 <div className="p-4 flex flex-col gap-2 flex-1">
-                  {post.title && (
-                    <h6 className="text-sm font-semibold text-gray-900 line-clamp-1">{post.title}</h6>
-                  )}
+                  <div className="flex items-start justify-between gap-2">
+                    {post.title && (
+                      <h6 className="text-sm font-semibold text-gray-900 line-clamp-1 flex-1">{post.title}</h6>
+                    )}
+                    {post.manual && (
+                      <button
+                        onClick={() => {
+                          const updated = { ...blogPosts, posts: blogPosts.posts.filter((_, j) => j !== i), total: blogPosts.total - 1 };
+                          setBlogPosts(updated);
+                        }}
+                        className="shrink-0 text-gray-300 hover:text-red-400 transition-colors"
+                        title="삭제"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                   {post.text && (
                     <p className="text-xs text-gray-600 line-clamp-3 leading-relaxed">{post.text}</p>
                   )}
                   <div className="flex items-center justify-between mt-auto pt-2 border-t border-gray-50">
-                    <span className="text-[10px] text-blue-600 font-medium">{post.blogName}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-blue-600 font-medium">{post.blogName}</span>
+                      {post.manual && <span className="text-[9px] bg-blue-50 text-blue-400 px-1 py-0.5 rounded">수동</span>}
+                    </div>
                     <div className="flex items-center gap-2">
                       {post.date && <span className="text-[10px] text-gray-400 font-mono">{post.date.slice(0, 10)}</span>}
                       {post.url && (
