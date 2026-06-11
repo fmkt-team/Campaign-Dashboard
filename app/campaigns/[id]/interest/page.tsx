@@ -1714,19 +1714,18 @@ export default function InterestPage() {
 
       // 듀얼/싱글 컬럼에 따라 건수와 명수를 읽는 헬퍼
       const readCountPeople = (row: string[], col: number) => {
-        // 날짜 형식("6/18", "6.18" 등)은 데이터가 아닌 헤더 텍스트 → 0 처리
+        // 날짜 형식("6/18" 등) 또는 숫자로 시작하지 않는 셀(설치, 철거, D-1 등)은 0 처리
         const isDateLike = (s: string) => /^\d{1,2}[\/\.]\d{1,2}/.test(s.trim());
+        const isNumericCell = (s: string) => s.trim() === "" || /^\d/.test(s.trim());
         if (isDualCol) {
-          // 듀얼 컬럼: col=건수, col+1=명수
           const raw = row[col] || "";
           const raw2 = row[col + 1] || "";
-          const count = isDateLike(raw) ? 0 : processNumber(raw);
-          const people = isDateLike(raw2) ? 0 : processNumber(raw2);
+          const count = (isDateLike(raw) || !isNumericCell(raw)) ? 0 : processNumber(raw);
+          const people = (isDateLike(raw2) || !isNumericCell(raw2)) ? 0 : processNumber(raw2);
           return { count, people };
         }
-        // 싱글 컬럼: 기존 parseSlashValue 방식
         const raw = row[col] || "";
-        return isDateLike(raw) ? { count: 0, people: 0 } : parseSlashValue(raw);
+        return (isDateLike(raw) || !isNumericCell(raw)) ? { count: 0, people: 0 } : parseSlashValue(raw);
       };
 
       // 일반 예약
