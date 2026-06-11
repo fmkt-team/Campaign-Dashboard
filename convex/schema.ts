@@ -221,4 +221,30 @@ export default defineSchema({
     expiresAt: v.number(),
     createdBy: v.string(),
   }).index("by_token", ["token"]),
+
+  socialKeywords: defineTable({
+    campaignId: v.id("campaigns"),
+    keyword: v.string(),
+    platforms: v.array(v.string()),
+    createdAt: v.number(),
+  }).index("by_campaign", ["campaignId"]),
+
+  socialPosts: defineTable({
+    campaignId: v.id("campaigns"),
+    keyword: v.string(),
+    platform: v.string(),
+    postUrl: v.string(),
+    text: v.string(),
+    author: v.string(),
+    authorHandle: v.optional(v.string()),
+    date: v.string(),
+    likes: v.number(),
+    replies: v.number(),
+    reposts: v.optional(v.number()),
+    views: v.optional(v.number()),
+    thumbnailUrl: v.optional(v.string()),
+    fetchedAt: v.number(),
+  })
+    .index("by_campaign", ["campaignId"])
+    .index("by_campaign_keyword", ["campaignId", "keyword"]),
 });
