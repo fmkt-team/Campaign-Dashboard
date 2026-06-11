@@ -1807,7 +1807,6 @@ export default function AwarenessPage() {
     { key: "media"  as ActiveTab, label: "매체 퍼포먼스" },
     { key: "video"  as ActiveTab, label: "캠페인 광고 영상" },
     { key: "viral"  as ActiveTab, label: "바이럴 컨텐츠 성과" },
-    { key: "social" as ActiveTab, label: "소셜 키워드 분석" },
   ];
 
   // ── 소셜 크롤링 실행 ─────────────────────────────────────────
