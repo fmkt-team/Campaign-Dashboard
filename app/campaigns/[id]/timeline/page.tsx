@@ -541,10 +541,19 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
       : interestActivities
           .filter((r: any) => r.activityType !== "팝업" && r.activityType !== "팝업일별데이터")
           .reduce((s: number, r: any) => s + (r.participants || 0), 0),
-    // 3) 팝업스토어 집객: 흥미 상세 중 팝업 활동의 participants 합산
-    popup: interestActivities
-      .filter((r: any) => r.activityType === "팝업" || r.activityType === "팝업일별데이터")
-      .reduce((s: number, r: any) => s + (r.participants || 0), 0),
+    // 3) 팝업스토어 집객: 실제 방문객 수 (actualVisitCount + vipActualVisitCount), 없으면 participants 폴백
+    popup: (() => {
+      const popupRows = interestActivities.filter(
+        (r: any) => r.activityType === "팝업" || r.activityType === "팝업일별데이터"
+      );
+      const actualTotal = popupRows.reduce(
+        (s: number, r: any) => s + (r.actualVisitCount ?? 0) + (r.vipActualVisitCount ?? 0),
+        0
+      );
+      return actualTotal > 0
+        ? actualTotal
+        : popupRows.reduce((s: number, r: any) => s + (r.participants || 0), 0);
+    })(),
     // 4) 마이크로사이트 유입: 캠페인 전체 기간 GA4 세션 수 (직접 fetch, 날짜 필터와 독립)
     microsite: micrositeKpiSessions ?? 0,
   };
