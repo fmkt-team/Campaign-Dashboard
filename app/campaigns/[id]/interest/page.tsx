@@ -553,7 +553,6 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
   const [urlSaved, setUrlSaved] = useState(false);
   const [crawling, setCrawling] = useState(false);
   const [crawlError, setCrawlError] = useState("");
-  const [blogSearchQuery, setBlogSearchQuery] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [showPasteArea, setShowPasteArea] = useState(false);
   const [extractingKw, setExtractingKw] = useState(false);
@@ -647,7 +646,7 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
       const res = await fetch("/api/naver-reviews", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: naverUrl.trim(), reviewType: type, searchQuery: type === "blog" ? blogSearchQuery.trim() : undefined }),
+        body: JSON.stringify({ url: naverUrl.trim(), reviewType: type }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -852,20 +851,6 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
               <ExternalLink className="w-3 h-3" />
             </Button>
           )}
-        </div>
-      )}
-
-      {/* 블로그 검색어 입력 (블로그 탭 전용) */}
-      {reviewTab === "blog" && (
-        <div className="mb-3 flex items-center gap-2">
-          <span className="text-[11px] text-gray-500 shrink-0">검색어</span>
-          <input
-            className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 outline-none focus:border-blue-400 placeholder:text-gray-400"
-            placeholder="장소명 또는 검색 키워드 (예: 퍼시스 팝업 성수) — 비워두면 자동 감지"
-            value={blogSearchQuery}
-            onChange={e => setBlogSearchQuery(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && crawl("blog")}
-          />
         </div>
       )}
 

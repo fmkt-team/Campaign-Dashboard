@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ApifyClient } from "apify-client";
+import { request as httpsRequest } from "node:https";
+import { request as httpRequest } from "node:http";
+import { ProxyAgent } from "proxy-agent";
 
 export const maxDuration = 60;
-
-const apifyClient = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
 
 // ─── 장소 ID 추출 ──────────────────────────────────────────────────────
 function extractPlaceId(url: string): string | null {
@@ -22,38 +22,75 @@ function extractPlaceId(url: string): string | null {
   return null;
 }
 
-// ─── 장소명 추출 (블로그 검색 쿼리 생성용) ──────────────────────────
-async function fetchPlaceName(placeId: string): Promise<string> {
-  try {
-    const urls = [
-      `https://m.place.naver.com/place/${placeId}`,
-      `https://pcmap.place.naver.com/place/${placeId}`,
-    ];
-    for (const url of urls) {
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-          "Accept-Language": "ko-KR,ko;q=0.9",
-        },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) continue;
-      const html = await res.text();
+// ─── Apify 프록시 경유 HTTP 요청 ─────────────────────────────────────
+// Naver는 서버 IP를 차단하므로, Apify 한국 주거용 프록시를 경유
+async function fetchWithApifyProxy(
+  targetUrl: string,
+  options: { method?: string; headers?: Record<string, string>; body?: string }
+): Promise<{ ok: boolean; status: number; text: () => string }> {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) throw new Error("APIFY_API_TOKEN 없음");
 
-      // og:title 또는 <title> 에서 장소명 추출
-      const ogTitle = html.match(/<meta property="og:title" content="([^"]+)"/)?.[1];
-      if (ogTitle) return ogTitle.split(" : ")[0].trim();
+  // 한국 주거용 IP 우선, 없으면 자동 선택
+  const proxyUrls = [
+    `http://groups-RESIDENTIAL,country-KR:${token}@proxy.apify.com:8000`,
+    `http://groups-RESIDENTIAL:${token}@proxy.apify.com:8000`,
+    `http://auto:${token}@proxy.apify.com:8000`,
+  ];
 
-      const title = html.match(/<title[^>]*>([^<]+)<\/title>/)?.[1];
-      if (title) return title.split(" : ")[0].split(" - ")[0].trim();
+  let lastErr: Error = new Error("모든 프록시 실패");
+  for (const proxyUrl of proxyUrls) {
+    try {
+      const result = await new Promise<{ ok: boolean; status: number; body: string }>(
+        (resolve, reject) => {
+          const agent = new ProxyAgent(proxyUrl);
+          const url = new URL(targetUrl);
+          const isHttps = url.protocol === "https:";
+          const reqFn = isHttps ? httpsRequest : httpRequest;
+
+          const reqOptions = {
+            host: url.hostname,
+            port: url.port || (isHttps ? 443 : 80),
+            path: url.pathname + url.search,
+            method: options.method || "GET",
+            headers: {
+              "Content-Type": "application/json",
+              ...options.headers,
+            },
+            agent,
+            timeout: 30000,
+          };
+
+          const req = reqFn(reqOptions, (res) => {
+            let data = "";
+            res.on("data", (chunk) => (data += chunk));
+            res.on("end", () =>
+              resolve({ ok: (res.statusCode ?? 0) < 400, status: res.statusCode ?? 0, body: data })
+            );
+          });
+
+          req.on("error", reject);
+          req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+
+          if (options.body) req.write(options.body);
+          req.end();
+        }
+      );
+      if (result.ok) {
+        return { ok: true, status: result.status, text: () => result.body };
+      }
+      lastErr = new Error(`HTTP ${result.status}: ${result.body.slice(0, 200)}`);
+    } catch (e: any) {
+      lastErr = e;
+      console.warn(`[Proxy] ${proxyUrl.split("@")[1]} 실패: ${e.message}`);
     }
-  } catch {}
-  return "";
+  }
+  throw lastErr;
 }
 
-// ─── 네이버 GraphQL 방문자 리뷰 ─────────────────────────────────────
-async function fetchViaNaverGraphQL(placeId: string): Promise<{ reviews: any[]; total: number } | null> {
-  const GQL_QUERY = `query getVisitorReviews($input: VisitorReviewsInput) {
+// ─── Naver GraphQL 방문자 리뷰 (프록시 경유) ─────────────────────────
+async function fetchVisitorReviews(placeId: string): Promise<{ reviews: any[]; total: number } | null> {
+  const GQL = `query getVisitorReviews($input: VisitorReviewsInput) {
     visitorReviews(input: $input) {
       total
       items {
@@ -63,27 +100,38 @@ async function fetchViaNaverGraphQL(placeId: string): Promise<{ reviews: any[]; 
       }
     }
   }`;
-  try {
-    const res = await fetch("https://pcmap-api.place.naver.com/place/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": `https://pcmap.place.naver.com/place/${placeId}/review/visitor`,
-        "Origin": "https://pcmap.place.naver.com",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-        "sec-fetch-site": "same-site",
-        "sec-fetch-mode": "cors",
-      },
-      body: JSON.stringify([{
-        operationName: "getVisitorReviews",
-        variables: { input: { businessId: placeId, businessType: "place", item: "0", page: 1, display: 50 } },
-        query: GQL_QUERY,
-      }]),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
+
+  const makeRequest = async (useProxy: boolean) => {
+    const body = JSON.stringify([{
+      operationName: "getVisitorReviews",
+      variables: { input: { businessId: placeId, businessType: "place", item: "0", page: 1, display: 50 } },
+      query: GQL,
+    }]);
+    const headers = {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Referer": `https://pcmap.place.naver.com/place/${placeId}/review/visitor`,
+      "Origin": "https://pcmap.place.naver.com",
+      "Accept-Language": "ko-KR,ko;q=0.9",
+    };
+
+    let resText: string;
+    if (useProxy) {
+      const res = await fetchWithApifyProxy(
+        "https://pcmap-api.place.naver.com/place/graphql",
+        { method: "POST", headers, body }
+      );
+      resText = res.text();
+    } else {
+      const res = await fetch("https://pcmap-api.place.naver.com/place/graphql", {
+        method: "POST", headers, body: body,
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      resText = await res.text();
+    }
+
+    const data = JSON.parse(resText);
     const vr = data?.[0]?.data?.visitorReviews;
     if (!vr?.items?.length) return null;
 
@@ -92,142 +140,76 @@ async function fetchViaNaverGraphQL(placeId: string): Promise<{ reviews: any[]; 
         text: r.body || "",
         date: r.visited || r.created || "",
         rating: r.rating ?? 5,
-        keywords: (r.visitKeywords || []).flatMap((k: any) =>
-          Array.isArray(k.keywords) ? k.keywords : (k.keywords ? [k.keywords] : [])
-        ).filter(Boolean),
+        keywords: (r.visitKeywords || [])
+          .flatMap((k: any) => Array.isArray(k.keywords) ? k.keywords : (k.keywords ? [k.keywords] : []))
+          .filter(Boolean),
         author: r.author?.nickname || "익명",
       }))
       .filter((r: any) => r.text.trim() || r.keywords.length > 0);
 
     return reviews.length > 0 ? { reviews, total: vr.total || reviews.length } : null;
-  } catch {
-    return null;
-  }
-}
+  };
 
-// ─── Apify — 방문자 리뷰 ─────────────────────────────────────────────
-async function fetchVisitorViaApify(placeId: string, placeUrl: string): Promise<{ reviews: any[]; total: number } | null> {
+  // 1차: 직접 호출 (빠름, IP 차단 시 실패)
+  try {
+    const direct = await makeRequest(false);
+    if (direct) { console.log("[Visitor] ✅ Direct GraphQL"); return direct; }
+  } catch {}
+
+  // 2차: Apify 프록시 경유
   if (!process.env.APIFY_API_TOKEN) return null;
-
-  // epctex/naver-place-scraper 시도
-  const actors = [
-    {
-      id: "epctex/naver-place-scraper",
-      input: {
-        startUrls: [{ url: `https://map.naver.com/p/entry/place/${placeId}` }],
-        maxItems: 100,
-        reviewsCount: 50,
-        proxyConfiguration: { useApifyProxy: true },
-      },
-    },
-    {
-      id: "epctex/naver-place-scraper",
-      input: {
-        startUrls: [{ url: placeUrl }],
-        maxItems: 50,
-        proxyConfiguration: { useApifyProxy: true },
-      },
-    },
-  ];
-
-  for (const actor of actors) {
-    try {
-      console.log(`[Apify] Trying actor: ${actor.id}`);
-      const run = await apifyClient.actor(actor.id).call(actor.input, { waitSecs: 50 });
-      const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
-
-      const reviews: any[] = [];
-      for (const item of items) {
-        const reviewList = (item as any)?.reviews || (item as any)?.visitorReviews || [];
-        for (const r of reviewList) {
-          reviews.push({
-            text: r.body || r.text || r.content || "",
-            date: r.created || r.visited || r.date || "",
-            rating: r.rating ?? 5,
-            keywords: (r.keywords || []).map((k: any) => k.text || k).filter(Boolean),
-            author: r.authorName || r.author?.nickname || "익명",
-          });
-        }
-      }
-
-      if (reviews.length > 0) {
-        console.log(`[Apify] ✅ ${actor.id}: ${reviews.length}건`);
-        return { reviews, total: reviews.length };
-      }
-    } catch (e: any) {
-      console.warn(`[Apify] ${actor.id} failed: ${e.message}`);
-    }
+  try {
+    const proxied = await makeRequest(true);
+    if (proxied) { console.log("[Visitor] ✅ Proxy GraphQL"); return proxied; }
+  } catch (e: any) {
+    console.warn("[Visitor] Proxy failed:", e.message);
   }
   return null;
 }
 
-// ─── 네이버 Blog Search API (공식) ──────────────────────────────────
-async function fetchBlogViaNaverSearchAPI(searchQuery: string, display = 100): Promise<{ posts: any[]; total: number } | null> {
-  const clientId = process.env.NAVER_CLIENT_ID;
-  const clientSecret = process.env.NAVER_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-
-  try {
-    const params = new URLSearchParams({ query: searchQuery, display: String(display), sort: "date" });
-    const res = await fetch(`https://openapi.naver.com/v1/search/blog.json?${params}`, {
-      headers: {
-        "X-Naver-Client-Id": clientId,
-        "X-Naver-Client-Secret": clientSecret,
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) {
-      console.log(`[NaverBlogAPI] HTTP ${res.status}`, await res.text());
-      return null;
-    }
-    const data = await res.json();
-    if (!data.items?.length) return null;
-
-    const posts = data.items.map((item: any) => ({
-      id: item.link,
-      title: item.title.replace(/<\/?b>/g, ""),
-      text: item.description.replace(/<\/?b>/g, ""),
-      blogName: item.bloggername || "블로거",
-      url: item.link,
-      thumbnailUrl: "",
-      date: item.postdate ? `${item.postdate.slice(0, 4)}-${item.postdate.slice(4, 6)}-${item.postdate.slice(6, 8)}` : "",
-      keywords: [] as string[],
-    }));
-
-    console.log(`[NaverBlogAPI] ✅ ${posts.length}건 / total: ${data.total}`);
-    return { posts, total: data.total };
-  } catch (e: any) {
-    console.warn(`[NaverBlogAPI] Error: ${e.message}`);
-    return null;
-  }
-}
-
-// ─── Apify — 블로그 리뷰 ──────────────────────────────────────────────
-async function fetchBlogViaApify(placeId: string): Promise<{ posts: any[]; total: number } | null> {
-  if (!process.env.APIFY_API_TOKEN) return null;
-  try {
-    const GQL_BLOG = `query getNaverBlogReviews($input: BlogReviewsInput) {
-      blogReviews(input: $input) {
-        total items { id title body blogName thumbnailUrl url created author { nickname } }
+// ─── Naver GraphQL 블로그 리뷰 (프록시 경유) ─────────────────────────
+async function fetchBlogReviews(placeId: string): Promise<{ posts: any[]; total: number } | null> {
+  const GQL = `query getNaverBlogReviews($input: BlogReviewsInput) {
+    blogReviews(input: $input) {
+      total
+      items {
+        id title body blogName thumbnailUrl url created
+        author { nickname }
       }
-    }`;
-    const res = await fetch("https://pcmap-api.place.naver.com/place/graphql", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Referer": `https://pcmap.place.naver.com/place/${placeId}/review/blog`,
-        "Origin": "https://pcmap.place.naver.com",
-      },
-      body: JSON.stringify([{
-        operationName: "getNaverBlogReviews",
-        variables: { input: { businessId: placeId, businessType: "place", page: 1, display: 50 } },
-        query: GQL_BLOG,
-      }]),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
+    }
+  }`;
+
+  const makeRequest = async (useProxy: boolean) => {
+    const body = JSON.stringify([{
+      operationName: "getNaverBlogReviews",
+      variables: { input: { businessId: placeId, businessType: "place", page: 1, display: 50 } },
+      query: GQL,
+    }]);
+    const headers = {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "Referer": `https://pcmap.place.naver.com/place/${placeId}/review/blog`,
+      "Origin": "https://pcmap.place.naver.com",
+      "Accept-Language": "ko-KR,ko;q=0.9",
+    };
+
+    let resText: string;
+    if (useProxy) {
+      const res = await fetchWithApifyProxy(
+        "https://pcmap-api.place.naver.com/place/graphql",
+        { method: "POST", headers, body }
+      );
+      resText = res.text();
+    } else {
+      const res = await fetch("https://pcmap-api.place.naver.com/place/graphql", {
+        method: "POST", headers, body: body,
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      resText = await res.text();
+    }
+
+    const data = JSON.parse(resText);
     const br = data?.[0]?.data?.blogReviews;
     if (!br?.items?.length) return null;
 
@@ -236,7 +218,7 @@ async function fetchBlogViaApify(placeId: string): Promise<{ posts: any[]; total
       posts: br.items.map((r: any) => ({
         id: r.id,
         title: r.title || "",
-        text: r.body || r.title || "",
+        text: r.body || "",
         blogName: r.blogName || r.author?.nickname || "블로거",
         url: r.url || "",
         thumbnailUrl: r.thumbnailUrl || "",
@@ -244,15 +226,85 @@ async function fetchBlogViaApify(placeId: string): Promise<{ posts: any[]; total
         keywords: [],
       })),
     };
-  } catch {
-    return null;
+  };
+
+  // 1차: 직접 호출
+  try {
+    const direct = await makeRequest(false);
+    if (direct) { console.log("[Blog] ✅ Direct GraphQL"); return direct; }
+  } catch {}
+
+  // 2차: Apify 프록시 경유
+  if (!process.env.APIFY_API_TOKEN) return null;
+  try {
+    const proxied = await makeRequest(true);
+    if (proxied) { console.log("[Blog] ✅ Proxy GraphQL"); return proxied; }
+  } catch (e: any) {
+    console.warn("[Blog] Proxy failed:", e.message);
   }
+  return null;
+}
+
+// ─── Naver Blog Search API (공식 — 폴백) ────────────────────────────
+async function fetchBlogViaSearchAPI(placeId: string): Promise<{ posts: any[]; total: number; searchQuery: string } | null> {
+  const clientId = process.env.NAVER_CLIENT_ID;
+  const clientSecret = process.env.NAVER_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+
+  // 장소명 추출
+  let placeName = "";
+  try {
+    const res = await fetch(`https://m.place.naver.com/place/${placeId}`, {
+      headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const ogTitle = html.match(/<meta property="og:title" content="([^"]+)"/)?.[1];
+      if (ogTitle) placeName = ogTitle.split(" : ")[0].trim();
+      if (!placeName) {
+        const title = html.match(/<title[^>]*>([^<]+)<\/title>/)?.[1];
+        if (title) placeName = title.split(" : ")[0].split(" - ")[0].trim();
+      }
+    }
+  } catch {}
+
+  if (!placeName) return null;
+  console.log(`[Blog Fallback] 장소명 "${placeName}" → Blog Search API`);
+
+  try {
+    const params = new URLSearchParams({ query: placeName, display: "50", sort: "date" });
+    const res = await fetch(`https://openapi.naver.com/v1/search/blog.json?${params}`, {
+      headers: { "X-Naver-Client-Id": clientId, "X-Naver-Client-Secret": clientSecret },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.items?.length) return null;
+
+    return {
+      total: data.total,
+      searchQuery: placeName,
+      posts: data.items.map((item: any) => ({
+        id: item.link,
+        title: item.title.replace(/<\/?b>/g, ""),
+        text: item.description.replace(/<\/?b>/g, ""),
+        blogName: item.bloggername || "블로거",
+        url: item.link,
+        thumbnailUrl: "",
+        date: item.postdate
+          ? `${item.postdate.slice(0, 4)}-${item.postdate.slice(4, 6)}-${item.postdate.slice(6, 8)}`
+          : "",
+        keywords: [],
+      })),
+    };
+  } catch { return null; }
 }
 
 // ─── Route Handler ────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
-    const { url, reviewType = "visitor", searchQuery } = await req.json();
+    const { url, reviewType = "visitor" } = await req.json();
     if (!url) {
       return NextResponse.json({ error: "URL이 필요합니다." }, { status: 400 });
     }
@@ -260,79 +312,60 @@ export async function POST(req: NextRequest) {
     const placeId = extractPlaceId(url);
     if (!placeId) {
       return NextResponse.json({
-        error: `URL에서 장소 ID를 찾을 수 없습니다. 네이버 지도에서 장소를 열고 주소창 URL을 복사해주세요.`,
+        error: "URL에서 장소 ID를 찾을 수 없습니다. 네이버 지도에서 장소를 열고 주소창 URL을 복사해주세요.",
       }, { status: 400 });
     }
 
-    console.log(`[Naver Reviews] type=${reviewType} placeId=${placeId}`);
+    console.log(`[NaverReviews] type=${reviewType} placeId=${placeId}`);
 
     // ── 블로그 리뷰 ──────────────────────────────────────────────────
     if (reviewType === "blog") {
-      // 1차: 장소명 추출 → Naver Blog Search API (공식)
-      let query = searchQuery?.trim() || "";
-      if (!query) {
-        const placeName = await fetchPlaceName(placeId);
-        query = placeName || "";
-        console.log(`[Blog] 장소명 추출: "${placeName}"`);
-      }
-
-      if (query) {
-        const blogResult = await fetchBlogViaNaverSearchAPI(query, 100);
-        if (blogResult && blogResult.posts.length > 0) {
-          return NextResponse.json({
-            placeId, reviewType: "blog", source: "naver_blog_api",
-            reviews: blogResult.posts,
-            total: blogResult.total,
-            searchQuery: query,
-          });
-        }
-      }
-
-      // 2차: GraphQL 시도 (IP 차단될 수 있음)
-      const gqlBlog = await fetchBlogViaApify(placeId);
-      if (gqlBlog && gqlBlog.posts.length > 0) {
+      // 1차: GraphQL (직접 + 프록시)
+      const blogResult = await fetchBlogReviews(placeId);
+      if (blogResult && blogResult.posts.length > 0) {
         return NextResponse.json({
           placeId, reviewType: "blog", source: "graphql",
-          reviews: gqlBlog.posts,
-          total: gqlBlog.total,
+          reviews: blogResult.posts,
+          total: blogResult.total,
         });
       }
 
+      // 2차: Naver Blog Search API (장소명 자동 추출)
+      const searchResult = await fetchBlogViaSearchAPI(placeId);
+      if (searchResult && searchResult.posts.length > 0) {
+        return NextResponse.json({
+          placeId, reviewType: "blog", source: "naver_blog_api",
+          reviews: searchResult.posts,
+          total: searchResult.total,
+          searchQuery: searchResult.searchQuery,
+        });
+      }
+
+      const hasToken = !!process.env.APIFY_API_TOKEN;
       const hasNaverApi = !!(process.env.NAVER_CLIENT_ID && process.env.NAVER_CLIENT_SECRET);
       return NextResponse.json({
-        error: hasNaverApi
-          ? `블로그 리뷰 검색 결과가 없습니다. 검색어를 변경해보세요. (현재: "${query}")`
-          : "NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 환경 변수가 필요합니다. Vercel 환경 변수를 확인해주세요.",
+        error: !hasToken && !hasNaverApi
+          ? "APIFY_API_TOKEN 또는 NAVER_CLIENT_ID/SECRET 환경 변수가 필요합니다."
+          : "블로그 리뷰를 가져오지 못했습니다. 네이버가 서버 접근을 차단했을 수 있습니다. 잠시 후 다시 시도해주세요.",
       }, { status: 422 });
     }
 
     // ── 방문자 리뷰 ──────────────────────────────────────────────────
-
-    // 1차: Naver GraphQL 직접 호출 (성공 시 빠름)
-    const gqlResult = await fetchViaNaverGraphQL(placeId);
-    if (gqlResult && gqlResult.reviews.length > 0) {
-      console.log(`[Visitor] ✅ GraphQL: ${gqlResult.reviews.length}건`);
-      const textTotal = gqlResult.reviews.filter(r => r.text.trim()).length;
-      return NextResponse.json({ placeId, reviews: gqlResult.reviews, total: gqlResult.total, textTotal, source: "graphql" });
+    const visitorResult = await fetchVisitorReviews(placeId);
+    if (visitorResult && visitorResult.reviews.length > 0) {
+      const textTotal = visitorResult.reviews.filter(r => r.text.trim()).length;
+      return NextResponse.json({ placeId, ...visitorResult, textTotal });
     }
 
-    // 2차: Apify (프록시 우회, 1-2분 소요)
-    const apifyResult = await fetchVisitorViaApify(placeId, url);
-    if (apifyResult && apifyResult.reviews.length > 0) {
-      console.log(`[Visitor] ✅ Apify: ${apifyResult.reviews.length}건`);
-      const textTotal = apifyResult.reviews.filter((r: any) => r.text.trim()).length;
-      return NextResponse.json({ placeId, ...apifyResult, textTotal, source: "apify" });
-    }
-
-    const hasApify = !!process.env.APIFY_API_TOKEN;
+    const hasToken = !!process.env.APIFY_API_TOKEN;
     return NextResponse.json({
-      error: hasApify
-        ? "네이버가 자동 수집을 차단했습니다. 잠시 후 다시 시도하거나 리뷰를 직접 복사하여 붙여넣기 기능을 이용해주세요."
-        : "APIFY_API_TOKEN 환경 변수가 필요합니다. 방문자 리뷰 크롤링을 위해 Apify 토큰을 설정해주세요.",
+      error: hasToken
+        ? "방문자 리뷰를 가져오지 못했습니다. 네이버가 프록시 IP도 차단했거나, Apify RESIDENTIAL 프록시 크레딧이 부족할 수 있습니다."
+        : "APIFY_API_TOKEN 환경 변수가 필요합니다. Apify 토큰을 Vercel 환경 변수에 설정해주세요.",
     }, { status: 422 });
 
   } catch (e: any) {
-    console.error("[Naver Reviews] Error:", e);
+    console.error("[NaverReviews] Error:", e);
     return NextResponse.json({ error: e.message || "알 수 없는 오류" }, { status: 500 });
   }
 }
