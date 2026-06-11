@@ -1285,15 +1285,16 @@ export default function AwarenessPage() {
               });
               const data = await res.json();
               if (data.success && data.stats) {
+                const s = data.stats;
                 await updateViralRow({
                   viralId: row._id,
                   updates: {
-                    views:        data.stats.views    ?? 0,
-                    likes:        data.stats.likes    ?? 0,
-                    comments:     data.stats.comments ?? 0,
-                    title:        data.stats.title && data.stats.title !== "-" ? data.stats.title : undefined,
-                    thumbnailUrl: data.stats.thumbnailUrl,
-                    date:         data.stats.date,
+                    views:        s.views    > 0 ? s.views    : row.views,
+                    likes:        s.likes    > 0 ? s.likes    : row.likes,
+                    comments:     s.comments > 0 ? s.comments : row.comments,
+                    title:        s.title && s.title !== "-" ? s.title : undefined,
+                    thumbnailUrl: s.thumbnailUrl || undefined,
+                    date:         s.date || undefined,
                   },
                 });
               }
@@ -1860,7 +1861,7 @@ export default function AwarenessPage() {
 
       {/* ── 탭 네비게이션 ── */}
       <div className="flex border-b border-gray-200">
-        {TABS.map(tab => {
+        {TABS.filter(tab => isAdmin || tab.key !== "social").map(tab => {
           const hasNew = (tab.key === "video" && newBadgeAd) || (tab.key === "viral" && newBadgeViral);
           return (
             <button key={tab.key} onClick={() => handleTabChange(tab.key)}
@@ -3109,14 +3110,12 @@ export default function AwarenessPage() {
                     <TableHead className="text-right text-gray-500 text-xs">조회수</TableHead>
                     <TableHead className="text-right text-gray-500 text-xs">좋아요</TableHead>
                     <TableHead className="text-right text-gray-500 text-xs">댓글</TableHead>
-                    <TableHead className="text-right text-gray-500 text-xs">인게이지먼트</TableHead>
                     {isAdmin && <TableHead className="text-gray-500 text-xs text-center">관리</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredViral.map(row => {
                     const isEditing = editingViralId === row._id;
-                    const eng = row.views > 0 ? ((row.likes + row.comments) / row.views * 100).toFixed(2) : "0.00";
                     const isAutoFetchingViral = autoFetchingIds.has(row._id);
                     const hasComments = (row.commentsList?.length ?? 0) > 0;
                     return (
@@ -3193,10 +3192,10 @@ export default function AwarenessPage() {
                           )}
                         </TableCell>
                         <TableCell className="text-right font-mono text-gray-900">
-                          {isEditing ? <Input value={editViralForm.views} onChange={e => setEditViralForm({ ...editViralForm, views: e.target.value })} className="h-6 text-xs w-16 text-right bg-transparent border-gray-200 ml-auto" /> : fmt(row.views)}
+                          {isEditing ? <Input value={editViralForm.views} onChange={e => setEditViralForm({ ...editViralForm, views: e.target.value })} className="h-6 text-xs w-16 text-right bg-transparent border-gray-200 ml-auto" /> : (row.views > 0 ? fmt(row.views) : <span className="text-gray-300">—</span>)}
                         </TableCell>
                         <TableCell className="text-right font-mono text-gray-700">
-                          {isEditing ? <Input placeholder="Likes" value={editViralForm.likes} onChange={e => setEditViralForm({ ...editViralForm, likes: e.target.value })} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200 ml-auto" /> : `👍 ${fmt(row.likes)}`}
+                          {isEditing ? <Input placeholder="Likes" value={editViralForm.likes} onChange={e => setEditViralForm({ ...editViralForm, likes: e.target.value })} className="h-6 text-xs w-12 text-right bg-transparent border-gray-200 ml-auto" /> : (row.likes > 0 ? `🔥 ${fmt(row.likes)}` : <span className="text-gray-300">—</span>)}
                         </TableCell>
                         <TableCell className="text-right font-mono text-gray-700">
                           {isEditing ? (
@@ -3206,7 +3205,7 @@ export default function AwarenessPage() {
                               <RefreshCw className="w-3 h-3 animate-spin" />
                               <span className="text-[10px]">수집 중</span>
                             </div>
-                          ) : (
+                          ) : row.comments > 0 ? (
                             <button
                               onClick={() => setCommentModal({ type: "viral", id: row._id, title: row.title !== "-" ? row.title : row.creator, url: row.url, commentsList: row.commentsList || [], isLoading: !hasComments })}
                               className={cn(
@@ -3216,9 +3215,10 @@ export default function AwarenessPage() {
                               <MessageSquare className="w-3.5 h-3.5" />
                               {fmt(row.comments)}
                             </button>
+                          ) : (
+                            <span className="text-gray-300 flex items-center gap-1 ml-auto justify-end"><MessageSquare className="w-3.5 h-3.5" />—</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right font-bold text-fursys-red">{eng}%</TableCell>
                         {isAdmin && (
                           <TableCell className="text-center w-[110px]">
                             <div className="flex items-center justify-center gap-1">

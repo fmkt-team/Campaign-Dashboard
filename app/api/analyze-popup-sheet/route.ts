@@ -11,41 +11,59 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "sheetUrl이 필요합니다." }, { status: 400 });
     }
 
-    // 시트 데이터 fetch (기존 구글 시트 연동 방식 그대로)
     const sheetResult = await fetchSpreadsheetData(sheetUrl, "A1:AZ300");
     if (!sheetResult.success || !sheetResult.data) {
       return NextResponse.json({ success: false, error: sheetResult.error }, { status: 500 });
     }
 
     const allRows = sheetResult.data;
-    // AI 분석용 샘플: 최대 80행 (토큰 절약)
     const sampleRows = allRows.slice(0, 80);
-    const formattedData = sampleRows
-      .map((row, i) => `행${i + 1}: [${row.map(c => `"${String(c).substring(0, 30)}"`).join(", ")}]`)
-      .join("\n");
+
+    // 열 문자 포함 포맷 (A열, B열... 명시)
+    const colHeader = sampleRows[0]
+      ? `열번호: [${sampleRows[0].map((_, i) => `"${String.fromCharCode(65 + i)}열"`).join(", ")}]`
+      : "";
+
+    const formattedData = [
+      colHeader,
+      ...sampleRows.map((row, i) =>
+        `행${i + 1}: [${row.map((c, ci) => `${String.fromCharCode(65 + ci)}="${String(c).substring(0, 25)}"`).join(", ")}]`
+      ),
+    ].join("\n");
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const prompt = `아래는 팝업 운영 현황 구글 시트 데이터야. 시트를 분석해서 아래 항목들이 어느 행/열에 있는지 찾아줘.
-찾아야 할 항목:
-* 날짜 헤더 (일자가 나열된 행, MM/DD 패턴이 여러 열에 걸쳐 있음)
-* VIP 사전 예약 (건수 / 명수)
-* 일반 사전 예약 (건수 / 명수)
-* 실제 방문자 수 (VIP / 일반)
-* 워크인 방문 (팀 / 인원)
-* 총 방문객 수
+    const prompt = `아래는 팝업 운영 현황 구글 시트 데이터야. 각 셀은 "열문자=값" 형식으로 표시했어.
 
-행 번호는 1부터 시작하는 정수야. 각 항목이 반복되는 경우(날짜 섹션이 여러 블록) 모든 해당 행 번호를 배열로 반환해.
-항목을 찾지 못한 경우 빈 배열 []로 반환해.
+시트를 분석해서 아래 정보를 정확히 찾아줘.
+
+**찾아야 할 정보:**
+1. dateHeaderRows: MM/DD 형식 날짜(예: 6/8, 6/9)가 여러 열에 걸쳐 나열된 행 번호 배열. 팝업 운영 블록마다 반복될 수 있음.
+2. dateStartCol: 날짜 헤더가 시작하는 열 문자 (대문자 한 글자, 예: "E"). 모든 블록에서 같은 열에서 시작하면 하나만 반환.
+3. colSpan: 날짜 1개당 사용하는 열 수.
+   - 2이면: 건수 열(VIP/건수)과 명수 열(일반/명수)이 나란히 있는 듀얼 컬럼 구조.
+   - 1이면: 한 셀에 "건수/명수" 형태로 같이 있는 싱글 컬럼 구조.
+4. vipReserve: VIP 사전 예약 신청 건수 행 번호 배열 (블록마다 반복)
+5. generalReserve: 일반 사전 예약 신청 건수 행 번호 배열
+6. actualVisit: 실제 방문자 수 행 번호 배열 (VIP 방문 + 일반 방문)
+7. totalVisit: 총 방문객 수 행 번호 배열
+
+**규칙:**
+- 행 번호는 1부터 시작하는 정수
+- 날짜 블록이 여러 개면(예: 6/8~6/13 블록, 6/14~6/20 블록, 6/21~6/27 블록) 각 블록의 해당 행을 모두 배열에 포함
+- dateStartCol 예시: 날짜가 E열부터 시작하면 "E", G열부터면 "G"
+- colSpan=2면 날짜 열(E)과 그 다음 열(F)이 한 날짜의 데이터. 다음 날짜는 G,H 열.
+- 항목을 찾지 못한 경우 빈 배열 [] 또는 null 반환
 
 반드시 아래 JSON 형식으로만 응답해:
 {
   "dateHeaderRows": [행번호 배열],
+  "dateStartCol": "열문자",
+  "colSpan": 1 또는 2,
   "dataRows": {
     "vipReserve": [행번호 배열],
     "generalReserve": [행번호 배열],
     "actualVisit": [행번호 배열],
-    "walkin": [행번호 배열],
     "totalVisit": [행번호 배열]
   },
   "confidence": 0~100 사이 정수,
@@ -57,9 +75,11 @@ ${formattedData}`;
 
     let mapping: any = {
       dateHeaderRows: [],
+      dateStartCol: "",
+      colSpan: 2,
       dataRows: {
         vipReserve: [], generalReserve: [],
-        actualVisit: [], walkin: [], totalVisit: [],
+        actualVisit: [], totalVisit: [],
       },
       confidence: 0,
       notes: "AI 분석 실패",
@@ -68,21 +88,23 @@ ${formattedData}`;
     let aiSuccess = false;
     try {
       const aiRes = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-4o",
         messages: [{ role: "user", content: prompt }],
         response_format: { type: "json_object" },
         temperature: 0.1,
       });
       const parsed = JSON.parse(aiRes.choices[0].message.content || "{}");
       if (parsed.dateHeaderRows && parsed.dateHeaderRows.length > 0) {
-        mapping = parsed;
+        mapping = {
+          ...parsed,
+          dataRows: parsed.dataRows || {},
+        };
         aiSuccess = true;
       }
     } catch (aiErr: any) {
       console.warn("[analyze-popup-sheet] AI 분석 실패:", aiErr.message);
     }
 
-    // AI 분석이 실패했거나 신뢰할 수 없는 경우 규칙 기반 정적 분석 수행
     if (!aiSuccess || mapping.confidence < 40 || mapping.dateHeaderRows.length === 0) {
       const fallbackMapping = analyzeSheetStatistically(allRows);
       if (fallbackMapping.dateHeaderRows.length > 0) {
@@ -94,7 +116,7 @@ ${formattedData}`;
       success: true,
       mapping,
       totalRows: allRows.length,
-      previewRows: allRows.slice(0, 30),
+      previewRows: allRows.slice(0, 50),
     });
   } catch (e: any) {
     console.error("[analyze-popup-sheet] Error:", e);
@@ -107,53 +129,46 @@ function analyzeSheetStatistically(allRows: string[][]) {
   const vipReserve: number[] = [];
   const generalReserve: number[] = [];
   const actualVisit: number[] = [];
-  const walkin: number[] = [];
   const totalVisit: number[] = [];
 
   const datePattern = /(\d{1,2})[\/\.]\s*(\d{1,2})/;
+  let dateStartColNum = -1;
+  let colSpan = 2;
 
   allRows.forEach((row, idx) => {
-    const rowNum = idx + 1; // 1-based
+    const rowNum = idx + 1;
     const rowStr = row.join(" ").toLowerCase();
 
-    // 1. 날짜 헤더 감지 (행 내에 날짜 포맷이 3개 이상 들어있으면 날짜 헤더로 추정)
+    // 날짜 헤더 감지
     let dateCount = 0;
-    row.forEach(cell => {
-      if (datePattern.test(cell)) dateCount++;
+    let firstDateCol = -1;
+    let secondDateCol = -1;
+    row.forEach((cell, ci) => {
+      if (datePattern.test(cell)) {
+        dateCount++;
+        if (firstDateCol === -1) firstDateCol = ci;
+        else if (secondDateCol === -1) secondDateCol = ci;
+      }
     });
     if (dateCount >= 3) {
       dateHeaderRows.push(rowNum);
+      if (dateStartColNum === -1 && firstDateCol >= 0) dateStartColNum = firstDateCol;
+      if (firstDateCol >= 0 && secondDateCol >= 0) colSpan = secondDateCol - firstDateCol;
       return;
     }
 
-    // 2. 각 항목별 키워드 매칭
-    if (rowStr.includes("vip") && (rowStr.includes("예약") || rowStr.includes("신청"))) {
-      vipReserve.push(rowNum);
-    }
-    if (rowStr.includes("일반") && (rowStr.includes("예약") || rowStr.includes("신청"))) {
-      generalReserve.push(rowNum);
-    }
-    if (rowStr.includes("실 방문") || rowStr.includes("실방문") || rowStr.includes("실제 방문") || rowStr.includes("實 방문") || rowStr.includes("실제방문")) {
-      actualVisit.push(rowNum);
-    }
-    if (rowStr.includes("워크인") || rowStr.includes("현장")) {
-      walkin.push(rowNum);
-    }
-    if (rowStr.includes("총 방문") || rowStr.includes("총방문") || (rowStr.includes("방문객") && rowStr.includes("총"))) {
-      totalVisit.push(rowNum);
-    }
+    if (rowStr.includes("vip") && (rowStr.includes("예약") || rowStr.includes("신청"))) vipReserve.push(rowNum);
+    if (rowStr.includes("일반") && (rowStr.includes("예약") || rowStr.includes("신청"))) generalReserve.push(rowNum);
+    if (rowStr.includes("실 방문") || rowStr.includes("실방문") || rowStr.includes("실제 방문")) actualVisit.push(rowNum);
+    if (rowStr.includes("총 방문") || rowStr.includes("총방문")) totalVisit.push(rowNum);
   });
 
   return {
     dateHeaderRows,
-    dataRows: {
-      vipReserve,
-      generalReserve,
-      actualVisit,
-      walkin,
-      totalVisit,
-    },
-    confidence: 80,
-    notes: "규칙 기반 정적 분석 결과가 자동 적용되었습니다."
+    dateStartCol: dateStartColNum >= 0 ? String.fromCharCode(65 + dateStartColNum) : "",
+    colSpan,
+    dataRows: { vipReserve, generalReserve, actualVisit, totalVisit },
+    confidence: 75,
+    notes: "규칙 기반 정적 분석 결과가 자동 적용되었습니다.",
   };
 }

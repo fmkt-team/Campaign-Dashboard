@@ -243,6 +243,30 @@ export async function POST(req: Request) {
       }
     } else if (url.includes("blog.naver.com")) {
       stats = await fetchNaverBlogStats(url);
+    } else if (url.includes("twitter.com") || url.includes("x.com")) {
+      if (!process.env.APIFY_API_TOKEN) {
+        return NextResponse.json({ error: "APIFY_API_TOKEN이 없어 트위터 스크랩을 할 수 없습니다." }, { status: 500 });
+      }
+      // 트윗 ID 추출
+      const tweetIdMatch = url.match(/status\/(\d+)/);
+      if (!tweetIdMatch) {
+        return NextResponse.json({ error: "트윗 ID를 추출할 수 없습니다." }, { status: 400 });
+      }
+      const run = await apifyClient.actor("apidojo/tweet-scraper").call({
+        tweetIDs: [tweetIdMatch[1]],
+        maxItems: 1,
+      });
+      const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
+      if (items && items.length > 0) {
+        const item: any = items[0];
+        stats.views    = item.viewCount    || 0;
+        stats.likes    = item.likeCount    || item.favoriteCount || 0;
+        stats.comments = item.replyCount   || 0;
+        stats.title    = item.text ? item.text.substring(0, 80) + "..." : "-";
+        if (item.createdAt) stats.date = new Date(item.createdAt).toISOString().split("T")[0];
+      } else {
+        throw new Error("트위터 데이터를 찾을 수 없습니다.");
+      }
     } else {
       return NextResponse.json({ error: "지원하지 않는 플랫폼의 URL입니다." }, { status: 400 });
     }

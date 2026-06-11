@@ -1106,6 +1106,7 @@ export default function InterestPage() {
   const campaign = useQuery(api.campaigns.getCampaignById, { id: campaignId });
   const activities = useQuery(api.interest.getInterestActivities, { campaignId }) ?? [];
   const syncActivities = useMutation(api.interest.syncInterestActivities);
+  const updateCampaignSettings = useMutation(api.campaigns.updateCampaignSettings);
 
   const [pastedData, setPastedData] = useState<any[] | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -1169,15 +1170,17 @@ export default function InterestPage() {
   type PopupMappingData = {
     url: string;
     dateHeaderRows: number[];
+    dateStartCol?: string;  // 날짜 시작 열 문자 (예: "E")
+    colSpan?: number;       // 날짜당 열 수 (1=싱글, 2=듀얼)
     dataRows: {
       vipReserve: number[];
       generalReserve: number[];
       actualVisit: number[];
-      walkin: number[];
-      totalVisit: number[];
+      walkin?: number[];
+      totalVisit?: number[];
     };
-    confidence: number;
-    notes: string;
+    confidence?: number;
+    notes?: string;
   };
   const [popupAnalysisUrl, setPopupAnalysisUrl]     = useState("");
   const [popupAnalysisStep, setPopupAnalysisStep]   = useState<"idle" | "analyzing" | "review" | "confirmed">("idle");
@@ -1288,7 +1291,7 @@ export default function InterestPage() {
       date: a.startDate,
       actual: a.actualVisitCount ?? a.visitors,
       vipActual: a.vipActualVisitCount ?? 0,
-      actualCount: a.actualVisitCountTeam ?? 0,
+      actualCount: 0,
       rate: "—",
     })).filter(r => r.actual > 0 || r.vipActual > 0);
 
@@ -1527,23 +1530,23 @@ export default function InterestPage() {
     setConfirmDelete(null);
   }, [activities, syncActivities, campaignId]);
 
-  // ── 캠페인 시작일 ~ 오늘을 기간 기본값으로 (localStorage 값이 없을 때만) ──
+  // ── 캠페인 시작일 ~ 오늘을 기간 기본값으로 (localStorage 값이 없을 때만, DB 설정값 우선) ──
   useEffect(() => {
     if (!campaign) return;
     const today = new Date().toISOString().split("T")[0];
+    const dbFrom = (campaign as any).popupDefaultDateFrom;
+    const dbTo   = (campaign as any).popupDefaultDateTo;
     if (!localStorage.getItem(`popup_reservation_from_${campaignId}`)) {
-      const d = campaign.startDate || today;
-      setReservationDateFrom(d);
+      setReservationDateFrom(dbFrom || campaign.startDate || today);
     }
     if (!localStorage.getItem(`popup_reservation_to_${campaignId}`)) {
-      setReservationDateTo(today);
+      setReservationDateTo(dbTo || today);
     }
     if (!localStorage.getItem(`popup_visitor_from_${campaignId}`)) {
-      const d = campaign.startDate || today;
-      setVisitorDateFrom(d);
+      setVisitorDateFrom(dbFrom || campaign.startDate || today);
     }
     if (!localStorage.getItem(`popup_visitor_to_${campaignId}`)) {
-      setVisitorDateTo(today);
+      setVisitorDateTo(dbTo || today);
     }
   }, [campaign, campaignId]);
 
@@ -1670,26 +1673,60 @@ export default function InterestPage() {
 
       // 날짜 컬럼 추출
       const dateCols: {col: number; date: string}[] = [];
-      for (let c = 0; c < headerRow.length; c++) {
-        const m = headerRow[c].match(datePattern);
-        if (m) dateCols.push({ col: c, date: `${year}-${m[1].padStart(2,"0")}-${m[2].padStart(2,"0")}` });
+
+      // dateStartCol이 지정된 경우: 지정 열부터 colSpan 간격으로 스캔
+      const forcedStartCol = mapping.dateStartCol
+        ? mapping.dateStartCol.trim().toUpperCase().charCodeAt(0) - 65
+        : -1;
+      const forcedColSpan = mapping.colSpan && mapping.colSpan > 0 ? mapping.colSpan : 0;
+
+      if (forcedStartCol >= 0) {
+        // 전체 행을 스캔해서 날짜가 있는 컬럼들을 우선 수집
+        const allDateCols: {col: number; date: string}[] = [];
+        for (let c = 0; c < headerRow.length; c++) {
+          const m = headerRow[c].match(datePattern);
+          if (m) allDateCols.push({ col: c, date: `${year}-${m[1].padStart(2,"0")}-${m[2].padStart(2,"0")}` });
+        }
+        // 지정 시작 열부터 지정 간격으로 필터
+        const span = forcedColSpan > 0 ? forcedColSpan
+          : (allDateCols.length >= 2 ? allDateCols[1].col - allDateCols[0].col : 2);
+        for (let step = 0; step < 30; step++) {
+          const col = forcedStartCol + step * span;
+          if (col >= headerRow.length) break;
+          const found = allDateCols.find(d => d.col === col);
+          if (found) dateCols.push(found);
+          else if (step > 0 && dateCols.length > 0) break; // 연속이 끊기면 종료
+        }
+      } else {
+        // 기존 자동 감지: 전체 행 스캔
+        for (let c = 0; c < headerRow.length; c++) {
+          const m = headerRow[c].match(datePattern);
+          if (m) dateCols.push({ col: c, date: `${year}-${m[1].padStart(2,"0")}-${m[2].padStart(2,"0")}` });
+        }
       }
+
       if (dateCols.length === 0) continue;
 
-      // 듀얼 컬럼 감지: 날짜 간 컬럼 간격이 2 이상이면 건수/명수가 분리된 구조
-      const colSpan = dateCols.length >= 2 ? dateCols[1].col - dateCols[0].col : 1;
+      // 듀얼 컬럼 감지: 지정된 colSpan 우선, 없으면 자동 감지
+      const colSpan = forcedColSpan > 0 ? forcedColSpan
+        : (dateCols.length >= 2 ? dateCols[1].col - dateCols[0].col : 1);
       const isDualCol = colSpan >= 2;
 
       // 듀얼/싱글 컬럼에 따라 건수와 명수를 읽는 헬퍼
       const readCountPeople = (row: string[], col: number) => {
+        // 날짜 형식("6/18", "6.18" 등)은 데이터가 아닌 헤더 텍스트 → 0 처리
+        const isDateLike = (s: string) => /^\d{1,2}[\/\.]\d{1,2}/.test(s.trim());
         if (isDualCol) {
           // 듀얼 컬럼: col=건수, col+1=명수
-          const count = processNumber(row[col] || "");
-          const people = processNumber(row[col + 1] || "");
+          const raw = row[col] || "";
+          const raw2 = row[col + 1] || "";
+          const count = isDateLike(raw) ? 0 : processNumber(raw);
+          const people = isDateLike(raw2) ? 0 : processNumber(raw2);
           return { count, people };
         }
         // 싱글 컬럼: 기존 parseSlashValue 방식
-        return parseSlashValue(row[col] || "");
+        const raw = row[col] || "";
+        return isDateLike(raw) ? { count: 0, people: 0 } : parseSlashValue(raw);
       };
 
       // 일반 예약
@@ -1793,7 +1830,6 @@ export default function InterestPage() {
           vipReservePeople: v?.people ?? 0,
           actualVisitCount: vis?.actual ?? 0,
           vipActualVisitCount: vis?.vipActual ?? 0,
-          actualVisitCountTeam: vis?.actualCount ?? 0,
         };
       });
 
@@ -1869,6 +1905,8 @@ export default function InterestPage() {
       const dr = m.dataRows || {};
       setDraftRows({
         dateHeaderRows:  (m.dateHeaderRows  || []).join(", "),
+        dateStartCol:    m.dateStartCol || "",
+        colSpan:         m.colSpan != null ? String(m.colSpan) : "2",
         vipReserve:      (dr.vipReserve     || []).join(", "),
         generalReserve:  (dr.generalReserve || []).join(", "),
         actualVisit:     (dr.actualVisit    || []).join(", "),
@@ -1904,9 +1942,12 @@ export default function InterestPage() {
   // ── 매핑 확정 & 저장 ──────────────────────────────────────────────
   const confirmPopupMapping = useCallback(async () => {
     if (!popupDraftMapping) return;
+    const colSpanNum = parseInt(draftRows.colSpan || "2", 10);
     const confirmed: any = {
       url: popupAnalysisUrl,
       dateHeaderRows: parseRowNums(draftRows.dateHeaderRows || ""),
+      dateStartCol:   (draftRows.dateStartCol || "").trim().toUpperCase() || undefined,
+      colSpan:        isNaN(colSpanNum) ? undefined : colSpanNum,
       dataRows: {
         vipReserve:     parseRowNums(draftRows.vipReserve    || ""),
         generalReserve: parseRowNums(draftRows.generalReserve|| ""),
@@ -2280,6 +2321,36 @@ export default function InterestPage() {
                 {popupDraftMapping.notes && (
                   <p className="text-[11px] text-orange-600 bg-orange-100 rounded px-2 py-1 mb-3">{popupDraftMapping.notes}</p>
                 )}
+                {/* 열 설정 */}
+                <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-3">
+                  <p className="text-[11px] font-bold text-blue-800 mb-2">📐 열(Column) 구조 설정</p>
+                  <div className="flex flex-wrap gap-3 items-end">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 shrink-0">날짜 시작 열</span>
+                      <input
+                        className="w-16 bg-white border border-blue-200 rounded px-2 py-1 text-xs text-gray-900 outline-none focus:border-blue-400 uppercase text-center font-mono font-bold"
+                        value={draftRows.dateStartCol || ""}
+                        onChange={e => setDraftRows(prev => ({ ...prev, dateStartCol: e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2) }))}
+                        placeholder="E"
+                        maxLength={2}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-gray-600 shrink-0">열 간격</span>
+                      <select
+                        className="bg-white border border-blue-200 rounded px-2 py-1 text-xs text-gray-900 outline-none focus:border-blue-400"
+                        value={draftRows.colSpan || "2"}
+                        onChange={e => setDraftRows(prev => ({ ...prev, colSpan: e.target.value }))}
+                      >
+                        <option value="1">1 (싱글: 건수/명수 한 셀)</option>
+                        <option value="2">2 (듀얼: VIP/일반 나뉨)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-1.5">미리보기 테이블의 열 헤더를 클릭해서 날짜 시작 열을 설정할 수 있어요</p>
+                </div>
+
+                {/* 행 설정 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
                   {([
                     { key: "dateHeaderRows",  label: "📅 날짜 헤더 행" },
@@ -2300,7 +2371,7 @@ export default function InterestPage() {
                     </div>
                   ))}
                 </div>
-                <p className="text-[10px] text-gray-400 mb-3">행 번호는 쉼표로 구분. 날짜 블록이 여러 개면 순서대로 입력 (예: 7, 15, 23)</p>
+                <p className="text-[10px] text-gray-400 mb-3">행 번호는 쉼표로 구분. 날짜 블록이 여러 개면 순서대로 입력 (예: 16, 27, 39)</p>
 
                 {/* 시트 데이터 미리보기 & 클릭 매핑 도구 */}
                 {previewRows && previewRows.length > 0 && (
@@ -2310,10 +2381,33 @@ export default function InterestPage() {
                       <table className="w-full text-left border-collapse text-[10px]">
                         <thead>
                           <tr className="bg-orange-50/50 sticky top-0 border-b border-orange-100 z-20">
-                            <th className="p-2 border-r border-orange-100 font-bold text-orange-950 w-[120px] text-center bg-orange-50/80 sticky left-0 z-30">행번호 / 매핑 설정</th>
-                            {previewRows[0]?.map((_, colIdx) => (
-                              <th key={colIdx} className="p-2 font-bold text-gray-500 min-w-[100px]">{String.fromCharCode(65 + colIdx)}열</th>
-                            ))}
+                            <th className="p-2 border-r border-orange-100 font-bold text-orange-950 w-[120px] text-center bg-orange-50/80 sticky left-0 z-30">
+                              <span className="block">행번호</span>
+                              <span className="text-[9px] text-gray-400 font-normal">매핑 설정</span>
+                            </th>
+                            {previewRows[0]?.map((_, colIdx) => {
+                              const letter = String.fromCharCode(65 + colIdx);
+                              const isSelected = (draftRows.dateStartCol || "").toUpperCase() === letter;
+                              return (
+                                <th
+                                  key={colIdx}
+                                  className={cn(
+                                    "p-2 font-bold min-w-[90px] cursor-pointer transition-colors select-none",
+                                    isSelected
+                                      ? "bg-blue-500 text-white"
+                                      : "text-gray-500 hover:bg-blue-50 hover:text-blue-700"
+                                  )}
+                                  title={`${letter}열을 날짜 시작 열로 지정`}
+                                  onClick={() => setDraftRows(prev => ({
+                                    ...prev,
+                                    dateStartCol: isSelected ? "" : letter,
+                                  }))}
+                                >
+                                  {letter}열
+                                  {isSelected && <span className="block text-[9px] font-normal">📅시작</span>}
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
                         <tbody>
@@ -2379,13 +2473,18 @@ export default function InterestPage() {
             {popupAnalysisStep === "confirmed" && popupConfirmedMapping && (
               <div className="bg-green-50 border border-green-100 rounded-lg p-3 mt-2">
                 <p className="text-[11px] text-green-700 font-semibold mb-1">✓ 저장된 매핑</p>
+                <div className="flex gap-4 mb-2">
+                  {popupConfirmedMapping.dateStartCol && (
+                    <p className="text-[10px] text-blue-700 font-medium bg-blue-50 px-2 py-0.5 rounded">📐 날짜 시작: {popupConfirmedMapping.dateStartCol}열 / 간격: {popupConfirmedMapping.colSpan ?? "자동"}열</p>
+                  )}
+                </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
                   {([
                     ["날짜 헤더", (popupConfirmedMapping.dateHeaderRows || []).join(", ")],
                     ["VIP 예약", (popupConfirmedMapping.dataRows?.vipReserve || []).join(", ")],
                     ["일반 예약", (popupConfirmedMapping.dataRows?.generalReserve || []).join(", ")],
                     ["실제 방문", (popupConfirmedMapping.dataRows?.actualVisit || []).join(", ")],
-                    ["총 방문객", (popupConfirmedMapping.dataRows?.totalVisit || []).join(", ")],
+                    ["총 방문객", ((popupConfirmedMapping.dataRows as any)?.totalVisit || []).join(", ")],
                   ] as [string, string][]).map(([k, v]) => v && (
                     <p key={k} className="text-[10px] text-gray-500"><span className="font-medium text-gray-600">{k}:</span> {v}행</p>
                   ))}
@@ -2547,15 +2646,16 @@ export default function InterestPage() {
           </div>
           <div style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={combinedChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <ComposedChart data={combinedChartData} margin={{ top: 10, right: 30, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.04)" vertical={false} />
                 <XAxis dataKey="name" stroke="rgba(0,0,0,0.4)" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} dy={10} />
-                <YAxis stroke="rgba(0,0,0,0.3)" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="left" stroke="rgba(229,0,16,0.4)" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: "#e50010" }} />
+                <YAxis yAxisId="right" orientation="right" stroke="rgba(0,0,0,0.2)" tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: "#9ca3af" }} />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(0,0,0,0.02)" }} />
                 <Legend wrapperStyle={{ fontSize: "12px", paddingTop: "16px" }} iconType="circle" />
-                <Bar dataKey="팝업방문객" name="팝업 방문객" fill="#9ca3af" radius={[4, 4, 0, 0]} barSize={28} stackId="popup" />
-                <Bar dataKey="VIP방문객" name="VIP 방문객" fill="#f59e0b" radius={[4, 4, 0, 0]} barSize={28} stackId="popup" />
-                <Line type="monotone" dataKey="이벤트참여자" name="이벤트 참여자" stroke="#e50010" strokeWidth={3} dot={{ r: 4, fill: "#e50010", strokeWidth: 2, stroke: "#fff" }} activeDot={{ r: 6 }} />
+                <Bar yAxisId="right" dataKey="팝업방문객" name="팝업 방문객" fill="#9ca3af" radius={[4, 4, 0, 0]} barSize={28} stackId="popup" />
+                <Bar yAxisId="right" dataKey="VIP방문객" name="VIP 방문객" fill="#f59e0b" radius={[4, 4, 0, 0]} barSize={28} stackId="popup" />
+                <Line yAxisId="left" type="monotone" dataKey="이벤트참여자" name="이벤트 참여자" stroke="#e50010" strokeWidth={3} dot={{ r: 4, fill: "#e50010", strokeWidth: 2, stroke: "#fff" }} activeDot={{ r: 6 }} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -2584,7 +2684,7 @@ export default function InterestPage() {
 
         {activeTab === "event" && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-            {responseSheetUrl && (
+            {responseSheetUrl && isAdmin && (
               <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2">
                 <Link2 className="w-3 h-3 text-violet-500" />
                 연결된 시트:
@@ -2769,7 +2869,7 @@ export default function InterestPage() {
                   <TableHeader className="bg-gray-50/50">
                     <TableRow className="border-gray-100 hover:bg-transparent">
                       <TableHead className="text-gray-500 text-xs font-semibold">방문 희망일자</TableHead>
-                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 신청 (건/명)</TableHead>
+                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 신청 (명)</TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">
                         <span className="flex items-center justify-end gap-1"><Crown className="w-3 h-3 text-yellow-500" />VIP (건/명)</span>
                       </TableHead>
@@ -2781,7 +2881,7 @@ export default function InterestPage() {
                       <TableRow className="bg-slate-700 font-bold border-b-2 border-slate-500 text-sm hover:bg-slate-700">
                         <TableCell className="text-white font-extrabold py-3.5 text-xs uppercase tracking-wider">누계 (합계)</TableCell>
                         <TableCell className="text-right font-mono text-slate-100 py-3.5 font-extrabold">
-                          {reservationStats.generalCount.toLocaleString()} / {reservationStats.generalPeople.toLocaleString()}
+                          {reservationStats.generalPeople.toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right font-mono text-amber-300 py-3.5 font-extrabold">
                           {reservationStats.vipCount.toLocaleString()} / {reservationStats.vipPeople.toLocaleString()}
@@ -2794,7 +2894,7 @@ export default function InterestPage() {
                     {reservationRows && reservationRows.length > 0 ? (
                       reservationRows.map((row: any, i: number) => {
                         const hasPeople = (row.people ?? 0) > 0 || (row.vipPeople ?? 0) > 0;
-                        const genDisplay = hasPeople ? `${row.count} / ${row.people}` : row.count.toLocaleString();
+                        const genDisplay = hasPeople ? (row.people ?? 0).toLocaleString() : row.count.toLocaleString();
                         const vipDisplay = hasPeople ? `${row.vipCount} / ${row.vipPeople}` : row.vipCount.toLocaleString();
                         const totalPeople = hasPeople ? ((row.people ?? 0) + (row.vipPeople ?? 0)) : (row.count + row.vipCount);
                         return (
@@ -2837,7 +2937,7 @@ export default function InterestPage() {
                   {/* 제목 + 기간 설정 */}
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                      <Users className="w-4 h-4 text-gray-900" /> 일자별 방문자 수
+                      <Users className="w-4 h-4 text-gray-900" /> 일자별 실 방문자 수
                     </h4>
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <input
@@ -2860,12 +2960,27 @@ export default function InterestPage() {
                         className="border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-gray-400 bg-white"
                       />
                       {isAdmin && (
-                        <button
-                          onClick={() => setShowVisitorUrl(!showVisitorUrl)}
-                          className={`flex items-center gap-1 text-xs border rounded px-2 py-1 transition-colors ${showVisitorUrl ? "bg-gray-900 text-white border-gray-900" : "text-gray-500 border-gray-200 hover:border-gray-400"}`}
-                        >
-                          <Link2 className="w-3 h-3" /> 시트 연동
-                        </button>
+                        <>
+                          <button
+                            onClick={async () => {
+                              await updateCampaignSettings({
+                                id: campaignId,
+                                popupDefaultDateFrom: reservationDateFrom || undefined,
+                                popupDefaultDateTo: reservationDateTo || undefined,
+                              });
+                            }}
+                            className="flex items-center gap-1 text-xs border rounded px-2 py-1 transition-colors text-blue-600 border-blue-200 hover:bg-blue-50"
+                            title="현재 날짜 범위를 기본값으로 저장"
+                          >
+                            기본값 저장
+                          </button>
+                          <button
+                            onClick={() => setShowVisitorUrl(!showVisitorUrl)}
+                            className={`flex items-center gap-1 text-xs border rounded px-2 py-1 transition-colors ${showVisitorUrl ? "bg-gray-900 text-white border-gray-900" : "text-gray-500 border-gray-200 hover:border-gray-400"}`}
+                          >
+                            <Link2 className="w-3 h-3" /> 시트 연동
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -2916,12 +3031,11 @@ export default function InterestPage() {
                   <TableHeader className="bg-gray-50/50">
                     <TableRow className="border-gray-100 hover:bg-transparent">
                       <TableHead className="text-gray-500 text-xs font-semibold">방문 일자</TableHead>
-                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 방문자 수 (건/명)</TableHead>
+                      <TableHead className="text-gray-500 text-xs font-semibold text-right">일반 방문자 수 (명)</TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">
                         <span className="flex items-center justify-end gap-1"><Crown className="w-3 h-3 text-yellow-500" />VIP 방문 (명)</span>
                       </TableHead>
                       <TableHead className="text-gray-500 text-xs font-semibold text-right">총 방문 (명)</TableHead>
-                      <TableHead className="text-gray-500 text-xs font-semibold text-right">방문율</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2929,18 +3043,13 @@ export default function InterestPage() {
                       <TableRow className="bg-slate-700 font-bold border-b-2 border-slate-500 text-sm hover:bg-slate-700">
                         <TableCell className="text-white font-extrabold py-3.5 text-xs uppercase tracking-wider">누계 (합계)</TableCell>
                         <TableCell className="text-right font-mono text-slate-100 py-3.5 font-extrabold">
-                          {visitorStats.actualCount > 0
-                            ? `${visitorStats.actualCount.toLocaleString()} / ${visitorStats.actual.toLocaleString()}`
-                            : visitorStats.actual.toLocaleString()}
+                          {visitorStats.actual.toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right font-mono text-amber-300 py-3.5 font-extrabold">
                           {visitorStats.vipActual.toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right font-mono text-white font-black bg-slate-600 py-3.5 rounded-sm">
                           {(visitorStats.actual + visitorStats.vipActual).toLocaleString()}
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-slate-300 bg-slate-600/50 py-3.5">
-                          —
                         </TableCell>
                       </TableRow>
                     )}
@@ -2949,24 +3058,21 @@ export default function InterestPage() {
                         <TableRow key={i} className="border-gray-100 hover:bg-gray-50 text-sm">
                           <TableCell className="text-gray-600 font-mono font-medium">{row.date}</TableCell>
                           <TableCell className="text-right font-mono text-gray-900">
-                            {(row as any).actualCount > 0
-                              ? `${((row as any).actualCount).toLocaleString()} / ${row.actual.toLocaleString()}`
-                              : row.actual.toLocaleString()}
+                            {row.actual.toLocaleString()}
                           </TableCell>
                           <TableCell className="text-right font-mono text-yellow-700 font-bold bg-yellow-50/30">{row.vipActual.toLocaleString()}</TableCell>
                           <TableCell className="text-right font-mono text-gray-900 font-bold">{(row.actual + row.vipActual).toLocaleString()}</TableCell>
-                          <TableCell className="text-right font-mono text-gray-900 font-bold bg-gray-50">{row.rate}</TableCell>
                         </TableRow>
                       ))
                     ) : visitorRows && visitorRows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-xs text-gray-400 py-8">
+                        <TableCell colSpan={4} className="text-center text-xs text-gray-400 py-8">
                           {visitorAllRows ? "해당 기간에 데이터가 없습니다." : ""}
                         </TableCell>
                       </TableRow>
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center py-8">
+                        <TableCell colSpan={4} className="text-center py-8">
                           <div className="flex flex-col items-center gap-2 text-gray-400">
                             <Link2 className="w-5 h-5 opacity-40" />
                             <p className="text-xs">구글 시트를 연동하면 실제 데이터가 표시됩니다.</p>
