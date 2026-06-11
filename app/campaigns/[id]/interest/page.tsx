@@ -553,6 +553,7 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
   const [urlSaved, setUrlSaved] = useState(false);
   const [crawling, setCrawling] = useState(false);
   const [crawlError, setCrawlError] = useState("");
+  const [blogSearchQuery, setBlogSearchQuery] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [showPasteArea, setShowPasteArea] = useState(false);
   const [extractingKw, setExtractingKw] = useState(false);
@@ -562,6 +563,7 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
     total: number;
     posts: { id: string; title: string; text: string; blogName: string; url: string; thumbnailUrl: string; date: string }[];
     source?: string;
+    searchQuery?: string;
   }>(null);
   const BLOG_DATA_LS_KEY = `naverBlogData_${analyzerCampaignId}`;
   const [analyzed, setAnalyzed] = useState<null | {
@@ -645,7 +647,7 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
       const res = await fetch("/api/naver-reviews", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: naverUrl.trim(), reviewType: type }),
+        body: JSON.stringify({ url: naverUrl.trim(), reviewType: type, searchQuery: type === "blog" ? blogSearchQuery.trim() : undefined }),
       });
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -657,6 +659,7 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
           total: data.total || (data.reviews?.length ?? 0),
           posts: data.reviews || [],
           source: data.source,
+          searchQuery: data.searchQuery,
         });
       } else {
         await analyzeWithAI(data.reviews || [], {
@@ -852,6 +855,20 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
         </div>
       )}
 
+      {/* 블로그 검색어 입력 (블로그 탭 전용) */}
+      {reviewTab === "blog" && (
+        <div className="mb-3 flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 shrink-0">검색어</span>
+          <input
+            className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 outline-none focus:border-blue-400 placeholder:text-gray-400"
+            placeholder="장소명 또는 검색 키워드 (예: 퍼시스 팝업 성수) — 비워두면 자동 감지"
+            value={blogSearchQuery}
+            onChange={e => setBlogSearchQuery(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && crawl("blog")}
+          />
+        </div>
+      )}
+
       {/* 크롤링 에러 */}
       {crawlError && (
         <div className="mb-3 flex items-start gap-2 bg-red-50 border border-red-100 rounded-lg px-3 py-2.5">
@@ -934,6 +951,9 @@ function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: numb
             <h5 className="text-xs font-bold text-gray-700">
               블로그 리뷰 목록
               <span className="ml-1 text-gray-400 font-normal">총 {blogPosts.total.toLocaleString()}건</span>
+              {blogPosts.searchQuery && (
+                <span className="ml-2 text-[10px] text-blue-500 font-normal">검색어: &quot;{blogPosts.searchQuery}&quot;</span>
+              )}
             </h5>
             <button className="text-[10px] text-gray-400 hover:text-gray-600 underline" onClick={reset}>다시 불러오기</button>
           </div>
