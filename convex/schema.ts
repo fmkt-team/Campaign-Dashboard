@@ -222,6 +222,14 @@ export default defineSchema({
     createdBy: v.string(),
   }).index("by_token", ["token"]),
 
+  popupVocEntries: defineTable({
+    campaignId: v.id("campaigns"),
+    date: v.string(),        // "2026-06-09"
+    content: v.string(),     // 운영팀 VOC 전문
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  }).index("by_campaign", ["campaignId"]),
+
   socialKeywords: defineTable({
     campaignId: v.id("campaigns"),
     keyword: v.string(),

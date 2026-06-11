@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import {
   Check, X, Settings2, Link2, RefreshCw, Users, CalendarDays, BarChart3, Ticket,
   TrendingUp, MessageSquare, MapPin, PieChart, List, Smile, Frown, MessageCircle,
-  Star, Quote, ArrowUpRight, Crown, Edit2, ExternalLink, Trash2
+  Star, Quote, ArrowUpRight, Crown, Edit2, ExternalLink, Trash2, Plus, ChevronDown, ChevronUp, ClipboardList
 } from "lucide-react";
 import {
   BarChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -536,6 +536,209 @@ async function fetchAIKeywords(texts: string[]): Promise<string[][]> {
   } catch {
     return texts.map(() => []);
   }
+}
+
+// ─── 팝업 현장 VOC ────────────────────────────────────────────────────
+function PopupVocSection({ campaignId, isAdmin }: { campaignId: string; isAdmin: boolean }) {
+  const vocEntries = useQuery(api.popupVoc.getVocEntries, { campaignId: campaignId as Id<"campaigns"> }) ?? [];
+  const addVoc     = useMutation(api.popupVoc.addVocEntry);
+  const updateVoc  = useMutation(api.popupVoc.updateVocEntry);
+  const deleteVoc  = useMutation(api.popupVoc.deleteVocEntry);
+
+  const [showForm, setShowForm]     = useState(false);
+  const [editId, setEditId]         = useState<string | null>(null);
+  const [formDate, setFormDate]     = useState("");
+  const [formContent, setFormContent] = useState("");
+  const [saving, setSaving]         = useState(false);
+  const [expanded, setExpanded]     = useState<Record<string, boolean>>({});
+
+  // 날짜별 그룹핑 (내림차순)
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof vocEntries>();
+    for (const e of vocEntries) {
+      if (!map.has(e.date)) map.set(e.date, []);
+      map.get(e.date)!.push(e);
+    }
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+  }, [vocEntries]);
+
+  const openAdd = () => {
+    setEditId(null);
+    setFormDate("");
+    setFormContent("");
+    setShowForm(true);
+  };
+
+  const openEdit = (entry: any) => {
+    setEditId(entry._id);
+    setFormDate(entry.date);
+    setFormContent(entry.content);
+    setShowForm(true);
+  };
+
+  const handleSave = async () => {
+    if (!formDate.trim() || !formContent.trim()) return;
+    setSaving(true);
+    try {
+      if (editId) {
+        await updateVoc({ id: editId as Id<"popupVocEntries">, date: formDate.trim(), content: formContent.trim() });
+      } else {
+        await addVoc({ campaignId: campaignId as Id<"campaigns">, date: formDate.trim(), content: formContent.trim() });
+      }
+      setShowForm(false);
+      setEditId(null);
+      setFormDate("");
+      setFormContent("");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("이 VOC를 삭제할까요?")) return;
+    await deleteVoc({ id: id as Id<"popupVocEntries"> });
+  };
+
+  const toggleDate = (date: string) =>
+    setExpanded(prev => ({ ...prev, [date]: !prev[date] }));
+
+  return (
+    <GlassCard className="p-6 mt-6">
+      {/* 헤더 */}
+      <div className="flex items-center justify-between mb-5">
+        <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+          <ClipboardList className="w-4 h-4 text-gray-900" />
+          현장 고객 VOC
+          {vocEntries.length > 0 && (
+            <span className="text-xs font-normal text-gray-400 ml-1">{vocEntries.length}건</span>
+          )}
+        </h4>
+        {isAdmin && (
+          <Button size="sm" onClick={openAdd}
+            className="bg-gray-900 text-white hover:bg-gray-800 border-0 gap-1.5 text-xs h-8 px-3">
+            <Plus className="w-3.5 h-3.5" /> VOC 추가
+          </Button>
+        )}
+      </div>
+
+      {/* 입력 폼 */}
+      {showForm && (
+        <div className="mb-5 bg-gray-50 border border-gray-200 rounded-xl p-4 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-700">{editId ? "VOC 수정" : "새 VOC 입력"}</span>
+            <button onClick={() => { setShowForm(false); setEditId(null); }} className="text-gray-400 hover:text-gray-600">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-500 shrink-0 w-14">일자</label>
+            <input
+              type="date"
+              className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs text-gray-900 outline-none focus:border-gray-400"
+              value={formDate}
+              onChange={e => setFormDate(e.target.value)}
+            />
+          </div>
+          <div className="flex gap-2 items-start">
+            <label className="text-xs text-gray-500 shrink-0 w-14 pt-2">내용</label>
+            <textarea
+              className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-gray-400 resize-none leading-relaxed"
+              rows={10}
+              placeholder={"운영팀 현장 VOC를 입력하세요.\n\n예)\n1) 입장존에서 박수 트로피를 보고 감동받으셨다는 고객님이 계셨습니다.\n\n2) 드레스업 체험 후 결과물을 보고 모두 웃으며 매우 만족해하셨습니다."}
+              value={formContent}
+              onChange={e => setFormContent(e.target.value)}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" className="text-gray-500 text-xs"
+              onClick={() => { setShowForm(false); setEditId(null); }}>
+              취소
+            </Button>
+            <Button size="sm" disabled={saving || !formDate.trim() || !formContent.trim()}
+              className="bg-gray-900 text-white hover:bg-gray-800 border-0 text-xs gap-1.5"
+              onClick={handleSave}>
+              {saving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              {editId ? "수정 저장" : "저장"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* 빈 상태 */}
+      {vocEntries.length === 0 && !showForm && (
+        <div className="flex flex-col items-center justify-center py-10 gap-2 text-gray-400">
+          <ClipboardList className="w-8 h-8 opacity-30" />
+          <p className="text-sm">아직 입력된 VOC가 없습니다.</p>
+          {isAdmin && (
+            <button onClick={openAdd} className="text-xs text-blue-500 hover:text-blue-700 underline underline-offset-2 mt-1">
+              + 첫 번째 VOC 추가하기
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 날짜별 리스트 */}
+      <div className="flex flex-col gap-3">
+        {grouped.map(([date, entries]) => {
+          const isOpen = expanded[date] !== false; // 기본 펼침
+          const displayDate = (() => {
+            try {
+              const d = new Date(date);
+              return `${d.getMonth() + 1}/${d.getDate()} (${["일","월","화","수","목","금","토"][d.getDay()]})`;
+            } catch { return date; }
+          })();
+          return (
+            <div key={date} className="border border-gray-100 rounded-xl overflow-hidden">
+              {/* 날짜 헤더 */}
+              <button
+                className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+                onClick={() => toggleDate(date)}
+              >
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="w-3.5 h-3.5 text-gray-500" />
+                  <span className="text-sm font-semibold text-gray-800">{displayDate}</span>
+                  <span className="text-[11px] text-gray-400">{entries.length}건</span>
+                </div>
+                {isOpen ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+              </button>
+
+              {/* VOC 내용 */}
+              {isOpen && (
+                <div className="divide-y divide-gray-50">
+                  {entries.map((entry) => (
+                    <div key={entry._id} className="px-4 py-4 bg-white group">
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap flex-1">
+                          {entry.content}
+                        </p>
+                        {isAdmin && (
+                          <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => openEdit(entry)}
+                              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700">
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => handleDelete(entry._id)}
+                              className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {entry.updatedAt && (
+                        <p className="text-[10px] text-gray-300 mt-2">
+                          수정됨 {new Date(entry.updatedAt).toLocaleDateString("ko-KR")}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </GlassCard>
+  );
 }
 
 function NaverReviewAnalyzer({ autoTrigger, onNewReviews }: { autoTrigger?: number; onNewReviews?: () => void }) {
@@ -3263,6 +3466,7 @@ export default function InterestPage() {
             </div>
 
             <NaverReviewAnalyzer autoTrigger={refreshTrigger} onNewReviews={() => setNewBadgeReview(true)} />
+            <PopupVocSection campaignId={campaignId as string} isAdmin={isAdmin} />
           </div>
         )}
       </section>
