@@ -129,7 +129,7 @@ export default function CampaignLayout({
     try {
       const token = await generateLinkMutation({
         campaignId: campaign._id,
-        expiresInDays: days,
+        expiresInDays: days === 0 ? 36500 : days, // 0(영구) → 100년으로 전송
         createdBy: "admin",
       });
       const url = `${window.location.origin}/share/${token}`;
