@@ -16,6 +16,7 @@ import type * as inflow from "../inflow.js";
 import type * as insights from "../insights.js";
 import type * as interest from "../interest.js";
 import type * as phases from "../phases.js";
+import type * as popupVoc from "../popupVoc.js";
 import type * as sales from "../sales.js";
 import type * as shareLinks from "../shareLinks.js";
 import type * as socialKeywords from "../socialKeywords.js";
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   insights: typeof insights;
   interest: typeof interest;
   phases: typeof phases;
+  popupVoc: typeof popupVoc;
   sales: typeof sales;
   shareLinks: typeof shareLinks;
   socialKeywords: typeof socialKeywords;
