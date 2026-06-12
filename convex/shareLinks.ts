@@ -4,13 +4,15 @@ import { v } from "convex/values";
 export const createShareLink = mutation({
   args: {
     campaignId: v.id("campaigns"),
-    expiresInDays: v.number(),
-    createdBy: v.string(), // passed by caller
+    expiresInDays: v.number(), // 0 = 영구 (만료 없음)
+    createdBy: v.string(),
   },
   handler: async (ctx, args) => {
-    // Generate a simple random token
     const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    const expiresAt = Date.now() + args.expiresInDays * 24 * 60 * 60 * 1000;
+    // expiresInDays=0이면 expiresAt=0으로 저장 → 만료 체크 스킵
+    const expiresAt = args.expiresInDays > 0
+      ? Date.now() + args.expiresInDays * 24 * 60 * 60 * 1000
+      : 0;
 
     await ctx.db.insert("shareLinks", {
       campaignId: args.campaignId,
@@ -35,7 +37,8 @@ export const validateToken = query({
       return { status: "not_found" };
     }
 
-    if (Date.now() > shareLink.expiresAt) {
+    // expiresAt=0이면 영구 링크 (만료 체크 스킵)
+    if (shareLink.expiresAt > 0 && Date.now() > shareLink.expiresAt) {
       return { status: "expired" };
     }
 

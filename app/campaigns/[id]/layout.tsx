@@ -115,6 +115,8 @@ export default function CampaignLayout({
   const updateSettings = useMutation(api.campaigns.updateCampaignSettings);
   const generateLinkMutation = useMutation(api.shareLinks.createShareLink);
   const [shareMsg, setShareMsg] = useState("");
+  const [shareDays, setShareDays] = useState(0); // 0 = 영구
+  const [showShareOptions, setShowShareOptions] = useState(false);
   const [showTabManager, setShowTabManager] = useState(false);
   const [symbolColor, setSymbolColor] = useState<"red" | "black" | "white">("red");
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -122,17 +124,19 @@ export default function CampaignLayout({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showToast, setShowToast] = useState(false);
 
-  const handleShare = async () => {
+  const handleShare = async (days = shareDays) => {
     if (!campaign) return;
     try {
       const token = await generateLinkMutation({
         campaignId: campaign._id,
-        expiresInDays: 7,
+        expiresInDays: days,
         createdBy: "admin",
       });
       const url = `${window.location.origin}/share/${token}`;
       await navigator.clipboard.writeText(url);
-      setShareMsg("✅ 링크 복사 완료!");
+      const label = days === 0 ? "영구 링크" : `${days}일 링크`;
+      setShareMsg(`✅ ${label} 복사 완료!`);
+      setShowShareOptions(false);
       setTimeout(() => setShareMsg(""), 3000);
     } catch (e: any) {
       alert("공유 링크 생성 실패: " + e.message);
@@ -280,11 +284,28 @@ export default function CampaignLayout({
                   className="w-full justify-start text-gray-400 hover:text-gray-700 hover:bg-gray-50 gap-2 text-xs h-9">
                   <Settings2 className="w-3.5 h-3.5" /> 탭 관리
                 </Button>
-                <Button onClick={handleShare} variant="ghost" size="sm"
-                  className={`w-full justify-start gap-2 text-xs h-9 transition-all ${shareMsg ? "text-green-600" : "text-gray-400 hover:text-gray-700 hover:bg-gray-50"}`}>
-                  <Share2 className="w-3.5 h-3.5" />
-                  {shareMsg || "뷰어 링크 복사"}
-                </Button>
+                <div className="relative">
+                  <Button onClick={() => setShowShareOptions(v => !v)} variant="ghost" size="sm"
+                    className={`w-full justify-start gap-2 text-xs h-9 transition-all ${shareMsg ? "text-green-600" : "text-gray-400 hover:text-gray-700 hover:bg-gray-50"}`}>
+                    <Share2 className="w-3.5 h-3.5" />
+                    {shareMsg || "뷰어 링크 복사"}
+                  </Button>
+                  {showShareOptions && !shareMsg && (
+                    <div className="absolute left-0 top-full mt-1 w-44 bg-white border border-gray-100 rounded-xl shadow-lg z-50 py-1 overflow-hidden">
+                      {[
+                        { label: "영구 링크", days: 0 },
+                        { label: "7일 링크", days: 7 },
+                        { label: "30일 링크", days: 30 },
+                      ].map(({ label, days }) => (
+                        <button key={days}
+                          onClick={() => handleShare(days)}
+                          className="w-full text-left px-4 py-2 text-xs text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {isMaster && (
                   <Button onClick={() => router.push("/master")} variant="ghost" size="sm"
                     className="w-full justify-start text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 gap-2 text-xs h-9">
