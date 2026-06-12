@@ -98,6 +98,15 @@ export default function CampaignLayout({
     if (authLoading) return;
     const isViewerForThisCampaign = isViewer && viewerCampaignId === params.id;
     if (!isAdmin && !isViewerForThisCampaign) {
+      // share 링크 full-reload 직후 localStorage는 기록됐지만
+      // React state가 아직 반영 안 됐을 수 있으므로 직접 확인
+      try {
+        const raw = localStorage.getItem("campaign_viewer_session");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.campaignId === params.id) return;
+        }
+      } catch {}
       router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
     }
   }, [isAdmin, isViewer, viewerCampaignId, authLoading, pathname, params.id, router]);

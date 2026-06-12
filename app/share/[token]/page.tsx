@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/lib/auth-context";
@@ -10,7 +10,6 @@ import { Lock } from "lucide-react";
 export default function ShareGateway() {
   const params     = useParams();
   const token      = params.token as string;
-  const router     = useRouter();
   const { setViewerSession } = useAuth();
 
   const validation = useQuery(api.shareLinks.validateToken, { token });
@@ -20,11 +19,13 @@ export default function ShareGateway() {
 
     if (validation.status === "valid" && validation.campaign) {
       const campaignId = validation.campaign._id as string;
-      // 뷰어 세션 저장 후 캠페인 페이지로 리디렉션
+      // 뷰어 세션을 localStorage에 저장한 뒤 full reload로 이동
+      // (router.replace는 React state가 commit되기 전에 새 layout을 렌더링하여
+      //  인증 가드가 isViewer=false로 실행되는 race condition 발생)
       setViewerSession(campaignId, token);
-      router.replace(`/campaigns/${campaignId}/timeline`);
+      window.location.href = `/campaigns/${campaignId}/timeline`;
     }
-  }, [validation, token, setViewerSession, router]);
+  }, [validation, token, setViewerSession]);
 
   // ── 로딩 ──────────────────────────────────────────────────────
   if (validation === undefined) {
