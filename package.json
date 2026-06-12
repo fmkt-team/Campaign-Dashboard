@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npx convex deploy --yes --typecheck=disable && next build",
+    "build": "npx convex@1.16.0 deploy --yes --typecheck=disable && next build",
     "start": "next start",
     "lint": "next lint"
   },
