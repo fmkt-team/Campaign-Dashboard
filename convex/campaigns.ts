@@ -113,3 +113,18 @@ export const updateCampaignLinks = mutation({
     await ctx.db.patch(args.id, updates);
   },
 });
+
+// 이벤트 응답 분석 데이터 저장 (뷰어 공유용)
+export const updateInterestResponseData = mutation({
+  args: {
+    id: v.id("campaigns"),
+    interestResponseData: v.optional(v.string()),
+    interestResponseSheetUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const updates: Record<string, any> = {};
+    if (args.interestResponseData !== undefined) updates.interestResponseData = args.interestResponseData;
+    if (args.interestResponseSheetUrl !== undefined) updates.interestResponseSheetUrl = args.interestResponseSheetUrl;
+    await ctx.db.patch(args.id, updates);
+  },
+});

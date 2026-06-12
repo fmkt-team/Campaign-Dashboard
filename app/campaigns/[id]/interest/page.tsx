@@ -1483,6 +1483,7 @@ export default function InterestPage() {
   const activities = useQuery(api.interest.getInterestActivities, { campaignId }) ?? [];
   const syncActivities = useMutation(api.interest.syncInterestActivities);
   const updateCampaignSettings = useMutation(api.campaigns.updateCampaignSettings);
+  const updateInterestResponseData = useMutation(api.campaigns.updateInterestResponseData);
 
   const [pastedData, setPastedData] = useState<any[] | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -1627,6 +1628,8 @@ export default function InterestPage() {
 
     const savedResponseData = localStorage.getItem(`interest_response_data_${campaignId}`);
     if (savedResponseData) { try { setResponseData(JSON.parse(savedResponseData)); } catch {} }
+    // localStorage에 없으면 Convex에서 로드 (뷰어 지원)
+    // → campaign 데이터 로드 후 별도 useEffect에서 처리
 
     // 팝업 예약 신청 시트
     const savedResUrl  = localStorage.getItem(`popup_reservation_url_${campaignId}`);
@@ -1648,6 +1651,18 @@ export default function InterestPage() {
     if (savedVisTo)   setVisitorDateTo(savedVisTo);
     if (savedVisAll)  { try { setVisitorAllRows(JSON.parse(savedVisAll)); } catch {} }
   }, [campaignId]);
+
+  // Convex fallback: localStorage에 없으면 Convex에서 responseData 로드 (뷰어 지원)
+  useEffect(() => {
+    if (!campaign) return;
+    const hasLocal = !!localStorage.getItem(`interest_response_data_${campaignId}`);
+    if (!hasLocal && campaign.interestResponseData) {
+      try { setResponseData(JSON.parse(campaign.interestResponseData)); } catch {}
+    }
+    if (!localStorage.getItem(`interest_response_sheet_${campaignId}`) && campaign.interestResponseSheetUrl) {
+      setResponseSheetUrl(campaign.interestResponseSheetUrl);
+    }
+  }, [campaign, campaignId]);
 
   // DB의 팝업 일별 데이터를 reservationAllRows / visitorAllRows 상태에 동기화
   useEffect(() => {
@@ -1856,6 +1871,14 @@ export default function InterestPage() {
           if (parsed.length > 0) {
             setResponseData(parsed);
             try { localStorage.setItem(`interest_response_data_${campaignId}`, JSON.stringify(parsed)); } catch {}
+            // Convex에도 저장 → 뷰어에서도 볼 수 있음
+            try {
+              await updateInterestResponseData({
+                id: campaignId as Id<"campaigns">,
+                interestResponseData: JSON.stringify(parsed),
+                interestResponseSheetUrl: responseSheetUrl,
+              });
+            } catch {}
             setSyncMessage(`✅ ${parsed.length}건 응답 (${new Set(parsed.map(r => r.date)).size}일) 연동 완료! [날짜=${colLetter(dateColIdx)}, 이름=${colLetter(nameColIdx)}, 사연=${colLetter(textColIdx)}]`);
           } else {
             setSyncMessage("✅ 이벤트 응답 시트 URL이 저장되었습니다. (응답 데이터 없음)");

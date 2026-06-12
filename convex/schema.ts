@@ -43,6 +43,9 @@ export default defineSchema({
     digitalSheetUrl: v.optional(v.string()),
     // 주간 요약 메모 (JSON 문자열: { "WEEK 1": "메모내용", ... })
     weeklyMemos: v.optional(v.string()),
+    // 이벤트 응답 분석 데이터 (JSON 문자열, 뷰어 공유용)
+    interestResponseData: v.optional(v.string()),
+    interestResponseSheetUrl: v.optional(v.string()),
     // 팝업 일자별 방문자 테이블 기본 노출 날짜 (관리자 설정)
     popupDefaultDateFrom: v.optional(v.string()),
     popupDefaultDateTo: v.optional(v.string()),
