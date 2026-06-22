@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 
-const GEMINI_API_KEY = "AIzaSyBogkDbzmrI0h_sAwtUZyTmvMnH2P2PZkw";
-
 const SYSTEM_PROMPT = `당신은 마케팅 인사이트 추출 전문가입니다.
 리뷰·댓글에서 마케터가 실제로 활용할 수 있는 핵심 키워드만 추출합니다.
 
@@ -84,8 +82,13 @@ export async function POST(req: Request) {
       trimmed.map((t, i) => `[${i + 1}] ${t}`).join("\n")
     }`;
 
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: "GEMINI_API_KEY 환경 변수가 설정되지 않았습니다." }, { status: 500 });
+    }
+
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
