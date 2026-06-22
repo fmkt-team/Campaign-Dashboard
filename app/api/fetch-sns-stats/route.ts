@@ -176,26 +176,28 @@ export async function POST(req: Request) {
       if (!process.env.APIFY_API_TOKEN) {
         return NextResponse.json({ success: false, error: "APIFY_API_TOKEN이 없어 인스타그램 스크랩 불가" });
       }
-      const run = await apifyClient.actor("apify/instagram-scraper").call({
-        addParentData: false,
-        directUrls: [url],
-        resultsType: "details",
-      });
-      const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
-      
-      if (items && items.length > 0) {
-        const item: any = items[0];
-        stats.views = item.videoViewCount || item.videoPlayCount || 0;
-        // 인스타그램은 좋아요 수를 공개하지 않는 경우가 많아 0으로 고정
-        stats.likes = typeof item.likesCount === "number" && item.likesCount > 0 ? item.likesCount : 0;
-        stats.comments = item.commentsCount || 0;
-        stats.title = item.caption ? item.caption.substring(0, 50) + "..." : "-";
-        stats.thumbnailUrl = item.displayUrl || item.thumbnailUrl;
-        if (item.timestamp) {
-           stats.date = new Date(item.timestamp).toISOString().split('T')[0];
+      try {
+        const run = await apifyClient.actor("apify/instagram-scraper").call({
+          addParentData: false,
+          directUrls: [url],
+          resultsType: "details",
+        });
+        const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
+        if (items && items.length > 0) {
+          const item: any = items[0];
+          stats.views = item.videoViewCount || item.videoPlayCount || 0;
+          stats.likes = typeof item.likesCount === "number" && item.likesCount > 0 ? item.likesCount : 0;
+          stats.comments = item.commentsCount || 0;
+          stats.title = item.caption ? item.caption.substring(0, 50) + "..." : "-";
+          stats.thumbnailUrl = item.displayUrl || item.thumbnailUrl;
+          if (item.timestamp) stats.date = new Date(item.timestamp).toISOString().split("T")[0];
         }
-      } else {
-        throw new Error("인스타그램 데이터를 찾을 수 없습니다.");
+      } catch (apifyErr: any) {
+        // 402 = Apify 메모리/quota 초과 → 500 대신 graceful 실패
+        if (apifyErr?.statusCode === 402 || apifyErr?.type === "actor-memory-limit-exceeded") {
+          return NextResponse.json({ success: false, error: "Apify 메모리 한도 초과 — 잠시 후 개별 새로고침으로 시도하세요." });
+        }
+        return NextResponse.json({ success: false, error: apifyErr?.message || "인스타그램 스크랩 실패" });
       }
     } else if (url.includes("twitter.com") || url.includes("x.com")) {
       // 트윗 ID 추출

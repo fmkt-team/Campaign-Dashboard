@@ -1569,8 +1569,12 @@ export default function AwarenessPage() {
       }
 
       setSyncStatus(`URL 성과 데이터 실시간 수집 중... (총 ${validRows.length}건)`);
-      const enriched = await Promise.all(validRows.map(async row => {
-        if (!row.url) return row;
+      // Apify 동시 실행 방지: 순차 처리 (Instagram은 병렬 실행 시 메모리 한도 초과)
+      const enriched: typeof validRows = [];
+      for (let ri = 0; ri < validRows.length; ri++) {
+        const row = validRows[ri];
+        if (ri % 3 === 0) setSyncStatus(`URL 성과 데이터 수집 중... (${ri + 1}/${validRows.length}건)`);
+        if (!row.url) { enriched.push(row); continue; }
         try {
           const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: row.url }) });
           const data = await res.json();
@@ -1603,8 +1607,8 @@ export default function AwarenessPage() {
             } catch {}
           }
         }
-        return row;
-      }));
+        enriched.push(row);
+      }
 
       setSyncStatus("저장 중...");
       await syncViralContents({ campaignId, rows: enriched.filter(r => r !== null) as any[] });
