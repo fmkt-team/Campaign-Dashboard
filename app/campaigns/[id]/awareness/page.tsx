@@ -71,6 +71,29 @@ function filterExtraCols(detectedExtraCols: string[], mediaColOrder: string[]): 
   );
 }
 
+// fetch-og 결과 중 플랫폼 이름 그대로인 무의미한 제목 필터
+const GENERIC_TITLES = new Set([
+  "instagram", "youtube", "facebook", "twitter", "x", "tiktok",
+  "naver", "네이버", "kakao", "카카오",
+]);
+function isGenericTitle(t: string) {
+  const lower = t.toLowerCase().trim();
+  return GENERIC_TITLES.has(lower) || lower.startsWith("instagram –") || lower.startsWith("instagram -");
+}
+
+// 행 내 모든 컬럼에서 소셜 URL 스캔 (하이퍼링크 → 텍스트 순)
+const SOCIAL_URL_RE = /https?:\/\/(www\.)?(youtu\.be|youtube\.com|studio\.youtube\.com|instagram\.com|twitter\.com|x\.com|tiktok\.com|blog\.naver\.com|m\.blog\.naver\.com)/i;
+function scanRowForSocialUrl(cols: any[], hlRow: (string | null)[]): string {
+  for (const hl of hlRow) {
+    if (hl && SOCIAL_URL_RE.test(hl)) return hl;
+  }
+  for (const cellVal of cols) {
+    const s = String(cellVal || "").trim();
+    if (s.startsWith("http") && SOCIAL_URL_RE.test(s)) return s;
+  }
+  return "";
+}
+
 // ── 포맷 헬퍼 ────────────────────────────────────────────────
 function fmt(n: number)    { return n.toLocaleString(); }
 function pct(n: number)    { return n.toFixed(1) + "%"; }
@@ -1303,7 +1326,7 @@ export default function AwarenessPage() {
                   const ogRes = await fetch(`/api/fetch-og?url=${encodeURIComponent(row.url)}`);
                   const og = await ogRes.json();
                   const updates: Record<string, any> = {};
-                  if (og.title && (!row.title || row.title === "-")) updates.title = og.title;
+                  if (og.title && !isGenericTitle(og.title) && (!row.title || row.title === "-")) updates.title = og.title;
                   if (og.thumbnailUrl && !row.thumbnailUrl) updates.thumbnailUrl = og.thumbnailUrl;
                   if (!row.date && og.date) updates.date = og.date;
                   if (Object.keys(updates).length > 0) {
@@ -1496,6 +1519,10 @@ export default function AwarenessPage() {
           if (!rawUrl && mapping["date"] && previewHyperlinks) {
             rawUrl = previewHyperlinks[absRowIdx]?.[parseInt(mapping["date"])] ?? "";
           }
+          // 마지막 폴백: 매핑에 없더라도 모든 컬럼에서 소셜 URL 스캔
+          if (!rawUrl) {
+            rawUrl = scanRowForSocialUrl(cols, previewHyperlinks?.[absRowIdx] ?? []);
+          }
 
           // URL로 플랫폼 자동 감지
           if (!platform || platform === "-") {
@@ -1561,10 +1588,20 @@ export default function AwarenessPage() {
           try {
             const ogRes = await fetch(`/api/fetch-og?url=${encodeURIComponent(row.url)}`);
             const og = await ogRes.json();
-            if (og.title && (!row.title || row.title === "-")) row.title = og.title;
+            if (og.title && !isGenericTitle(og.title) && (!row.title || row.title === "-")) row.title = og.title;
             if (og.thumbnailUrl && !row.thumbnailUrl) row.thumbnailUrl = og.thumbnailUrl;
             if (!row.date && og.date) row.date = og.date;
           } catch {}
+        }
+        // YouTube URL이지만 제목을 못 가져온 경우 oEmbed 직접 시도
+        if ((!row.title || row.title === "-") && row.url) {
+          const ytId = row.url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/)([a-zA-Z0-9_-]{6,20})/)?.[1];
+          if (ytId) {
+            try {
+              const oe = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`, { signal: AbortSignal.timeout(5000) });
+              if (oe.ok) { const d = await oe.json(); if (d.title) row.title = d.title; }
+            } catch {}
+          }
         }
         return row;
       }));
@@ -1583,7 +1620,7 @@ export default function AwarenessPage() {
       const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: newYoutubeUrl }) });
       const data = await res.json();
       if (data.success && data.stats) {
-        const idMatch = newYoutubeUrl.match(/(?:v=|youtu\.be\/|shorts\/)([^&?]+)/);
+        const idMatch = newYoutubeUrl.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/)([a-zA-Z0-9_-]{6,20})/);
         await addYouTubeVideo({
           campaignId, youtubeId: idMatch ? idMatch[1] : "-",
           title: data.stats.title !== "-" ? data.stats.title : "제목 없음",
