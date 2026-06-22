@@ -1498,6 +1498,18 @@ export default function AwarenessPage() {
           return { date, platform: platform || "-", creator: creator || "-", title: "-", views: 0, likes: 0, comments: 0, url: rawUrl, thumbnailUrl: undefined };
         });
 
+      // URL 정규화: https 없는 단축 URL도 수용
+      const KNOWN_DOMAINS = /^(youtu\.be|www\.youtube\.com|youtube\.com|studio\.youtube\.com|instagram\.com|www\.instagram\.com|tiktok\.com|www\.tiktok\.com|blog\.naver\.com|m\.blog\.naver\.com|twitter\.com|x\.com)\//i;
+      rows.forEach(row => {
+        const u = (row.url || "").trim();
+        if (!u || u === "-") return;
+        if (!u.startsWith("http") && !u.startsWith("//")) {
+          if (KNOWN_DOMAINS.test(u)) row.url = "https://" + u;
+        } else if (u.startsWith("//")) {
+          row.url = "https:" + u;
+        }
+      });
+
       // URL이 있는 행만 저장 — 비어있거나 "-" 이거나 http 아닌 값은 완전 제외
       const validRows = rows.filter(row => {
         const u = (row.url || "").trim();

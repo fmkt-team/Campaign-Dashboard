@@ -141,13 +141,21 @@ export async function fetchSpreadsheetDataWithHyperlinks(sheetUrl: string, range
           if (m) hl = m[1];
         }
 
-        // ③ textFormat.link (리치 텍스트 형식)
+        // ③ textFormat.link (리치 텍스트 형식 — 모든 run 순회)
         if (!hl) {
-          const uri =
-            (cell as any).textFormatRuns?.[0]?.format?.link?.uri ??
-            (cell.userEnteredFormat as any)?.textFormat?.link?.uri ??
-            (cell.effectiveFormat as any)?.textFormat?.link?.uri;
-          if (uri) hl = uri;
+          const runs = (cell as any).textFormatRuns;
+          if (Array.isArray(runs)) {
+            for (const run of runs) {
+              const uri = run?.format?.link?.uri;
+              if (uri) { hl = uri; break; }
+            }
+          }
+          if (!hl) {
+            const uri =
+              (cell.userEnteredFormat as any)?.textFormat?.link?.uri ??
+              (cell.effectiveFormat as any)?.textFormat?.link?.uri;
+            if (uri) hl = uri;
+          }
         }
 
         hlRow.push(hl);

@@ -46,10 +46,10 @@ export async function POST(req: Request) {
 
     const viralHints = type === "viral" ? `
 Korean spreadsheet hints for viral content mapping:
-- "creator" field: look for columns named "채널명", "채널 명", "크리에이터", "인플루언서" — this is the channel/creator name.
-- "url" field: look for columns named "온에어", "on air" — this column contains hyperlinks to the published content (cell text may show a date like "6/6" or the word "URL", but the actual URL is embedded as a hyperlink).
-- "date" field: look for columns named "업로드 일정", "업로드일정", "업로드" — the planned upload date.
-- "platform" field: look for columns named "카테고리" — contains channel type like YouTube, magazine, etc.
+- "creator" field: look for columns named "채널명", "채널 명", "크리에이터", "인플루언서", "채널" — this is the channel/creator name.
+- "url" field: look for columns named "온에어", "on air", "링크", "URL", "url주소", "게시 URL", "영상링크", "유튜브링크" — this column contains hyperlinks to the published content (cell text may show a date like "6/6" or a bullet "●", but the actual URL is embedded as a hyperlink).
+- "date" field: look for columns named "업로드 일정", "업로드일정", "업로드", "게시일", "날짜", "일자" — the planned upload date.
+- "platform" field: look for columns named "카테고리", "플랫폼", "채널유형", "매체" — contains channel type like YouTube, Instagram, etc.
 ` : "";
 
     const prompt = `You are a data extraction assistant. I will provide a JSON array representing the first 15 rows of a spreadsheet.
@@ -111,7 +111,7 @@ Instructions:
         date: ["업로드 일정", "업로드일정", "업로드", "일자", "날짜", "date", "게시", "등록"],
         platform: ["카테고리", "플랫폼", "platform", "채널유형", "sns", "channel"],
         creator: ["채널명", "채널 명", "크리에이터", "creator", "인플루언서", "채널", "influencer", "작성자", "이름"],
-        url: ["온에어", "on air", "onair", "url", "링크", "link", "주소", "http", "게시물"],
+        url: ["온에어", "on air", "onair", "url", "링크", "link", "주소", "http", "게시물", "youtube", "유튜브", "영상링크", "콘텐츠링크", "url주소", "게시url", "게시링크", "업로드url"],
       };
 
       const keywords = type === "digital" ? DIGITAL_KEYWORDS : VIRAL_KEYWORDS;

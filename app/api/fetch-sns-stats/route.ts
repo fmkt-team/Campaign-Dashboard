@@ -9,8 +9,8 @@ const apifyClient = new ApifyClient({
 async function fetchYoutubeStats(url: string) {
   let views = 0, likes = 0, comments = 0, title = "-", date: string | undefined;
 
-  // 비디오 ID 추출 (일반 영상, Shorts 모두 지원)
-  const videoIdMatch = url.match(/(?:youtu\.be\/|v=|shorts\/)([^&?/]+)/);
+  // 비디오 ID 추출 (일반 영상, Shorts, YouTube Studio 모두 지원)
+  const videoIdMatch = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([a-zA-Z0-9_-]{6,20})/);
   const videoId = videoIdMatch?.[1];
 
   if (!videoId) {
@@ -154,7 +154,7 @@ export async function POST(req: Request) {
 
     if (url.includes("youtube.com") || url.includes("youtu.be")) {
       stats = await fetchYoutubeStats(url);
-      const idMatch = url.match(/(?:v=|youtu\.be\/|shorts\/)([^&?]+)/);
+      const idMatch = url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/)([a-zA-Z0-9_-]{6,20})/);
       if (idMatch) {
          stats.thumbnailUrl = `https://img.youtube.com/vi/${idMatch[1]}/mqdefault.jpg`;
       }
