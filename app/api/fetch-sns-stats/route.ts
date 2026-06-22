@@ -119,6 +119,20 @@ async function fetchYoutubeStats(url: string) {
     }
   }
 
+  // YouTube oEmbed fallback — 제목을 끝내 못 가져온 경우 (무료, 신뢰도 높음)
+  if ((!title || title === "-") && videoId) {
+    try {
+      const oembed = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (oembed.ok) {
+        const d = await oembed.json();
+        if (d.title) title = d.title;
+      }
+    } catch {}
+  }
+
   return {
     views,
     likes,

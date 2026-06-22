@@ -1297,6 +1297,19 @@ export default function AwarenessPage() {
                     date:         s.date || undefined,
                   },
                 });
+              } else if (!row.title || row.title === "-" || !row.thumbnailUrl) {
+                // fetch-og fallback: 제목/썸네일 없는 경우
+                try {
+                  const ogRes = await fetch(`/api/fetch-og?url=${encodeURIComponent(row.url)}`);
+                  const og = await ogRes.json();
+                  const updates: Record<string, any> = {};
+                  if (og.title && (!row.title || row.title === "-")) updates.title = og.title;
+                  if (og.thumbnailUrl && !row.thumbnailUrl) updates.thumbnailUrl = og.thumbnailUrl;
+                  if (!row.date && og.date) updates.date = og.date;
+                  if (Object.keys(updates).length > 0) {
+                    await updateViralRow({ viralId: row._id, updates });
+                  }
+                } catch {}
               }
             } catch {}
           }
@@ -1516,6 +1529,18 @@ export default function AwarenessPage() {
         return u && u !== "-" && u.startsWith("http");
       });
 
+      // 제외된 행 진단
+      const skippedRows = rows.filter(row => {
+        const u = (row.url || "").trim();
+        return !u || u === "-" || !u.startsWith("http");
+      });
+      if (skippedRows.length > 0) {
+        const names = skippedRows.slice(0, 5).map(r => r.creator || r.date || "?").join(", ");
+        const extra = skippedRows.length > 5 ? ` 외 ${skippedRows.length - 5}건` : "";
+        setSyncStatus(`⚠️ URL 없는 ${skippedRows.length}개 항목 제외: ${names}${extra}`);
+        await new Promise(r => setTimeout(r, 2500));
+      }
+
       setSyncStatus(`URL 성과 데이터 실시간 수집 중... (총 ${validRows.length}건)`);
       const enriched = await Promise.all(validRows.map(async row => {
         if (!row.url) return row;
@@ -1531,6 +1556,16 @@ export default function AwarenessPage() {
             if (data.stats.date && !row.date) row.date = data.stats.date;
           }
         } catch {}
+        // fetch-og fallback: sns-stats 실패 시 최소한 제목/썸네일 확보
+        if (!row.title || row.title === "-" || !row.thumbnailUrl) {
+          try {
+            const ogRes = await fetch(`/api/fetch-og?url=${encodeURIComponent(row.url)}`);
+            const og = await ogRes.json();
+            if (og.title && (!row.title || row.title === "-")) row.title = og.title;
+            if (og.thumbnailUrl && !row.thumbnailUrl) row.thumbnailUrl = og.thumbnailUrl;
+            if (!row.date && og.date) row.date = og.date;
+          } catch {}
+        }
         return row;
       }));
 
