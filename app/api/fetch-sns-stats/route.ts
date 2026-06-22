@@ -174,7 +174,7 @@ export async function POST(req: Request) {
       }
     } else if (url.includes("instagram.com")) {
       if (!process.env.APIFY_API_TOKEN) {
-        return NextResponse.json({ error: "APIFY_API_TOKEN 환경 변수가 없어서 인스타그램 스크랩을 할 수 없습니다." }, { status: 500 });
+        return NextResponse.json({ success: false, error: "APIFY_API_TOKEN이 없어 인스타그램 스크랩 불가" });
       }
       const run = await apifyClient.actor("apify/instagram-scraper").call({
         addParentData: false,
