@@ -141,7 +141,7 @@ export const updateViralRow = mutation({
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.viralId);
-    if (!existing) throw new Error("Row not found");
+    if (!existing) return; // 동시성으로 삭제된 경우 조용히 스킵
 
     await ctx.db.patch(args.viralId, args.updates);
   },
