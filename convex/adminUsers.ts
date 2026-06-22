@@ -53,7 +53,7 @@ export const validateAdminUser = query({
       .first();
 
     if (!user) return { ok: false, reason: "not_found" };
-    if (!user.isActive) return { ok: false, reason: "inactive" };
+    if (user.isActive === false) return { ok: false, reason: "inactive" }; // undefined는 활성으로 간주
     if (user.passwordHash !== args.password) return { ok: false, reason: "wrong_password" };
 
     return { ok: true, role: user.role ?? "admin" };
