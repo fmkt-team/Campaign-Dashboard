@@ -9,8 +9,8 @@ const apifyClient = new ApifyClient({
 async function fetchYoutubeStats(url: string) {
   let views = 0, likes = 0, comments = 0, title = "-", date: string | undefined;
 
-  // 비디오 ID 추출
-  const videoIdMatch = url.match(/(?:youtu\.be\/|v=)([^&?]+)/);
+  // 비디오 ID 추출 (일반 영상, Shorts 모두 지원)
+  const videoIdMatch = url.match(/(?:youtu\.be\/|v=|shorts\/)([^&?/]+)/);
   const videoId = videoIdMatch?.[1];
 
   if (!videoId) {

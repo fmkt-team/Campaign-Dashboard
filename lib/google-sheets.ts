@@ -101,12 +101,11 @@ export async function fetchSpreadsheetDataWithHyperlinks(sheetUrl: string, range
       if (foundSheet?.properties?.title) targetSheetTitle = foundSheet.properties.title;
     }
 
-    // includeGridData: true + fields → hyperlink·수식 포함 전체 셀 데이터
+    // includeGridData: true → 전체 셀 데이터 반환 (fields 마스크 없이 사용해야 hyperlink 누락 없음)
     const response = await sheets.spreadsheets.get({
       spreadsheetId,
       ranges: [`'${targetSheetTitle}'!${range}`],
       includeGridData: true,
-      fields: "sheets.data.rowData.values(formattedValue,hyperlink,userEnteredValue.formulaValue,userEnteredFormat.textFormat.link,effectiveFormat.textFormat.link,textFormatRuns)",
     });
 
     const sheetData = response.data.sheets?.[0];
