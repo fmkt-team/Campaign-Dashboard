@@ -9,12 +9,23 @@ const apifyClient = new ApifyClient({
 async function fetchYoutubeStats(url: string) {
   let views = 0, likes = 0, comments = 0, title = "-", date: string | undefined;
 
-  // 비디오 ID 추출 (일반 영상, Shorts, YouTube Studio 모두 지원)
-  const videoIdMatch = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/)([a-zA-Z0-9_-]{6,20})/);
+  // 비디오 ID 추출 (일반 영상, Shorts, Live, YouTube Studio 모두 지원)
+  const videoIdMatch = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/);
   const videoId = videoIdMatch?.[1];
 
   if (!videoId) {
-    throw new Error("유튜브 비디오 ID를 추출할 수 없습니다.");
+    // 채널/플레이리스트 URL인 경우: oEmbed로 채널명이라도 추출 후 반환
+    try {
+      const oembed = await fetch(
+        `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (oembed.ok) {
+        const d = await oembed.json();
+        return { views: 0, likes: 0, comments: 0, title: d.title || d.author_name || "-", date: undefined };
+      }
+    } catch {}
+    throw new Error("유튜브 비디오 ID를 추출할 수 없습니다. 개별 영상 URL을 사용해주세요.");
   }
 
   // YouTube Data API를 사용한 공식 정보 추출
@@ -97,29 +108,47 @@ async function fetchYoutubeStats(url: string) {
       }
     }
   } else {
-    console.warn("[YouTube] ⚠️ YOUTUBE_API_KEY not set - using ytdl-core");
+    console.warn("[YouTube] ⚠️ YOUTUBE_API_KEY not set - oEmbed 우선 시도 후 ytdl-core 폴백");
 
-    // API Key가 없으면 ytdl-core 직접 사용
+    // 1순위: YouTube oEmbed (무료, API 키 불필요, 제목 신뢰도 높음)
+    try {
+      const oembed = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (oembed.ok) {
+        const d = await oembed.json();
+        if (d.title) {
+          title = d.title;
+          console.log(`[YouTube] ✅ oEmbed success - title: ${title}`);
+        }
+        if (d.thumbnail_url) {
+          // oEmbed thumbnail은 별도 처리 (return 후 stats에 반영)
+        }
+      }
+    } catch (oe) {
+      console.warn("[YouTube] oEmbed failed:", (oe as any).message);
+    }
+
+    // 2순위: ytdl-core (조회수/좋아요 포함)
     try {
       const info = await ytdl.getInfo(url);
       const details = info.videoDetails;
 
-      title = details.title || "-";
+      if (!title || title === "-") title = details.title || "-";
       views = parseInt(details.viewCount || "0", 10);
-      date = details.uploadDate;
+      if (!date) date = details.uploadDate;
 
       const likeCount = (info as any).microformat?.playerMicroformatRenderer?.likeCount;
-      if (likeCount) {
-        likes = parseInt(likeCount, 10);
-      }
+      if (likeCount) likes = parseInt(likeCount, 10);
 
-      console.log(`[YouTube] ✅ ytdl-core: views=${views}, likes=${likes}`);
+      console.log(`[YouTube] ✅ ytdl-core: views=${views}, title=${title}`);
     } catch (error) {
-      console.error(`[YouTube] ❌ ytdl-core failed:`, error);
+      console.error(`[YouTube] ❌ ytdl-core failed:`, (error as any).message);
     }
   }
 
-  // YouTube oEmbed fallback — 제목을 끝내 못 가져온 경우 (무료, 신뢰도 높음)
+  // 최종 oEmbed 보완 — 제목이 여전히 없는 경우
   if ((!title || title === "-") && videoId) {
     try {
       const oembed = await fetch(
@@ -168,7 +197,7 @@ export async function POST(req: Request) {
 
     if (url.includes("youtube.com") || url.includes("youtu.be")) {
       stats = await fetchYoutubeStats(url);
-      const idMatch = url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/)([a-zA-Z0-9_-]{6,20})/);
+      const idMatch = url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/);
       if (idMatch) {
          stats.thumbnailUrl = `https://img.youtube.com/vi/${idMatch[1]}/mqdefault.jpg`;
       }
@@ -284,7 +313,7 @@ export async function POST(req: Request) {
         throw new Error("트위터 데이터를 찾을 수 없습니다.");
       }
     } else {
-      return NextResponse.json({ error: "지원하지 않는 플랫폼의 URL입니다." }, { status: 400 });
+      return NextResponse.json({ success: false, error: "지원하지 않는 플랫폼의 URL입니다." });
     }
 
     return NextResponse.json({ success: true, stats });

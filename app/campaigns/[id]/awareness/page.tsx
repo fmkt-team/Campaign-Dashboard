@@ -1519,22 +1519,9 @@ export default function AwarenessPage() {
           if (!rawUrl && mapping["date"] && previewHyperlinks) {
             rawUrl = previewHyperlinks[absRowIdx]?.[parseInt(mapping["date"])] ?? "";
           }
-          // 마지막 폴백: 매핑에 없더라도 모든 컬럼에서 소셜 URL 스캔
+          // 마지막 폴백: 매핑에 없더라도 모든 컬럼 하이퍼링크 + 텍스트에서 소셜 URL 스캔
           if (!rawUrl) {
             rawUrl = scanRowForSocialUrl(cols, previewHyperlinks?.[absRowIdx] ?? []);
-          }
-
-          // Fallback: 모든 컬럼 하이퍼링크에서 SNS URL 탐색 (url/date 컬럼 외 다른 컬럼에 링크가 있을 경우)
-          if (!rawUrl && previewHyperlinks) {
-            const rowLinks = previewHyperlinks[absRowIdx] || [];
-            for (const link of rowLinks) {
-              if (link && (link.includes("youtube.com") || link.includes("youtu.be") ||
-                  link.includes("instagram.com") || link.includes("blog.naver.com") ||
-                  link.includes("tiktok.com") || link.includes("twitter.com") || link.includes("x.com"))) {
-                rawUrl = link;
-                break;
-              }
-            }
           }
 
           // URL로 플랫폼 자동 감지
@@ -1597,7 +1584,7 @@ export default function AwarenessPage() {
             row.comments = data.stats.comments !== undefined ? processNumber(data.stats.comments) : 0;
             if (data.stats.title && data.stats.title !== "-") row.title = data.stats.title;
             if (data.stats.thumbnailUrl) row.thumbnailUrl = data.stats.thumbnailUrl;
-            if (data.stats.date && !row.date) row.date = data.stats.date;
+            if (data.stats.date) row.date = data.stats.date;
           }
         } catch {}
         // fetch-og fallback: sns-stats 실패 시 최소한 제목/썸네일 확보
