@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ApifyClient } from "apify-client";
 
+export const maxDuration = 300; // Vercel Pro: 최대 300초
+
 const apify = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
 
 // ─── 공통 타입 ─────────────────────────────────────────────────
@@ -328,44 +330,46 @@ async function fetchInstagramOembed(url: string): Promise<Partial<Stats> | null>
 async function fetchInstagram(url: string): Promise<Stats> {
   const fallback: Stats = { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
 
-  // 1. Apify — 통계까지 포함한 완전한 데이터
-  if (process.env.APIFY_API_TOKEN) {
-    try {
-      const run = await apify.actor("apify/instagram-scraper").call(
-        {
-          directUrls: [url],
-          resultsType: "posts",   // "details" 보다 가볍고 빠름
-          resultsLimit: 1,
-          addParentData: false,
-        },
-        { waitSecs: 120, memory: 512 }  // 메모리 512MB 명시 → 한도 초과 방지
-      );
-      const { items } = await apify.dataset(run.defaultDatasetId).listItems();
-      if (items?.length) {
-        const item: any = items[0];
-        const caption = item.caption || item.text || item.alt || "";
-        console.log(`[Instagram] Apify ✅ likes=${item.likesCount} views=${item.videoViewCount}`);
-        return {
-          views:        item.videoViewCount || item.videoPlayCount || item.playsCount || 0,
-          likes:        typeof item.likesCount === "number" ? item.likesCount : (item.likes ?? 0),
-          comments:     item.commentsCount  || item.comments || 0,
-          title:        caption ? caption.substring(0, 80) + (caption.length > 80 ? "…" : "") : "-",
-          date:         item.timestamp ? new Date(item.timestamp).toISOString().split("T")[0] : undefined,
-          thumbnailUrl: item.displayUrl || item.thumbnailUrl || item.imageUrl,
-          description:  caption || undefined,
-          platform:     "Instagram",
-        };
-      }
-    } catch (e: any) {
-      console.warn("[Instagram] Apify 실패:", e?.message, "→ oEmbed 폴백");
-    }
-  }
+  // Apify와 oEmbed를 병렬 실행 — oEmbed는 5초 내 반환(썸네일 보장), Apify는 통계 확보
+  const apifyPromise: Promise<Stats | null> = process.env.APIFY_API_TOKEN
+    ? (async () => {
+        try {
+          const run = await apify.actor("apify/instagram-scraper").call(
+            { directUrls: [url], resultsType: "posts", resultsLimit: 1, addParentData: false },
+            { waitSecs: 60, memory: 512 }
+          );
+          const { items } = await apify.dataset(run.defaultDatasetId).listItems();
+          if (!items?.length) return null;
+          const item: any = items[0];
+          const caption = item.caption || item.text || item.alt || "";
+          console.log(`[Instagram] Apify ✅ likes=${item.likesCount} views=${item.videoViewCount}`);
+          return {
+            views:        item.videoViewCount || item.videoPlayCount || item.playsCount || 0,
+            likes:        typeof item.likesCount === "number" ? item.likesCount : (item.likes ?? 0),
+            comments:     item.commentsCount  || item.comments || 0,
+            title:        caption ? caption.substring(0, 80) + (caption.length > 80 ? "…" : "") : "-",
+            date:         item.timestamp ? new Date(item.timestamp).toISOString().split("T")[0] : undefined,
+            thumbnailUrl: item.displayUrl || item.thumbnailUrl || item.imageUrl,
+            description:  caption || undefined,
+            platform:     "Instagram",
+          };
+        } catch (e: any) {
+          console.warn("[Instagram] Apify 실패:", e?.message);
+          return null;
+        }
+      })()
+    : Promise.resolve(null);
 
-  // 2. Instagram 공식 oEmbed — 썸네일 + author_name (통계 없음)
-  const oe = await fetchInstagramOembed(url);
-  if (oe) {
-    console.log("[Instagram] oEmbed ✅ title:", oe.title, "thumb:", !!oe.thumbnailUrl);
-    return { ...fallback, ...oe };
+  const oembedPromise = fetchInstagramOembed(url);
+
+  // 두 결과 모두 기다림 — Apify 성공 시 stats 포함 데이터, 실패 시 oEmbed 썸네일 사용
+  const [apifyResult, oembedResult] = await Promise.all([apifyPromise, oembedPromise]);
+
+  if (apifyResult) return apifyResult;
+
+  if (oembedResult) {
+    console.log("[Instagram] oEmbed ✅ title:", oembedResult.title, "thumb:", !!oembedResult.thumbnailUrl);
+    return { ...fallback, ...oembedResult };
   }
 
   return fallback;
