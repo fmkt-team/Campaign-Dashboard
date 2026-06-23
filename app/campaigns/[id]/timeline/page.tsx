@@ -428,15 +428,21 @@ function KpiAchievementPanel({ campaignId, campaign }: { campaignId: Id<"campaig
   const [lastKpiRefresh, setLastKpiRefresh] = useState(0);
 
   // ── 구글 시트 연동 이벤트 응답 데이터 로드 ──
+  // localStorage 우선 → 없으면 Convex campaign.interestResponseData 폴백 (뷰어 지원)
   const [responseData, setResponseData] = useState<any[]>([]);
   useEffect(() => {
     try {
       const saved = localStorage.getItem(`interest_response_data_${campaignId}`);
       if (saved) {
         setResponseData(JSON.parse(saved));
+        return;
       }
     } catch {}
-  }, [campaignId, refreshTrigger]);
+    // localStorage 없을 때 Convex 값 사용 (공유 링크 뷰어)
+    if (campaign?.interestResponseData) {
+      try { setResponseData(JSON.parse(campaign.interestResponseData)); } catch {}
+    }
+  }, [campaignId, refreshTrigger, campaign?.interestResponseData]);
 
   // ── GA4 Property ID: Convex 우선 → localStorage fallback ─────────────────
   const resolvedGa4Id = useMemo(() => {
