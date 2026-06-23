@@ -1325,7 +1325,7 @@ export default function AwarenessPage() {
               const res = await fetch("/api/fetch-sns-stats", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url: row.url }),
+                body: JSON.stringify({ url: row.url, uploadDate: row.date || undefined }),
               });
               const data = await res.json();
               if (data.success && data.stats) {
@@ -1338,7 +1338,7 @@ export default function AwarenessPage() {
                     comments:     s.comments > 0 ? s.comments : row.comments,
                     title:        s.title && s.title !== "-" ? s.title : undefined,
                     thumbnailUrl: s.thumbnailUrl || undefined,
-                    date:         s.date || undefined,
+                    date:         s.date || row.date || undefined,
                   },
                 });
               } else if (!row.title || row.title === "-" || !row.thumbnailUrl) {
