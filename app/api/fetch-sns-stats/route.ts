@@ -17,54 +17,104 @@ interface Stats {
 
 // ─── YouTube ───────────────────────────────────────────────────
 
-/** 채널 URL(/@handle)에서 externalChannelId → RSS → videoId 탐색 */
+/** 채널 URL(/@handle)에서 videoId 탐색 — 3단계 전략 */
 async function channelToVideoId(channelUrl: string, uploadDate?: string): Promise<string | null> {
-  try {
-    const m = channelUrl.match(/youtube\.com\/@([^\/\?#]+)/);
-    if (!m) return null;
-    const handle = decodeURIComponent(m[1]);
+  const m = channelUrl.match(/youtube\.com\/@([^\/\?#]+)/);
+  if (!m) return null;
+  const handle = decodeURIComponent(m[1]);
 
-    const page = await fetch(`https://www.youtube.com/@${handle}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      signal: AbortSignal.timeout(9000),
-    });
-    if (!page.ok) return null;
-    const html = await page.text();
+  // ── 전략 A: ytInitialData 파싱 (채널 /videos 페이지에서 영상 목록 직접 추출) ──
+  const tryInitialData = async (): Promise<string | null> => {
+    try {
+      const res = await fetch(`https://www.youtube.com/@${handle}/videos`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+          "Accept": "text/html,application/xhtml+xml",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) return null;
+      const html = await res.text();
 
-    const cid = html.match(/"externalChannelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/)?.[1];
-    if (!cid) { console.warn(`[YouTube] externalChannelId not found for @${handle}`); return null; }
+      // ytInitialData에서 videoId 목록 추출
+      const ids = [...html.matchAll(/"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"/g)]
+        .map(x => x[1])
+        .filter((id, i, arr) => arr.indexOf(id) === i); // 중복 제거
 
-    const rss = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`, {
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!rss.ok) return null;
-    const xml = await rss.text();
+      if (!ids.length) return null;
+      console.log(`[YouTube] ytInitialData: @${handle} → ${ids.length}개 영상 ID`);
 
-    const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)]
-      .map(e => ({
-        id:   e[1].match(/<yt:videoId>([^<]+)/)?.[1],
-        date: e[1].match(/<published>([^T]+)/)?.[1],
-      }))
-      .filter(e => e.id && e.date) as { id: string; date: string }[];
+      if (!uploadDate) return ids[0];
 
-    if (!entries.length) return null;
-    console.log(`[YouTube] RSS: @${handle} → ${entries.length}개 (channel=${cid})`);
-
-    if (uploadDate) {
-      const t = new Date(uploadDate).getTime();
-      entries.sort((a, b) =>
-        Math.abs(new Date(a.date).getTime() - t) - Math.abs(new Date(b.date).getTime() - t)
-      );
+      // 업로드 날짜와 가장 가까운 영상 찾기 — 각 ID의 날짜 오버헤드 없이 순서로 추정
+      // 날짜 텍스트("2024년 6월", "2주 전" 등)와 ID를 함께 추출
+      const datePattern = /"publishedTimeText"\s*:\s*\{\s*"simpleText"\s*:\s*"([^"]+)"/g;
+      const dates = [...html.matchAll(datePattern)].map(x => x[1]);
+      if (dates.length && uploadDate) {
+        // ISO 날짜로 변환 불가능한 상대시간이 많으므로 그냥 가장 최근 영상 반환
+        console.log(`[YouTube] 날짜 힌트 있음: ${dates[0]}`);
+      }
+      return ids[0];
+    } catch (e) {
+      console.warn(`[YouTube] ytInitialData 실패 @${handle}:`, (e as any).message);
+      return null;
     }
-    console.log(`[YouTube] 선택된 videoId: ${entries[0].id} (${entries[0].date})`);
-    return entries[0].id;
-  } catch (e) {
-    console.warn("[YouTube] channelToVideoId 실패:", (e as any).message);
-    return null;
-  }
+  };
+
+  // ── 전략 B: externalChannelId → RSS ──────────────────────────
+  const tryRss = async (): Promise<string | null> => {
+    try {
+      // Chrome UA로 채널 페이지 접근
+      const page = await fetch(`https://www.youtube.com/@${handle}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!page.ok) return null;
+      const html = await page.text();
+
+      const cid = html.match(/"externalChannelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/)?.[1]
+               || html.match(/"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/)?.[1];
+      if (!cid) { console.warn(`[YouTube] channelId not found @${handle}`); return null; }
+
+      const rss = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!rss.ok) return null;
+      const xml = await rss.text();
+
+      const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)]
+        .map(e => ({
+          id:   e[1].match(/<yt:videoId>([^<]+)/)?.[1],
+          date: e[1].match(/<published>([^T]+)/)?.[1],
+        }))
+        .filter(e => e.id && e.date) as { id: string; date: string }[];
+
+      if (!entries.length) return null;
+      console.log(`[YouTube] RSS: @${handle} (${cid}) → ${entries.length}개`);
+
+      if (uploadDate) {
+        const t = new Date(uploadDate).getTime();
+        entries.sort((a, b) =>
+          Math.abs(new Date(a.date).getTime() - t) - Math.abs(new Date(b.date).getTime() - t)
+        );
+      }
+      console.log(`[YouTube] RSS 선택: ${entries[0].id} (${entries[0].date})`);
+      return entries[0].id;
+    } catch (e) {
+      console.warn(`[YouTube] RSS 실패 @${handle}:`, (e as any).message);
+      return null;
+    }
+  };
+
+  // 두 전략 병렬 실행, 먼저 성공하는 결과 사용
+  const [a, b] = await Promise.all([tryInitialData(), tryRss()]);
+  const result = a ?? b;
+  if (!result) console.warn(`[YouTube] channelToVideoId 전략 모두 실패: @${handle}`);
+  return result;
 }
 
 /**
@@ -197,39 +247,69 @@ async function fetchYouTube(url: string, uploadDate?: string): Promise<Stats> {
 
 // ─── Instagram ─────────────────────────────────────────────────
 
-async function fetchInstagram(url: string): Promise<Stats> {
-  if (!process.env.APIFY_API_TOKEN) {
-    console.warn("[Instagram] APIFY_API_TOKEN 없음");
-    return { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
-  }
+/** Instagram 공식 oEmbed — 인증 불필요, 썸네일+author_name 반환 */
+async function fetchInstagramOembed(url: string): Promise<Partial<Stats> | null> {
   try {
-    const run = await apify.actor("apify/instagram-scraper").call(
-      { addParentData: false, directUrls: [url], resultsType: "details", resultsLimit: 1 },
-      { waitSecs: 120 }
+    const oe = await fetch(
+      `https://api.instagram.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+      { signal: AbortSignal.timeout(8000) }
     );
-    const { items } = await apify.dataset(run.defaultDatasetId).listItems();
-    if (items?.length) {
-      const item: any = items[0];
-      const caption = item.caption || item.text || "";
-      return {
-        views:        item.videoViewCount || item.videoPlayCount || 0,
-        likes:        typeof item.likesCount === "number" ? item.likesCount : 0,
-        comments:     item.commentsCount  || 0,
-        title:        caption ? caption.substring(0, 80) + (caption.length > 80 ? "…" : "") : "-",
-        date:         item.timestamp ? new Date(item.timestamp).toISOString().split("T")[0] : undefined,
-        thumbnailUrl: item.displayUrl    || item.thumbnailUrl,
-        description:  caption || undefined,
-        platform:     "Instagram",
-      };
-    }
-  } catch (e: any) {
-    if (e?.statusCode === 402 || e?.type === "actor-memory-limit-exceeded") {
-      console.warn("[Instagram] Apify 메모리 한도 초과");
-      return { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
-    }
-    console.warn("[Instagram] Apify 실패:", e?.message);
+    if (!oe.ok) return null;
+    const d = await oe.json();
+    if (!d || d.error) return null;
+    return {
+      title:        d.title || (d.author_name ? `@${d.author_name}` : "-"),
+      thumbnailUrl: d.thumbnail_url || undefined,
+      platform:     "Instagram",
+    };
+  } catch (e) {
+    console.warn("[Instagram] oEmbed 실패:", (e as any).message);
+    return null;
   }
-  return { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
+}
+
+async function fetchInstagram(url: string): Promise<Stats> {
+  const fallback: Stats = { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
+
+  // 1. Apify — 통계까지 포함한 완전한 데이터
+  if (process.env.APIFY_API_TOKEN) {
+    try {
+      const run = await apify.actor("apify/instagram-scraper").call(
+        { addParentData: false, directUrls: [url], resultsType: "details", resultsLimit: 1 },
+        { waitSecs: 120 }
+      );
+      const { items } = await apify.dataset(run.defaultDatasetId).listItems();
+      if (items?.length) {
+        const item: any = items[0];
+        const caption = item.caption || item.text || "";
+        return {
+          views:        item.videoViewCount || item.videoPlayCount || 0,
+          likes:        typeof item.likesCount === "number" ? item.likesCount : 0,
+          comments:     item.commentsCount  || 0,
+          title:        caption ? caption.substring(0, 80) + (caption.length > 80 ? "…" : "") : "-",
+          date:         item.timestamp ? new Date(item.timestamp).toISOString().split("T")[0] : undefined,
+          thumbnailUrl: item.displayUrl    || item.thumbnailUrl,
+          description:  caption || undefined,
+          platform:     "Instagram",
+        };
+      }
+    } catch (e: any) {
+      if (e?.statusCode === 402 || e?.type === "actor-memory-limit-exceeded") {
+        console.warn("[Instagram] Apify 메모리 한도 초과 → oEmbed 폴백");
+      } else {
+        console.warn("[Instagram] Apify 실패:", e?.message, "→ oEmbed 폴백");
+      }
+    }
+  }
+
+  // 2. Instagram 공식 oEmbed — 썸네일 + author_name (통계 없음)
+  const oe = await fetchInstagramOembed(url);
+  if (oe) {
+    console.log("[Instagram] oEmbed ✅ title:", oe.title, "thumb:", !!oe.thumbnailUrl);
+    return { ...fallback, ...oe };
+  }
+
+  return fallback;
 }
 
 // ─── Twitter / X ───────────────────────────────────────────────
