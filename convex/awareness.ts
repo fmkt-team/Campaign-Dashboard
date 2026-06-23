@@ -112,13 +112,34 @@ export const syncViralContents = mutation({
       .query("viralContents")
       .withIndex("by_campaign", (q) => q.eq("campaignId", args.campaignId))
       .collect();
-    for (const row of existing) await ctx.db.delete(row._id);
+
+    // URL 기준으로 기존 데이터 맵 생성 — 썸네일/좋아요/댓글 등 보존용
+    const existingByUrl = new Map(existing.map(r => [r.url, r]));
+    const incomingUrls = new Set(args.rows.map(r => r.url));
+
+    // URL이 새 목록에 없는 기존 행만 삭제
+    for (const row of existing) {
+      if (!incomingUrls.has(row.url)) await ctx.db.delete(row._id);
+    }
 
     for (const row of args.rows) {
-      await ctx.db.insert("viralContents", {
-        campaignId: args.campaignId,
-        ...row,
-      });
+      const prev = existingByUrl.get(row.url);
+      if (prev) {
+        // 기존 행 업데이트 — 새 값이 없으면 기존 값 유지 (썸네일/stats 보존)
+        await ctx.db.patch(prev._id, {
+          platform:     row.platform || prev.platform,
+          creator:      row.creator  || prev.creator,
+          title:        (row.title && row.title !== "-") ? row.title : prev.title,
+          date:         row.date     || prev.date,
+          views:        row.views    > 0 ? row.views    : prev.views,
+          likes:        row.likes    > 0 ? row.likes    : prev.likes,
+          comments:     row.comments > 0 ? row.comments : prev.comments,
+          url:          row.url,
+          thumbnailUrl: row.thumbnailUrl || prev.thumbnailUrl,
+        });
+      } else {
+        await ctx.db.insert("viralContents", { campaignId: args.campaignId, ...row });
+      }
     }
   },
 });

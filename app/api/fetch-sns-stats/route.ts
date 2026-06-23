@@ -183,14 +183,14 @@ async function scrapeYouTubeVideo(videoId: string): Promise<Stats> {
   }
 }
 
-/** Apify YouTube scraper — 채널 URL에서 최근 영상 데이터 수집 */
-async function fetchYouTubeChannelViaApify(channelUrl: string, uploadDate?: string): Promise<Stats | null> {
+/** Apify YouTube scraper — 채널 URL 또는 영상 URL에서 데이터 수집 */
+async function fetchYouTubeViaApify(startUrl: string, uploadDate?: string, maxVideos = 15): Promise<Stats | null> {
   if (!process.env.APIFY_API_TOKEN) return null;
   try {
     const run = await apify.actor("bernardo/youtube-scraper").call(
       {
-        startUrls: [{ url: channelUrl }],
-        maxVideos: 15,
+        startUrls: [{ url: startUrl }],
+        maxVideos,
         proxy: { useApifyProxy: true },
       },
       { waitSecs: 90, memory: 512 }
@@ -199,7 +199,7 @@ async function fetchYouTubeChannelViaApify(channelUrl: string, uploadDate?: stri
     if (!items?.length) return null;
 
     let best: any = items[0];
-    if (uploadDate) {
+    if (uploadDate && items.length > 1) {
       const t = new Date(uploadDate).getTime();
       best = items.reduce((prev: any, cur: any) => {
         const pd = new Date(prev.date || "").getTime();
@@ -224,6 +224,9 @@ async function fetchYouTubeChannelViaApify(channelUrl: string, uploadDate?: stri
     return null;
   }
 }
+
+/** @deprecated use fetchYouTubeViaApify */
+const fetchYouTubeChannelViaApify = (url: string, uploadDate?: string) => fetchYouTubeViaApify(url, uploadDate, 15);
 
 async function fetchYouTube(url: string, uploadDate?: string): Promise<Stats> {
   // 1. 동영상 ID 추출 (직접 영상 URL)
@@ -287,8 +290,16 @@ async function fetchYouTube(url: string, uploadDate?: string): Promise<Stats> {
     } catch (e) { console.warn("[YouTube] Data API 실패:", (e as any).message); }
   }
 
-  // 4. HTML 파싱 (ytInitialPlayerResponse) — API key 불필요, 캠페인 광고 영상과 동일한 방식
+  // 4. HTML 파싱 (ytInitialPlayerResponse) — API key 불필요
   const scraped = await scrapeYouTubeVideo(videoId);
+
+  // 4.5 HTML 스크레이핑이 Vercel IP 차단 등으로 실패했으면 Apify 폴백
+  if (scraped.views === 0 && process.env.APIFY_API_TOKEN) {
+    console.log(`[YouTube] HTML 파싱 views=0, Apify 폴백 시도: videoId=${videoId}`);
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const apifyResult = await fetchYouTubeViaApify(videoUrl, uploadDate, 1);
+    if (apifyResult && apifyResult.views > 0) return apifyResult;
+  }
 
   // 5. oEmbed — 제목 폴백
   if (!scraped.title || scraped.title === "-") {

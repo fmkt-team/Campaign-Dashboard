@@ -117,22 +117,31 @@ Instructions:
       const keywords = type === "digital" ? DIGITAL_KEYWORDS : VIRAL_KEYWORDS;
       
       // Robust Header Row Finding
+      // 실제 헤더 행은 여러 다른 필드 키워드(date + creator + url 등)와 매칭되어야 함
+      // 데이터 행은 보통 url 필드 하나만 매칭됨("URL" 텍스트)
+      let maxDistinctFields = -1;
       let maxScore = -1;
       for (let i = 0; i < Math.min(15, data.length); i++) {
         const row = data[i] || [];
         let score = 0;
+        const matchedFields = new Set<string>();
         for (const cell of row) {
           if (!cell || typeof cell !== "string") continue;
           const cleanCell = cell.toLowerCase().trim();
-          for (const kws of Object.values(keywords)) {
+          for (const [field, kws] of Object.entries(keywords)) {
             if (kws.some(kw => cleanCell.includes(kw.toLowerCase()))) {
+              matchedFields.add(field);
               score += 2;
               break;
             }
           }
           if (isNaN(Number(cleanCell.replace(/,/g, "")))) score += 1;
         }
-        if (score > maxScore) {
+        const distinctFields = matchedFields.size;
+        console.log(`[parse-sheet-ai] row${i}: distinctFields=${distinctFields} score=${score} matched=[${[...matchedFields].join(",")}] cells=${JSON.stringify((row as string[]).slice(0,6))}`);
+        // 헤더는 항상 데이터보다 앞에 있으므로, 같은 distinctFields면 먼저 나온 행을 선택
+        if (distinctFields > maxDistinctFields) {
+          maxDistinctFields = distinctFields;
           maxScore = score;
           headerRowIndex = i;
         }

@@ -9,7 +9,7 @@ export async function POST(req: Request) {
     }
 
     if (type === "viral") {
-      const result = await fetchSpreadsheetDataWithHyperlinks(sheetUrl, "A1:AZ2000");
+      const result = await fetchSpreadsheetDataWithHyperlinks(sheetUrl, "A1:AZ500");
       if (!result.success || !result.data) {
         return NextResponse.json({ success: false, error: result.error }, { status: 500 });
       }
