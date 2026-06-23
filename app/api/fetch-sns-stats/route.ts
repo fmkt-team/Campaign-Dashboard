@@ -17,44 +17,49 @@ interface Stats {
 
 // ─── YouTube ───────────────────────────────────────────────────
 
-/** 채널 URL(/@handle)에서 videoId 탐색 — 3단계 전략 */
+// YouTube 요청용 공통 헤더 — CONSENT 쿠키로 동의 페이지 우회
+const YT_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Cookie": "CONSENT=YES+cb.20210328-17-p0.en+FX+121; GPS=1; YSC=x; VISITOR_INFO1_LIVE=x",
+  "Referer": "https://www.youtube.com/",
+};
+
+function isConsentPage(html: string) {
+  return html.includes("consent.youtube.com") || html.includes("Before you continue") || html.includes("\"CONSENT\"");
+}
+
+/** 채널 URL(/@handle)에서 videoId 탐색 — 동의 페이지 우회 + 2단계 전략 */
 async function channelToVideoId(channelUrl: string, uploadDate?: string): Promise<string | null> {
   const m = channelUrl.match(/youtube\.com\/@([^\/\?#]+)/);
   if (!m) return null;
   const handle = decodeURIComponent(m[1]);
 
-  // ── 전략 A: ytInitialData 파싱 (채널 /videos 페이지에서 영상 목록 직접 추출) ──
+  // ── 전략 A: /videos 페이지 ytInitialData ─────────────────────
   const tryInitialData = async (): Promise<string | null> => {
     try {
       const res = await fetch(`https://www.youtube.com/@${handle}/videos`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-          "Accept": "text/html,application/xhtml+xml",
-        },
+        headers: YT_HEADERS,
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) return null;
       const html = await res.text();
 
-      // ytInitialData에서 videoId 목록 추출
+      if (isConsentPage(html)) {
+        console.warn(`[YouTube] 동의 페이지 감지 (전략A) @${handle}`);
+        return null;
+      }
+
       const ids = [...html.matchAll(/"videoId"\s*:\s*"([a-zA-Z0-9_-]{11})"/g)]
         .map(x => x[1])
-        .filter((id, i, arr) => arr.indexOf(id) === i); // 중복 제거
+        .filter((id, i, arr) => arr.indexOf(id) === i);
 
-      if (!ids.length) return null;
-      console.log(`[YouTube] ytInitialData: @${handle} → ${ids.length}개 영상 ID`);
-
-      if (!uploadDate) return ids[0];
-
-      // 업로드 날짜와 가장 가까운 영상 찾기 — 각 ID의 날짜 오버헤드 없이 순서로 추정
-      // 날짜 텍스트("2024년 6월", "2주 전" 등)와 ID를 함께 추출
-      const datePattern = /"publishedTimeText"\s*:\s*\{\s*"simpleText"\s*:\s*"([^"]+)"/g;
-      const dates = [...html.matchAll(datePattern)].map(x => x[1]);
-      if (dates.length && uploadDate) {
-        // ISO 날짜로 변환 불가능한 상대시간이 많으므로 그냥 가장 최근 영상 반환
-        console.log(`[YouTube] 날짜 힌트 있음: ${dates[0]}`);
+      if (!ids.length) {
+        console.warn(`[YouTube] ytInitialData videoId 없음 @${handle} (html길이=${html.length})`);
+        return null;
       }
+      console.log(`[YouTube] ytInitialData: @${handle} → ${ids.length}개, 선택: ${ids[0]}`);
       return ids[0];
     } catch (e) {
       console.warn(`[YouTube] ytInitialData 실패 @${handle}:`, (e as any).message);
@@ -62,23 +67,28 @@ async function channelToVideoId(channelUrl: string, uploadDate?: string): Promis
     }
   };
 
-  // ── 전략 B: externalChannelId → RSS ──────────────────────────
+  // ── 전략 B: 채널 페이지 channelId → RSS ──────────────────────
   const tryRss = async (): Promise<string | null> => {
     try {
-      // Chrome UA로 채널 페이지 접근
       const page = await fetch(`https://www.youtube.com/@${handle}`, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-        },
+        headers: YT_HEADERS,
         signal: AbortSignal.timeout(10000),
       });
       if (!page.ok) return null;
       const html = await page.text();
 
+      if (isConsentPage(html)) {
+        console.warn(`[YouTube] 동의 페이지 감지 (전략B) @${handle}`);
+        return null;
+      }
+
       const cid = html.match(/"externalChannelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/)?.[1]
-               || html.match(/"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/)?.[1];
-      if (!cid) { console.warn(`[YouTube] channelId not found @${handle}`); return null; }
+               || html.match(/"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/)?.[1]
+               || html.match(/\/channel\/(UC[a-zA-Z0-9_-]{22})/)?.[1];
+      if (!cid) {
+        console.warn(`[YouTube] channelId not found @${handle} (html길이=${html.length}, snippet="${html.substring(0, 200)}")`);
+        return null;
+      }
 
       const rss = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`, {
         signal: AbortSignal.timeout(8000),
@@ -110,7 +120,6 @@ async function channelToVideoId(channelUrl: string, uploadDate?: string): Promis
     }
   };
 
-  // 두 전략 병렬 실행, 먼저 성공하는 결과 사용
   const [a, b] = await Promise.all([tryInitialData(), tryRss()]);
   const result = a ?? b;
   if (!result) console.warn(`[YouTube] channelToVideoId 전략 모두 실패: @${handle}`);
@@ -128,10 +137,7 @@ async function scrapeYouTubeVideo(videoId: string): Promise<Stats> {
   };
   try {
     const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-      },
+      headers: YT_HEADERS,
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return fallback;
