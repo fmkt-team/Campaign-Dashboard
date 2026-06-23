@@ -86,6 +86,7 @@ export const updateCampaignSettings = mutation({
     weeklyMemos: v.optional(v.string()),
     popupDefaultDateFrom: v.optional(v.string()),
     popupDefaultDateTo: v.optional(v.string()),
+    awarenessCumulativeSettings: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const updates: Record<string, any> = {};
@@ -95,6 +96,7 @@ export const updateCampaignSettings = mutation({
     if (args.weeklyMemos !== undefined) updates.weeklyMemos = args.weeklyMemos;
     if (args.popupDefaultDateFrom !== undefined) updates.popupDefaultDateFrom = args.popupDefaultDateFrom;
     if (args.popupDefaultDateTo !== undefined) updates.popupDefaultDateTo = args.popupDefaultDateTo;
+    if (args.awarenessCumulativeSettings !== undefined) updates.awarenessCumulativeSettings = args.awarenessCumulativeSettings;
     await ctx.db.patch(args.id, updates);
   },
 });

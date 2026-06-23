@@ -1029,12 +1029,18 @@ export default function AwarenessPage() {
   // localStorage 초기 로드 (마운트 1회) — 저장은 하지 않음
   useEffect(() => {
     try {
-      // 누적 성과 설정
+      // 누적 성과 설정: localStorage 우선 → 없으면 Convex 폴백 (뷰어 지원)
       const saved = localStorage.getItem(CUMULATIVE_LS_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.visibleItems) setCumulativeVisibleItems(parsed.visibleItems);
         if (parsed.itemOrder)    setCumulativeItemOrder(parsed.itemOrder);
+      } else if (campaign?.awarenessCumulativeSettings) {
+        try {
+          const parsed = JSON.parse(campaign.awarenessCumulativeSettings);
+          if (parsed.visibleItems) setCumulativeVisibleItems(parsed.visibleItems);
+          if (parsed.itemOrder)    setCumulativeItemOrder(parsed.itemOrder);
+        } catch {}
       }
       // 테이블 컬럼 설정 (관리자 저장 → 뷰어도 동일하게 적용)
       const savedTable = localStorage.getItem(TABLE_COLS_LS_KEY);
@@ -1053,7 +1059,7 @@ export default function AwarenessPage() {
       }
     } catch {}
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId]);
+  }, [campaignId, campaign?.awarenessCumulativeSettings]);
 
   // 뷰어 노출 항목 초기 로드 (설정A: viewerItems, 설정B: viewerDefaults)
   useEffect(() => {
@@ -1104,9 +1110,10 @@ export default function AwarenessPage() {
     visibleItems: Record<string, boolean>,
     itemOrder: string[]
   ) => {
-    try {
-      localStorage.setItem(CUMULATIVE_LS_KEY, JSON.stringify({ visibleItems, itemOrder }));
-    } catch {}
+    const json = JSON.stringify({ visibleItems, itemOrder });
+    try { localStorage.setItem(CUMULATIVE_LS_KEY, json); } catch {}
+    // Convex에도 저장 → 뷰어도 동일한 설정을 볼 수 있음
+    updateCampaign({ id: campaignId, awarenessCumulativeSettings: json }).catch(() => {});
   };
 
   const [showItemOrder, setShowItemOrder] = useState(false);

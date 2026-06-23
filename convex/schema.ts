@@ -49,6 +49,8 @@ export default defineSchema({
     // 팝업 일자별 방문자 테이블 기본 노출 날짜 (관리자 설정)
     popupDefaultDateFrom: v.optional(v.string()),
     popupDefaultDateTo: v.optional(v.string()),
+    // 인지 상세 전체 누적 성과 표시 설정 (JSON 문자열, 뷰어 공유용)
+    awarenessCumulativeSettings: v.optional(v.string()),
   }),
 
   milestones: defineTable({
