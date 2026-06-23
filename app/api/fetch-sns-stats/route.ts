@@ -1,304 +1,352 @@
 import { NextResponse } from "next/server";
 import { ApifyClient } from "apify-client";
-import ytdl from "ytdl-core";
 
-const apifyClient = new ApifyClient({
-  token: process.env.APIFY_API_TOKEN,
-});
+const apify = new ApifyClient({ token: process.env.APIFY_API_TOKEN });
 
-// 채널 URL(@handle)에서 RSS로 동영상 ID 조회
-async function tryGetVideoIdFromChannelUrl(channelUrl: string, targetDate?: string): Promise<string | null> {
+// ─── 공통 타입 ─────────────────────────────────────────────────
+interface Stats {
+  views: number;
+  likes: number;
+  comments: number;
+  title: string;
+  date?: string;
+  thumbnailUrl?: string;
+  description?: string;
+  platform?: string;
+}
+
+// ─── YouTube ───────────────────────────────────────────────────
+
+/** 채널 URL(/@handle)에서 externalChannelId → RSS → videoId 탐색 */
+async function channelToVideoId(channelUrl: string, uploadDate?: string): Promise<string | null> {
   try {
-    const handleMatch = channelUrl.match(/youtube\.com\/@([^\/\?#]+)/);
-    if (!handleMatch) return null;
-    const handle = decodeURIComponent(handleMatch[1]);
+    const m = channelUrl.match(/youtube\.com\/@([^\/\?#]+)/);
+    if (!m) return null;
+    const handle = decodeURIComponent(m[1]);
 
-    // 채널 페이지에서 channel_id 추출
-    const pageRes = await fetch(`https://www.youtube.com/@${handle}`, {
+    const page = await fetch(`https://www.youtube.com/@${handle}`, {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
         "Accept-Language": "en-US,en;q=0.9",
       },
       signal: AbortSignal.timeout(9000),
     });
-    if (!pageRes.ok) { console.warn(`[YouTube] channel page ${pageRes.status} for @${handle}`); return null; }
-    const html = await pageRes.text();
+    if (!page.ok) return null;
+    const html = await page.text();
 
-    const cidMatch = html.match(/"externalChannelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/);
-    if (!cidMatch) { console.warn(`[YouTube] channelId not found for @${handle}`); return null; }
-    const channelId = cidMatch[1];
+    const cid = html.match(/"externalChannelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/)?.[1];
+    if (!cid) { console.warn(`[YouTube] externalChannelId not found for @${handle}`); return null; }
 
-    // RSS 피드에서 최근 동영상 목록
-    const rssRes = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`, {
+    const rss = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`, {
       signal: AbortSignal.timeout(8000),
     });
-    if (!rssRes.ok) return null;
-    const xml = await rssRes.text();
+    if (!rss.ok) return null;
+    const xml = await rss.text();
 
-    const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(m => {
-      const block = m[1];
-      const videoId   = block.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
-      const published = block.match(/<published>([^<]+)<\/published>/)?.[1]?.split("T")[0];
-      return { videoId, date: published };
-    }).filter(e => e.videoId && e.date);
+    const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)]
+      .map(e => ({
+        id:   e[1].match(/<yt:videoId>([^<]+)/)?.[1],
+        date: e[1].match(/<published>([^T]+)/)?.[1],
+      }))
+      .filter(e => e.id && e.date) as { id: string; date: string }[];
 
-    if (entries.length === 0) return null;
-    console.log(`[YouTube] RSS: @${handle} → ${entries.length}개 동영상 (channel_id=${channelId})`);
+    if (!entries.length) return null;
+    console.log(`[YouTube] RSS: @${handle} → ${entries.length}개 (channel=${cid})`);
 
-    if (targetDate) {
-      const tgt = new Date(targetDate).getTime();
+    if (uploadDate) {
+      const t = new Date(uploadDate).getTime();
       entries.sort((a, b) =>
-        Math.abs(new Date(a.date!).getTime() - tgt) - Math.abs(new Date(b.date!).getTime() - tgt)
+        Math.abs(new Date(a.date).getTime() - t) - Math.abs(new Date(b.date).getTime() - t)
       );
-      console.log(`[YouTube] targetDate=${targetDate} → closest: ${entries[0].videoId} (${entries[0].date})`);
     }
-    return entries[0].videoId ?? null;
+    console.log(`[YouTube] 선택된 videoId: ${entries[0].id} (${entries[0].date})`);
+    return entries[0].id;
   } catch (e) {
-    console.warn("[YouTube] channel→video lookup failed:", (e as any).message);
+    console.warn("[YouTube] channelToVideoId 실패:", (e as any).message);
     return null;
   }
 }
 
-async function fetchYoutubeStats(url: string, uploadDate?: string): Promise<{ views: number; likes: number; comments: number; title: string; date?: string }> {
-  let views = 0, likes = 0, comments = 0, title = "-", date: string | undefined;
+/**
+ * YouTube 영상 페이지 HTML 파싱 — ytInitialPlayerResponse 사용
+ * YouTube Data API key 없이도 조회수·제목·날짜 추출 가능
+ */
+async function scrapeYouTubeVideo(videoId: string): Promise<Stats> {
+  const fallback: Stats = {
+    views: 0, likes: 0, comments: 0, title: "-",
+    thumbnailUrl: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
+  };
+  try {
+    const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return fallback;
+    const html = await res.text();
 
-  // 비디오 ID 추출 (일반 영상, Shorts, Live, YouTube Studio 모두 지원)
-  const videoIdMatch = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/);
-  let videoId = videoIdMatch?.[1];
+    let views = 0, title = "-", date: string | undefined, description = "";
+    let thumb = fallback.thumbnailUrl!;
 
-  if (!videoId) {
-    // 채널 URL(@handle)인 경우 RSS로 실제 동영상 ID를 찾아봄
-    if (/youtube\.com\/@/.test(url)) {
-      const foundId = await tryGetVideoIdFromChannelUrl(url, uploadDate);
-      if (foundId) {
-        videoId = foundId;
-        console.log(`[YouTube] 채널URL → 동영상ID 발견: ${videoId}`);
-      }
-    }
-    if (!videoId) {
-      // 여전히 없으면 oEmbed로 채널명만 반환
+    // ── ytInitialPlayerResponse 파싱 (가장 신뢰도 높음) ─────────
+    const prMatch = html.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]*?\})\s*;?\s*(?:var\s|\(this\)|<\/script>)/);
+    if (prMatch) {
       try {
-        const oembed = await fetch(
-          `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
-          { signal: AbortSignal.timeout(5000) }
-        );
-        if (oembed.ok) {
-          const d = await oembed.json();
-          console.log(`[YouTube] channel-level URL → oEmbed title: ${d.title || d.author_name}`);
-          return { views: 0, likes: 0, comments: 0, title: d.title || d.author_name || url, date: undefined };
+        const pr = JSON.parse(prMatch[1]);
+        const vd = pr.videoDetails;
+        if (vd) {
+          title       = vd.title || "-";
+          views       = parseInt(vd.viewCount || "0", 10);
+          description = (vd.shortDescription || "").substring(0, 300);
+          const thumbs = vd.thumbnail?.thumbnails;
+          if (thumbs?.length) thumb = thumbs[thumbs.length - 1].url;
         }
+        const mf = pr.microformat?.playerMicroformatRenderer;
+        if (mf?.publishDate) date = mf.publishDate.split("T")[0];
+        else if (mf?.uploadDate) date = mf.uploadDate.split("T")[0];
       } catch {}
-      console.warn(`[YouTube] no video ID and oEmbed failed for: ${url}`);
-      return { views: 0, likes: 0, comments: 0, title: "-", date: undefined };
     }
-  }
 
-  // ── YouTube Data API (키 있을 때 최우선) ────────────────────
-  if (process.env.YOUTUBE_API_KEY) {
-    try {
-      const response = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?id=${videoId}&key=${process.env.YOUTUBE_API_KEY}&part=statistics,snippet`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        if (data.items?.length > 0) {
-          const video = data.items[0];
-          views    = parseInt(video.statistics?.viewCount    || "0", 10);
-          likes    = parseInt(video.statistics?.likeCount    || "0", 10);
-          comments = parseInt(video.statistics?.commentCount || "0", 10);
-          title    = video.snippet?.title || "-";
-          date     = video.snippet?.publishedAt?.split("T")[0];
-          console.log(`[YouTube] ✅ Data API: ${title} views=${views}`);
-          return { views, likes, comments, title, date };
-        }
-      }
-    } catch (e) {
-      console.warn(`[YouTube] Data API failed: ${(e as any).message}`);
+    // ── 단순 regex 폴백 ──────────────────────────────────────────
+    if (!views)        views = parseInt(html.match(/"viewCount":"(\d+)"/)?.[1] || "0", 10);
+    if (title === "-") title = html.match(/<title>(.+?)\s*(?:-\s*YouTube)?<\/title>/i)?.[1]?.trim() || "-";
+    if (!date) {
+      const dm = html.match(/"publishDate":"([^"]+)"/) || html.match(/"uploadDate":"([^"]+)"/);
+      if (dm) date = dm[1].split("T")[0];
     }
-  }
 
-  // ── oEmbed (무료, 키 불필요 — 제목·썸네일) ─────────────────
-  try {
-    const oembed = await fetch(
-      `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`,
-      { signal: AbortSignal.timeout(6000) }
-    );
-    if (oembed.ok) {
-      const d = await oembed.json();
-      if (d.title) {
-        title = d.title;
-        console.log(`[YouTube] ✅ oEmbed title: ${title}`);
-      }
-    }
+    console.log(`[YouTube] HTML 파싱: title="${title}" views=${views} date=${date}`);
+    return { views, likes: 0, comments: 0, title, date, thumbnailUrl: thumb, description };
   } catch (e) {
-    console.warn(`[YouTube] oEmbed failed: ${(e as any).message}`);
+    console.warn("[YouTube] HTML 파싱 실패:", (e as any).message);
+    return fallback;
   }
-
-  // ── ytdl-core (조회수/좋아요) ────────────────────────────────
-  try {
-    const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`);
-    const details = info.videoDetails;
-    if (!title || title === "-") title = details.title || "-";
-    views = parseInt(details.viewCount || "0", 10);
-    if (!date) date = details.uploadDate;
-    const likeCount = (info as any).microformat?.playerMicroformatRenderer?.likeCount;
-    if (likeCount) likes = parseInt(likeCount, 10);
-    console.log(`[YouTube] ✅ ytdl-core: views=${views}, title=${title}`);
-  } catch (e) {
-    console.warn(`[YouTube] ytdl-core failed: ${(e as any).message}`);
-  }
-
-  // ── HTML 파싱 최후 폴백 ──────────────────────────────────────
-  if ((!title || title === "-") && views === 0) {
-    try {
-      const res = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (res.ok) {
-        const html = await res.text();
-        const viewMatch  = html.match(/"viewCount":"(\d+)"/);
-        const likeMatch  = html.match(/"likeCount":"(\d+)"/);
-        const titleMatch = html.match(/<title>(.*?)<\/title>/);
-        const dateMatch  = html.match(/"publishDate":"([^"]+)"/) ||
-                           html.match(/<meta itemprop="datePublished" content="([^"]+)"/);
-        views = viewMatch  ? parseInt(viewMatch[1],  10) : 0;
-        likes = likeMatch  ? parseInt(likeMatch[1],  10) : 0;
-        if (!title || title === "-") title = titleMatch ? titleMatch[1].replace(" - YouTube", "").trim() : "-";
-        if (!date) date = dateMatch ? dateMatch[1].split("T")[0] : undefined;
-        console.log(`[YouTube] ✅ HTML fallback: views=${views}, title=${title}`);
-      }
-    } catch (e) {
-      console.warn(`[YouTube] HTML fallback failed: ${(e as any).message}`);
-    }
-  }
-
-  return { views, likes, comments, title, date };
 }
 
-async function fetchNaverBlogStats(url: string) {
+async function fetchYouTube(url: string, uploadDate?: string): Promise<Stats> {
+  // 1. 동영상 ID 추출
+  let videoId = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/)?.[1];
+
+  // 2. 채널 URL이면 RSS로 동영상 ID 탐색
+  if (!videoId && /youtube\.com\/@/.test(url)) {
+    videoId = (await channelToVideoId(url, uploadDate)) ?? undefined;
+  }
+
+  // 동영상 ID 없음 → 채널 이름 정도만 반환
+  if (!videoId) {
+    try {
+      const oe = await fetch(
+        `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (oe.ok) {
+        const d = await oe.json();
+        return { views: 0, likes: 0, comments: 0, title: d.author_name || "-", thumbnailUrl: d.thumbnail_url, platform: "YouTube" };
+      }
+    } catch {}
+    return { views: 0, likes: 0, comments: 0, title: "-", platform: "YouTube" };
+  }
+
+  const defaultThumb = `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+
+  // 3. YouTube Data API (키 있을 때 최우선)
+  if (process.env.YOUTUBE_API_KEY) {
+    try {
+      const r = await fetch(
+        `https://www.googleapis.com/youtube/v3/videos?id=${videoId}&key=${process.env.YOUTUBE_API_KEY}&part=statistics,snippet`,
+        { signal: AbortSignal.timeout(8000) }
+      );
+      if (r.ok) {
+        const d = await r.json();
+        const v = d.items?.[0];
+        if (v) {
+          console.log(`[YouTube] Data API ✅ views=${v.statistics?.viewCount}`);
+          return {
+            views:       parseInt(v.statistics?.viewCount    || "0", 10),
+            likes:       parseInt(v.statistics?.likeCount    || "0", 10),
+            comments:    parseInt(v.statistics?.commentCount || "0", 10),
+            title:       v.snippet?.title || "-",
+            date:        v.snippet?.publishedAt?.split("T")[0],
+            thumbnailUrl: defaultThumb,
+            description: v.snippet?.description?.substring(0, 300),
+            platform:    "YouTube",
+          };
+        }
+      }
+    } catch (e) { console.warn("[YouTube] Data API 실패:", (e as any).message); }
+  }
+
+  // 4. HTML 파싱 (ytInitialPlayerResponse) — API key 불필요
+  const scraped = await scrapeYouTubeVideo(videoId);
+
+  // 5. oEmbed — 제목 폴백
+  if (!scraped.title || scraped.title === "-") {
+    try {
+      const oe = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (oe.ok) { const d = await oe.json(); if (d.title) scraped.title = d.title; }
+    } catch {}
+  }
+
+  return { ...scraped, thumbnailUrl: scraped.thumbnailUrl || defaultThumb, platform: "YouTube" };
+}
+
+// ─── Instagram ─────────────────────────────────────────────────
+
+async function fetchInstagram(url: string): Promise<Stats> {
+  if (!process.env.APIFY_API_TOKEN) {
+    console.warn("[Instagram] APIFY_API_TOKEN 없음");
+    return { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
+  }
+  try {
+    const run = await apify.actor("apify/instagram-scraper").call(
+      { addParentData: false, directUrls: [url], resultsType: "details", resultsLimit: 1 },
+      { waitSecs: 120 }
+    );
+    const { items } = await apify.dataset(run.defaultDatasetId).listItems();
+    if (items?.length) {
+      const item: any = items[0];
+      const caption = item.caption || item.text || "";
+      return {
+        views:        item.videoViewCount || item.videoPlayCount || 0,
+        likes:        typeof item.likesCount === "number" ? item.likesCount : 0,
+        comments:     item.commentsCount  || 0,
+        title:        caption ? caption.substring(0, 80) + (caption.length > 80 ? "…" : "") : "-",
+        date:         item.timestamp ? new Date(item.timestamp).toISOString().split("T")[0] : undefined,
+        thumbnailUrl: item.displayUrl    || item.thumbnailUrl,
+        description:  caption || undefined,
+        platform:     "Instagram",
+      };
+    }
+  } catch (e: any) {
+    if (e?.statusCode === 402 || e?.type === "actor-memory-limit-exceeded") {
+      console.warn("[Instagram] Apify 메모리 한도 초과");
+      return { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
+    }
+    console.warn("[Instagram] Apify 실패:", e?.message);
+  }
+  return { views: 0, likes: 0, comments: 0, title: "-", platform: "Instagram" };
+}
+
+// ─── Twitter / X ───────────────────────────────────────────────
+
+async function fetchTwitter(url: string): Promise<Stats> {
+  const tweetId = url.match(/\/status\/(\d+)/)?.[1];
+
+  // Twitter API v2
+  if (tweetId && process.env.TWITTER_BEARER_TOKEN) {
+    try {
+      const r = await fetch(
+        `https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=created_at,public_metrics,text&expansions=author_id&user.fields=name,username,profile_image_url`,
+        { headers: { Authorization: `Bearer ${process.env.TWITTER_BEARER_TOKEN}` }, signal: AbortSignal.timeout(8000) }
+      );
+      if (r.ok) {
+        const d = await r.json();
+        const tweet = d.data, user = d.includes?.users?.[0];
+        return {
+          views:        tweet?.public_metrics?.impression_count || 0,
+          likes:        tweet?.public_metrics?.like_count       || 0,
+          comments:     tweet?.public_metrics?.reply_count      || 0,
+          title:        user ? `@${user.username}` : "-",
+          description:  tweet?.text,
+          date:         tweet?.created_at?.slice(0, 10),
+          thumbnailUrl: user?.profile_image_url,
+          platform:     "X",
+        };
+      }
+    } catch (e) { console.warn("[Twitter API]:", (e as any).message); }
+  }
+
+  // Apify 폴백
+  if (tweetId && process.env.APIFY_API_TOKEN) {
+    try {
+      const run = await apify.actor("apidojo/tweet-scraper").call(
+        { searchTerms: [`conversation_id:${tweetId}`], maxItems: 1, queryType: "Latest" },
+        { waitSecs: 60 }
+      );
+      const { items } = await apify.dataset(run.defaultDatasetId).listItems();
+      if (items?.length) {
+        const item: any = items[0];
+        const uname = item.author?.userName || item.user?.screen_name || "";
+        return {
+          views:        item.viewCount  || 0,
+          likes:        item.likeCount  || 0,
+          comments:     item.replyCount || 0,
+          title:        uname ? `@${uname}` : "-",
+          description:  item.fullText || item.text,
+          date:         item.createdAt ? new Date(item.createdAt).toISOString().slice(0, 10) : undefined,
+          thumbnailUrl: item.author?.profileImageUrl,
+          platform:     "X",
+        };
+      }
+    } catch (e) { console.warn("[Twitter Apify]:", (e as any).message); }
+  }
+
+  // oEmbed 폴백 (작성자 이름만)
+  let title = "-";
+  try {
+    const oe = await fetch(`https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`, { signal: AbortSignal.timeout(5000) });
+    if (oe.ok) { const d = await oe.json(); if (d.author_name) title = `@${d.author_name}`; }
+  } catch {}
+  return { views: 0, likes: 0, comments: 0, title, platform: "X" };
+}
+
+// ─── Naver Blog ────────────────────────────────────────────────
+
+async function fetchNaverBlog(url: string): Promise<Stats> {
   try {
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" },
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return { views: 0, likes: 0, comments: 0, title: "-" };
+    if (!res.ok) return { views: 0, likes: 0, comments: 0, title: "-", platform: "Naver Blog" };
     const html = await res.text();
-    const titleMatch = html.match(/<title>(.*?)<\/title>/);
-    return {
-      views: 0, likes: 0, comments: 0,
-      title: titleMatch ? titleMatch[1].trim() : "-",
-    };
+    const title = html.match(/<title>(.+?)<\/title>/i)?.[1]?.trim() || "-";
+    return { views: 0, likes: 0, comments: 0, title, platform: "Naver Blog" };
   } catch {
-    return { views: 0, likes: 0, comments: 0, title: "-" };
+    return { views: 0, likes: 0, comments: 0, title: "-", platform: "Naver Blog" };
   }
 }
+
+// ─── Main handler ──────────────────────────────────────────────
 
 export async function POST(req: Request) {
   let url = "";
   try {
-    const body = await req.json();
-    url = body?.url || "";
-    if (!url || typeof url !== "string") {
-      return NextResponse.json({ success: false, error: "URL이 필요합니다." }, { status: 400 });
-    }
+    const body  = await req.json();
+    url         = (body?.url  || "").trim();
+    const uploadDate: string | undefined = typeof body?.uploadDate === "string" && body.uploadDate ? body.uploadDate : undefined;
 
-    let stats: any = { views: 0, likes: 0, comments: 0, title: "-" };
+    if (!url) return NextResponse.json({ success: false, error: "URL이 필요합니다." }, { status: 400 });
 
-    const uploadDate: string | undefined = typeof body?.uploadDate === "string" ? body.uploadDate : undefined;
+    let stats: Stats;
 
-    if (url.includes("youtube.com") || url.includes("youtu.be")) {
-      stats = await fetchYoutubeStats(url, uploadDate);
-      const idMatch = url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/);
-      if (idMatch) {
-        stats.thumbnailUrl = `https://img.youtube.com/vi/${idMatch[1]}/mqdefault.jpg`;
-      }
+    if (/youtube\.com|youtu\.be/.test(url)) {
+      stats = await fetchYouTube(url, uploadDate);
+      // 동영상 ID로 썸네일 보장
+      const vid = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/)?.[1];
+      if (vid && !stats.thumbnailUrl) stats.thumbnailUrl = `https://img.youtube.com/vi/${vid}/mqdefault.jpg`;
 
-    } else if (url.includes("instagram.com")) {
-      if (!process.env.APIFY_API_TOKEN) {
-        return NextResponse.json({ success: false, error: "APIFY_API_TOKEN이 없어 인스타그램 스크랩 불가" });
-      }
-      try {
-        const run = await apifyClient.actor("apify/instagram-scraper").call({
-          addParentData: false,
-          directUrls: [url],
-          resultsType: "details",
-        });
-        const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
-        if (items?.length > 0) {
-          const item: any = items[0];
-          stats.views       = item.videoViewCount || item.videoPlayCount || 0;
-          stats.likes       = typeof item.likesCount === "number" && item.likesCount > 0 ? item.likesCount : 0;
-          stats.comments    = item.commentsCount || 0;
-          stats.title       = item.caption ? item.caption.substring(0, 50) + "..." : "-";
-          stats.thumbnailUrl = item.displayUrl || item.thumbnailUrl;
-          if (item.timestamp) stats.date = new Date(item.timestamp).toISOString().split("T")[0];
-        }
-      } catch (apifyErr: any) {
-        if (apifyErr?.statusCode === 402 || apifyErr?.type === "actor-memory-limit-exceeded") {
-          return NextResponse.json({ success: false, error: "Apify 메모리 한도 초과 — 잠시 후 개별 새로고침으로 시도하세요." });
-        }
-        return NextResponse.json({ success: false, error: apifyErr?.message || "인스타그램 스크랩 실패" });
-      }
+    } else if (/instagram\.com/.test(url)) {
+      stats = await fetchInstagram(url);
 
-    } else if (url.includes("twitter.com") || url.includes("x.com")) {
-      const tweetIdMatch = url.match(/\/status\/(\d+)/);
-      const tweetId = tweetIdMatch?.[1];
+    } else if (/twitter\.com|x\.com/.test(url)) {
+      stats = await fetchTwitter(url);
 
-      if (tweetId && process.env.TWITTER_BEARER_TOKEN) {
-        try {
-          const apiUrl = `https://api.twitter.com/2/tweets/${tweetId}?tweet.fields=created_at,public_metrics,author_id&expansions=author_id&user.fields=name,username,profile_image_url`;
-          const res = await fetch(apiUrl, { headers: { Authorization: `Bearer ${process.env.TWITTER_BEARER_TOKEN}` } });
-          if (res.ok) {
-            const data = await res.json();
-            const tweet = data.data;
-            const user  = data.includes?.users?.[0];
-            stats.views    = tweet?.public_metrics?.impression_count || 0;
-            stats.likes    = tweet?.public_metrics?.like_count       || 0;
-            stats.comments = tweet?.public_metrics?.reply_count      || 0;
-            stats.title    = user ? `@${user.username}` : "-";
-            if (tweet?.created_at) stats.date = tweet.created_at.slice(0, 10);
-            stats.thumbnailUrl = user?.profile_image_url || undefined;
-          }
-        } catch (e: any) { console.warn("[X/Twitter API]", e.message); }
-      }
-      if (stats.likes === 0 && stats.views === 0 && process.env.APIFY_API_TOKEN) {
-        try {
-          const run = await apifyClient.actor("apidojo/tweet-scraper").call(
-            { searchTerms: [tweetId ? `conversation_id:${tweetId}` : url], maxItems: 1, queryType: "Latest" },
-            { waitSecs: 60 }
-          );
-          const { items } = await apifyClient.dataset(run.defaultDatasetId).listItems();
-          if (items?.length > 0) {
-            const item: any = items[0];
-            stats.views    = item.viewCount   || item.views          || 0;
-            stats.likes    = item.likeCount   || item.favorite_count || 0;
-            stats.comments = item.replyCount  || item.reply_count    || 0;
-            const uname = item.author?.userName || item.user?.screen_name || "";
-            if (uname) stats.title = `@${uname}`;
-            const dt = item.createdAt || item.created_at;
-            if (dt) stats.date = new Date(dt).toISOString().slice(0, 10);
-            stats.thumbnailUrl = item.author?.profileImageUrl || item.user?.profile_image_url || undefined;
-          }
-        } catch (e: any) { console.warn("[X/Twitter Apify]", e.message); }
-      }
-      if (!stats.title || stats.title === "-") {
-        try {
-          const oe = await fetch(`https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`);
-          if (oe.ok) { const d = await oe.json(); stats.title = d.author_name ? `@${d.author_name}` : "-"; }
-        } catch {}
-      }
-
-    } else if (url.includes("blog.naver.com")) {
-      stats = await fetchNaverBlogStats(url);
+    } else if (/blog\.naver\.com|m\.blog\.naver\.com/.test(url)) {
+      stats = await fetchNaverBlog(url);
 
     } else {
-      return NextResponse.json({ success: false, error: "지원하지 않는 플랫폼의 URL입니다." });
+      return NextResponse.json({ success: false, error: "지원하지 않는 플랫폼입니다." });
     }
 
     return NextResponse.json({ success: true, stats });
   } catch (e: any) {
-    console.error(`[fetch-sns-stats] UNHANDLED ERROR url="${url}":`, e);
+    console.error(`[fetch-sns-stats] 처리되지 않은 오류 url="${url}":`, e);
     return NextResponse.json({ success: false, error: e.message || "알 수 없는 오류" }, { status: 500 });
   }
 }
