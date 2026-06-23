@@ -45,8 +45,8 @@ export async function POST(req: Request) {
    - 1이면: 한 셀에 "건수/명수" 형태로 같이 있는 싱글 컬럼 구조.
 4. vipReserve: VIP 사전 예약 신청 건수 행 번호 배열 (블록마다 반복)
 5. generalReserve: 일반 사전 예약 신청 건수 행 번호 배열
-6. actualVisit: 실제 방문자 수 행 번호 배열 (VIP 방문 + 일반 방문)
-7. totalVisit: 총 방문객 수 행 번호 배열
+6. actualVisit: 사전예약자 중 실제 방문한 행 번호 배열 (예약 완료 후 방문한 인원, 워크인 제외)
+7. totalVisit: 총 방문객 수 행 번호 배열 (워크인 포함 실제 총 방문객, 예약+비예약 전체 합산)
 
 **규칙:**
 - 행 번호는 1부터 시작하는 정수
@@ -159,8 +159,8 @@ function analyzeSheetStatistically(allRows: string[][]) {
 
     if (rowStr.includes("vip") && (rowStr.includes("예약") || rowStr.includes("신청"))) vipReserve.push(rowNum);
     if (rowStr.includes("일반") && (rowStr.includes("예약") || rowStr.includes("신청"))) generalReserve.push(rowNum);
-    if (rowStr.includes("실 방문") || rowStr.includes("실방문") || rowStr.includes("실제 방문")) actualVisit.push(rowNum);
-    if (rowStr.includes("총 방문") || rowStr.includes("총방문")) totalVisit.push(rowNum);
+    if ((rowStr.includes("실 방문") || rowStr.includes("실방문") || rowStr.includes("실제 방문")) && !rowStr.includes("총")) actualVisit.push(rowNum);
+    if (rowStr.includes("총 방문") || rowStr.includes("총방문") || rowStr.includes("총 입장") || rowStr.includes("전체 방문")) totalVisit.push(rowNum);
   });
 
   return {

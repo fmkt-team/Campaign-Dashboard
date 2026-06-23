@@ -1524,6 +1524,19 @@ export default function AwarenessPage() {
             rawUrl = scanRowForSocialUrl(cols, previewHyperlinks?.[absRowIdx] ?? []);
           }
 
+          // Fallback: 모든 컬럼 하이퍼링크에서 SNS URL 탐색 (url/date 컬럼 외 다른 컬럼에 링크가 있을 경우)
+          if (!rawUrl && previewHyperlinks) {
+            const rowLinks = previewHyperlinks[absRowIdx] || [];
+            for (const link of rowLinks) {
+              if (link && (link.includes("youtube.com") || link.includes("youtu.be") ||
+                  link.includes("instagram.com") || link.includes("blog.naver.com") ||
+                  link.includes("tiktok.com") || link.includes("twitter.com") || link.includes("x.com"))) {
+                rawUrl = link;
+                break;
+              }
+            }
+          }
+
           // URL로 플랫폼 자동 감지
           if (!platform || platform === "-") {
             if (rawUrl.includes("youtube.com") || rawUrl.includes("youtu.be")) platform = "YouTube";

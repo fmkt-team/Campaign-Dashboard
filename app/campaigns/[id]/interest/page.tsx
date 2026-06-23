@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import {
   Check, X, Settings2, Link2, RefreshCw, Users, CalendarDays, BarChart3, Ticket,
   TrendingUp, MessageSquare, MapPin, PieChart, List, Smile, Frown, MessageCircle,
-  Star, Quote, ArrowUpRight, Crown, Edit2, ExternalLink, Trash2, Plus, ChevronDown, ChevronUp, ClipboardList
+  Star, Quote, ArrowUpRight, Crown, Edit2, ExternalLink, Trash2, Plus, ChevronDown, ChevronUp, ClipboardList, Sparkles
 } from "lucide-react";
 import {
   BarChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -551,6 +551,9 @@ function PopupVocSection({ campaignId, isAdmin }: { campaignId: string; isAdmin:
   const [formContent, setFormContent] = useState("");
   const [saving, setSaving]         = useState(false);
   const [expanded, setExpanded]     = useState<Record<string, boolean>>({});
+  const [summaries, setSummaries]   = useState<Record<string, string>>({});
+  const [summarizing, setSummarizing] = useState<Record<string, boolean>>({});
+  const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
 
   // 날짜별 그룹핑 (내림차순)
   const grouped = useMemo(() => {
@@ -602,11 +605,33 @@ function PopupVocSection({ campaignId, isAdmin }: { campaignId: string; isAdmin:
   const toggleDate = (date: string) =>
     setExpanded(prev => ({ ...prev, [date]: !prev[date] }));
 
+  const handleSummarize = async (date: string, entries: { content: string }[]) => {
+    setSummarizing(prev => ({ ...prev, [date]: true }));
+    setSummaryErrors(prev => ({ ...prev, [date]: "" }));
+    try {
+      const res = await fetch("/api/summarize-voc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entries: entries.map(e => e.content) }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setSummaries(prev => ({ ...prev, [date]: json.summary }));
+      } else {
+        setSummaryErrors(prev => ({ ...prev, [date]: json.error || "요약에 실패했습니다." }));
+      }
+    } catch {
+      setSummaryErrors(prev => ({ ...prev, [date]: "요약 중 오류가 발생했습니다." }));
+    } finally {
+      setSummarizing(prev => ({ ...prev, [date]: false }));
+    }
+  };
+
   return (
     <GlassCard className="p-6 mt-6">
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-5">
-        <h4 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+        <h4 className="text-base font-bold text-gray-900 flex items-center gap-2">
           <ClipboardList className="w-4 h-4 text-gray-900" />
           현장 고객 VOC
           {vocEntries.length > 0 && (
@@ -642,7 +667,7 @@ function PopupVocSection({ campaignId, isAdmin }: { campaignId: string; isAdmin:
           <div className="flex gap-2 items-start">
             <label className="text-xs text-gray-500 shrink-0 w-14 pt-2">내용</label>
             <textarea
-              className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 outline-none focus:border-gray-400 resize-none leading-relaxed"
+              className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-400 resize-none leading-relaxed"
               rows={10}
               placeholder={"운영팀 현장 VOC를 입력하세요.\n\n예)\n1) 입장존에서 박수 트로피를 보고 감동받으셨다는 고객님이 계셨습니다.\n\n2) 드레스업 체험 후 결과물을 보고 모두 웃으며 매우 만족해하셨습니다."}
               value={formContent}
@@ -695,42 +720,75 @@ function PopupVocSection({ campaignId, isAdmin }: { campaignId: string; isAdmin:
                 onClick={() => toggleDate(date)}
               >
                 <div className="flex items-center gap-2">
-                  <CalendarDays className="w-3.5 h-3.5 text-gray-500" />
-                  <span className="text-sm font-semibold text-gray-800">{displayDate}</span>
-                  <span className="text-[11px] text-gray-400">{entries.length}건</span>
+                  <CalendarDays className="w-4 h-4 text-gray-500" />
+                  <span className="text-base font-semibold text-gray-800">{displayDate}</span>
+                  <span className="text-xs text-gray-400">{entries.length}건</span>
                 </div>
                 {isOpen ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
               </button>
 
               {/* VOC 내용 */}
               {isOpen && (
-                <div className="divide-y divide-gray-50">
-                  {entries.map((entry) => (
-                    <div key={entry._id} className="px-4 py-4 bg-white group">
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap flex-1">
-                          {entry.content}
-                        </p>
-                        {isAdmin && (
-                          <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => openEdit(entry)}
-                              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700">
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button onClick={() => handleDelete(entry._id)}
-                              className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                <div>
+                  {/* 일자별 AI 요약 */}
+                  <div className="px-4 py-3 bg-indigo-50/50 border-b border-gray-50">
+                    {summaries[date] ? (
+                      <div className="flex items-start gap-2">
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-500 mt-0.5 shrink-0" />
+                        <div className="flex-1">
+                          <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">{summaries[date]}</p>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleSummarize(date, entries); }}
+                            disabled={summarizing[date]}
+                            className="text-[11px] text-indigo-500 hover:text-indigo-700 mt-1.5 flex items-center gap-1"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${summarizing[date] ? "animate-spin" : ""}`} /> 다시 요약
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleSummarize(date, entries); }}
+                        disabled={summarizing[date]}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5 font-medium"
+                      >
+                        {summarizing[date] ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                        {summarizing[date] ? "요약 생성 중..." : "AI로 이 날짜 VOC 요약하기"}
+                      </button>
+                    )}
+                    {summaryErrors[date] && (
+                      <p className="text-[11px] text-red-500 mt-1.5">{summaryErrors[date]}</p>
+                    )}
+                  </div>
+
+                  <div className="divide-y divide-gray-50">
+                    {entries.map((entry) => (
+                      <div key={entry._id} className="px-4 py-4 bg-white group">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap flex-1">
+                            {entry.content}
+                          </p>
+                          {isAdmin && (
+                            <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={() => openEdit(entry)}
+                                className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700">
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button onClick={() => handleDelete(entry._id)}
+                                className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500">
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {entry.updatedAt && (
+                          <p className="text-xs text-gray-300 mt-2">
+                            수정됨 {new Date(entry.updatedAt).toLocaleDateString("ko-KR")}
+                          </p>
                         )}
                       </div>
-                      {entry.updatedAt && (
-                        <p className="text-[10px] text-gray-300 mt-2">
-                          수정됨 {new Date(entry.updatedAt).toLocaleDateString("ko-KR")}
-                        </p>
-                      )}
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -2006,7 +2064,9 @@ export default function InterestPage() {
       const dataRows = rows.slice(1);
       const findCol = (kws: string[]) => headers.findIndex(h => kws.some(k => h.includes(k)));
       const dateCol   = findCol(["날짜", "일자", "date"]);
-      const totalCol  = findCol(["총", "전체", "actual", "방문자"]);
+      const totalCol  = findCol(["총 방문", "전체 방문", "total visitor", "총방문"]) >= 0
+        ? findCol(["총 방문", "전체 방문", "total visitor", "총방문"])
+        : findCol(["총", "전체", "actual", "방문자"]);
       const vipCol    = findCol(["vip", "브이아이피"]);
       const rateCol   = findCol(["방문율", "rate", "비율", "%"]);
       const parsed = dataRows.map(r => {
@@ -2060,6 +2120,51 @@ export default function InterestPage() {
     const dateHeaderRows: number[] = (mapping.dateHeaderRows || []).map((r: number) => r - 1); // 0-based
     const dr = mapping.dataRows || {};
     const toIdx = (arr: number[], i: number) => ((arr || [])[i] ?? 0) - 1;
+
+    // 블록 내에서 "총 방문" 행을 라벨 텍스트로 탐색하는 범용 함수
+    // - labelCols: 행 라벨이 들어있는 열 인덱스 후보 (왼쪽 몇 열)
+    // - keywords: 라벨에 포함돼야 할 키워드 (하나라도 포함하면 후보)
+    // - dateCols_: 날짜별 col 배열 (숫자 데이터가 있는지 검증용)
+    // - searchStart/searchEnd: 탐색할 행 범위 (0-based)
+    const findTotalRow = (
+      rows: string[][],
+      searchStart: number,
+      searchEnd: number,
+      dateCols_: { col: number }[],
+      keywords: string[]
+    ): number => {
+      const labelCols = [0, 1, 2, 3]; // A, B, C, D열을 라벨 후보로 탐색
+      const end = Math.min(searchEnd, rows.length - 1);
+      let bestRow = -1;
+      let bestScore = -1;
+
+      for (let r = searchStart; r <= end; r++) {
+        const row = rows[r];
+        if (!row) continue;
+
+        // 1) 라벨 셀 중 keyword가 포함된 행인지 확인
+        const labelText = labelCols
+          .map(c => (row[c] || "").trim().toLowerCase())
+          .join(" ");
+        const hasKeyword = keywords.some(kw => labelText.includes(kw));
+        if (!hasKeyword) continue;
+
+        // 2) 날짜 컬럼(col+1 = people 컬럼)에 실제 숫자가 몇 개 있는지 점수화
+        let score = 0;
+        for (const { col } of dateCols_) {
+          const raw = (row[col + 1] || row[col] || "").trim();
+          if (raw && /^\d/.test(raw) && !/^\d{1,2}[\/\.]\d{1,2}/.test(raw)) {
+            score++;
+          }
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestRow = r;
+        }
+      }
+      return bestRow;
+    };
 
     for (let hi = 0; hi < dateHeaderRows.length; hi++) {
       const headerRowIdx = dateHeaderRows[hi];
@@ -2145,31 +2250,49 @@ export default function InterestPage() {
         }
       }
 
-      // 총 방문객(row22) / 실제 방문(row19)
-      // row22: E=총팀(건), F=총인원(명)
-      // row19: E=VIP방문명, F=일반방문명  (VIP/일반 순서)
+      // 총 방문객 / 실제 방문 행 결정
+      // 1순위: AI 매핑의 totalVisit 행 번호
+      // 2순위: 블록 내 라벨 텍스트에 "총|합계|total|전체" 포함 행 자동 탐색
       const tvIdx = toIdx(dr.totalVisit, hi);
       const avIdx = toIdx(dr.actualVisit, hi);
 
-      if (tvIdx >= 0 || avIdx >= 0) {
+      // 다음 블록 헤더 직전까지를 탐색 범위로 설정 (없으면 +25행)
+      const nextHeaderIdx = dateHeaderRows[hi + 1] ?? headerRowIdx + 25;
+      const effectiveTvIdx = tvIdx >= 0 ? tvIdx
+        : findTotalRow(
+            allRows,
+            headerRowIdx + 1,
+            nextHeaderIdx - 1,
+            dateCols,
+            ["총", "합계", "total", "전체", "sum"]
+          );
+
+      if (effectiveTvIdx >= 0 || avIdx >= 0) {
         for (const {col, date} of dateCols) {
           let actual = 0;      // 일반 방문 명수
           let vipActual = 0;   // VIP 방문 명수
           let actualCount = 0; // 총 방문 건수(팀수)
 
-          if (tvIdx >= 0 && allRows[tvIdx]) {
-            const { count: teams } = readCountPeople(allRows[tvIdx], col);
-            actualCount = teams; // E22 = 총 방문 팀수
+          // 총 방문객: people 컬럼(col+1)을 직접 읽음 — isDualCol 필터 우회하여 안전하게 파싱
+          let totalPpl = 0;
+          if (effectiveTvIdx >= 0) {
+            const tvRow = allRows[effectiveTvIdx];
+            if (tvRow) {
+              // dual-col: col+1이 명수; single-col: col 자체
+              const rawPpl = isDualCol ? (tvRow[col + 1] || "") : (tvRow[col] || "");
+              const rawCnt = tvRow[col] || "";
+              const isDate = (s: string) => /^\d{1,2}[\/\.]\d{1,2}/.test(s.trim());
+              if (!isDate(rawPpl)) totalPpl    = processNumber(rawPpl);
+              if (!isDate(rawCnt)) actualCount = processNumber(rawCnt);
+            }
           }
 
           if (avIdx >= 0 && allRows[avIdx]) {
-            // row19: 듀얼컬럼에서 count=VIP명, people=일반명
             const { count: vipPpl, people: genPpl } = readCountPeople(allRows[avIdx], col);
-            vipActual = vipPpl;  // E19
-            actual    = genPpl;  // F19
-          } else if (tvIdx >= 0 && allRows[tvIdx]) {
-            // row19 없으면 row22 명수를 총방문으로 사용
-            const { people: totalPpl } = readCountPeople(allRows[tvIdx], col);
+            vipActual = vipPpl;
+            // 총방문객 행이 있으면 그 값 기준; 없으면 actualVisit 행의 일반 방문 사용
+            actual = totalPpl > 0 ? Math.max(totalPpl - vipActual, 0) : genPpl;
+          } else if (totalPpl > 0) {
             actual = totalPpl;
           }
 
@@ -2218,7 +2341,7 @@ export default function InterestPage() {
           locationOrTarget: "",
           startDate: date,
           endDate: date,
-          visitors: vis?.actual ?? 0,
+          visitors: (vis?.actual ?? 0) + (vis?.vipActual ?? 0),
           participants: g?.people ?? 0,
           budget: 0,
           vipCount: v?.count ?? 0,
@@ -2419,7 +2542,7 @@ export default function InterestPage() {
 
     popupActivities.forEach(a => {
       if (a.activityType === "팝업일별데이터") {
-        visitors += a.actualVisitCount ?? 0;
+        visitors += a.visitors ?? ((a.actualVisitCount ?? 0) + (a.vipActualVisitCount ?? 0));
         vipVisitors += a.vipActualVisitCount ?? 0;
         reservations += (a.generalReservePeople ?? 0) + (a.vipReservePeople ?? 0);
       } else if (!hasDailyData) {
@@ -2508,8 +2631,8 @@ export default function InterestPage() {
       const date = a.startDate ? a.startDate.slice(5).replace("-", "/") : "미상";
       if (!map.has(date)) map.set(date, { name: date, 이벤트참여자: 0, 팝업방문객: 0, VIP방문객: 0 });
       if (a.activityType === "팝업일별데이터") {
-        // 팝업방문객 = 일반+VIP 합산 (그래프에 총 방문자 표시)
-        map.get(date).팝업방문객 += (a.actualVisitCount ?? 0) + (a.vipActualVisitCount ?? 0);
+        // 팝업방문객 = 총 방문객 (visitors 필드) 우선, 없으면 actualVisitCount+vipActualVisitCount 합산
+        map.get(date).팝업방문객 += a.visitors ?? ((a.actualVisitCount ?? 0) + (a.vipActualVisitCount ?? 0));
         map.get(date).VIP방문객 += a.vipActualVisitCount ?? 0;
       } else {
         map.get(date).팝업방문객 += a.participants;
@@ -2995,7 +3118,7 @@ export default function InterestPage() {
                   />
                 </div>
                 <p className="text-2xl font-bold font-mono text-gray-900">
-                  {(popupStats.visitors + popupStats.vipVisitors).toLocaleString()}
+                  {popupStats.visitors.toLocaleString()}
                   <span className="text-xs font-sans text-gray-400 ml-1">명</span>
                 </p>
                 <EditableText
