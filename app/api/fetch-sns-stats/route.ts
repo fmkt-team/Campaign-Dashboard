@@ -6,28 +6,91 @@ const apifyClient = new ApifyClient({
   token: process.env.APIFY_API_TOKEN,
 });
 
-async function fetchYoutubeStats(url: string): Promise<{ views: number; likes: number; comments: number; title: string; date?: string }> {
+// 채널 URL(@handle)에서 RSS로 동영상 ID 조회
+async function tryGetVideoIdFromChannelUrl(channelUrl: string, targetDate?: string): Promise<string | null> {
+  try {
+    const handleMatch = channelUrl.match(/youtube\.com\/@([^\/\?#]+)/);
+    if (!handleMatch) return null;
+    const handle = decodeURIComponent(handleMatch[1]);
+
+    // 채널 페이지에서 channel_id 추출
+    const pageRes = await fetch(`https://www.youtube.com/@${handle}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!pageRes.ok) { console.warn(`[YouTube] channel page ${pageRes.status} for @${handle}`); return null; }
+    const html = await pageRes.text();
+
+    const cidMatch = html.match(/"externalChannelId"\s*:\s*"(UC[a-zA-Z0-9_-]{22})"/);
+    if (!cidMatch) { console.warn(`[YouTube] channelId not found for @${handle}`); return null; }
+    const channelId = cidMatch[1];
+
+    // RSS 피드에서 최근 동영상 목록
+    const rssRes = await fetch(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!rssRes.ok) return null;
+    const xml = await rssRes.text();
+
+    const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(m => {
+      const block = m[1];
+      const videoId   = block.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)?.[1];
+      const published = block.match(/<published>([^<]+)<\/published>/)?.[1]?.split("T")[0];
+      return { videoId, date: published };
+    }).filter(e => e.videoId && e.date);
+
+    if (entries.length === 0) return null;
+    console.log(`[YouTube] RSS: @${handle} → ${entries.length}개 동영상 (channel_id=${channelId})`);
+
+    if (targetDate) {
+      const tgt = new Date(targetDate).getTime();
+      entries.sort((a, b) =>
+        Math.abs(new Date(a.date!).getTime() - tgt) - Math.abs(new Date(b.date!).getTime() - tgt)
+      );
+      console.log(`[YouTube] targetDate=${targetDate} → closest: ${entries[0].videoId} (${entries[0].date})`);
+    }
+    return entries[0].videoId ?? null;
+  } catch (e) {
+    console.warn("[YouTube] channel→video lookup failed:", (e as any).message);
+    return null;
+  }
+}
+
+async function fetchYoutubeStats(url: string, uploadDate?: string): Promise<{ views: number; likes: number; comments: number; title: string; date?: string }> {
   let views = 0, likes = 0, comments = 0, title = "-", date: string | undefined;
 
   // 비디오 ID 추출 (일반 영상, Shorts, Live, YouTube Studio 모두 지원)
   const videoIdMatch = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/);
-  const videoId = videoIdMatch?.[1];
+  let videoId = videoIdMatch?.[1];
 
   if (!videoId) {
-    // 채널/플레이리스트 URL — oEmbed로 채널명이라도 반환 (throw하지 않음)
-    try {
-      const oembed = await fetch(
-        `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
-        { signal: AbortSignal.timeout(5000) }
-      );
-      if (oembed.ok) {
-        const d = await oembed.json();
-        console.log(`[YouTube] channel-level URL → oEmbed title: ${d.title || d.author_name}`);
-        return { views: 0, likes: 0, comments: 0, title: d.title || d.author_name || url, date: undefined };
+    // 채널 URL(@handle)인 경우 RSS로 실제 동영상 ID를 찾아봄
+    if (/youtube\.com\/@/.test(url)) {
+      const foundId = await tryGetVideoIdFromChannelUrl(url, uploadDate);
+      if (foundId) {
+        videoId = foundId;
+        console.log(`[YouTube] 채널URL → 동영상ID 발견: ${videoId}`);
       }
-    } catch {}
-    console.warn(`[YouTube] no video ID and oEmbed failed for: ${url}`);
-    return { views: 0, likes: 0, comments: 0, title: "-", date: undefined };
+    }
+    if (!videoId) {
+      // 여전히 없으면 oEmbed로 채널명만 반환
+      try {
+        const oembed = await fetch(
+          `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (oembed.ok) {
+          const d = await oembed.json();
+          console.log(`[YouTube] channel-level URL → oEmbed title: ${d.title || d.author_name}`);
+          return { views: 0, likes: 0, comments: 0, title: d.title || d.author_name || url, date: undefined };
+        }
+      } catch {}
+      console.warn(`[YouTube] no video ID and oEmbed failed for: ${url}`);
+      return { views: 0, likes: 0, comments: 0, title: "-", date: undefined };
+    }
   }
 
   // ── YouTube Data API (키 있을 때 최우선) ────────────────────
@@ -142,8 +205,10 @@ export async function POST(req: Request) {
 
     let stats: any = { views: 0, likes: 0, comments: 0, title: "-" };
 
+    const uploadDate: string | undefined = typeof body?.uploadDate === "string" ? body.uploadDate : undefined;
+
     if (url.includes("youtube.com") || url.includes("youtu.be")) {
-      stats = await fetchYoutubeStats(url);
+      stats = await fetchYoutubeStats(url, uploadDate);
       const idMatch = url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/);
       if (idMatch) {
         stats.thumbnailUrl = `https://img.youtube.com/vi/${idMatch[1]}/mqdefault.jpg`;

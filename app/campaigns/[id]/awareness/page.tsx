@@ -123,10 +123,17 @@ function processNumber(val: any) {
 function processDate(val: any): string {
   if (!val) return "";
   const s = String(val).trim();
+  // 전체 날짜: 2026-06-18 / 2026/06/18 / 26-06-18
   const m = s.match(/(\d{2,4})[-/.](\d{1,2})[-/.](\d{1,2})/);
   if (m) {
     const y = m[1].length === 2 ? `20${m[1]}` : m[1];
     return `${y}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  }
+  // 단축 날짜: "6/18", "06/18" (월/일, 연도는 현재 연도 사용)
+  const short = s.match(/(\d{1,2})\/(\d{1,2})(?!\d)/);
+  if (short) {
+    const year = new Date().getFullYear();
+    return `${year}-${short[1].padStart(2, "0")}-${short[2].padStart(2, "0")}`;
   }
   return "";
 }
@@ -1599,7 +1606,7 @@ export default function AwarenessPage() {
         if (ri % 3 === 0) setSyncStatus(`URL 성과 데이터 수집 중... (${ri + 1}/${validRows.length}건)`);
         if (!row.url) { enriched.push(row); continue; }
         try {
-          const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: row.url }) });
+          const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: row.url, uploadDate: row.date || undefined }) });
           const data = await res.json();
           if (data.success && data.stats) {
             row.views = data.stats.views !== undefined ? processNumber(data.stats.views) : 0;
