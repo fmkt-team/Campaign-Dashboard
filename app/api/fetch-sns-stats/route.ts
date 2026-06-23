@@ -181,16 +181,67 @@ async function scrapeYouTubeVideo(videoId: string): Promise<Stats> {
   }
 }
 
+/** Apify YouTube scraper — 채널 URL에서 최근 영상 데이터 수집 */
+async function fetchYouTubeChannelViaApify(channelUrl: string, uploadDate?: string): Promise<Stats | null> {
+  if (!process.env.APIFY_API_TOKEN) return null;
+  try {
+    const run = await apify.actor("bernardo/youtube-scraper").call(
+      {
+        startUrls: [{ url: channelUrl }],
+        maxVideos: 15,
+        proxy: { useApifyProxy: true },
+      },
+      { waitSecs: 90, memory: 512 }
+    );
+    const { items } = await apify.dataset(run.defaultDatasetId).listItems();
+    if (!items?.length) return null;
+
+    let best: any = items[0];
+    if (uploadDate) {
+      const t = new Date(uploadDate).getTime();
+      best = items.reduce((prev: any, cur: any) => {
+        const pd = new Date(prev.date || "").getTime();
+        const cd = new Date(cur.date  || "").getTime();
+        return Math.abs(cd - t) < Math.abs(pd - t) ? cur : prev;
+      }, items[0]);
+    }
+
+    console.log(`[YouTube Apify] ✅ title="${best.title}" views=${best.viewCount}`);
+    return {
+      views:       parseInt(best.viewCount || "0", 10),
+      likes:       parseInt(best.likes     || "0", 10),
+      comments:    parseInt(best.commentsCount || "0", 10),
+      title:       best.title || "-",
+      date:        best.date ? best.date.split("T")[0] : undefined,
+      thumbnailUrl: best.thumbnailUrl || undefined,
+      description: best.description?.substring(0, 300),
+      platform:    "YouTube",
+    };
+  } catch (e: any) {
+    console.warn("[YouTube Apify] 실패:", e?.message);
+    return null;
+  }
+}
+
 async function fetchYouTube(url: string, uploadDate?: string): Promise<Stats> {
-  // 1. 동영상 ID 추출
+  // 1. 동영상 ID 추출 (직접 영상 URL)
   let videoId = url.match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/video\/|\/live\/)([a-zA-Z0-9_-]{6,20})/)?.[1];
 
-  // 2. 채널 URL이면 RSS로 동영상 ID 탐색
-  if (!videoId && /youtube\.com\/@/.test(url)) {
+  // 2. 채널 URL 처리
+  const isChannelUrl = !videoId && /youtube\.com\/@/.test(url);
+  if (isChannelUrl) {
+    // 2a. HTML 스크레이핑으로 videoId 탐색
     videoId = (await channelToVideoId(url, uploadDate)) ?? undefined;
+
+    // 2b. HTML 실패 시 Apify YouTube scraper 사용
+    if (!videoId && process.env.APIFY_API_TOKEN) {
+      console.log(`[YouTube] HTML 방식 실패, Apify로 채널 스크레이핑 시도: ${url}`);
+      const apifyResult = await fetchYouTubeChannelViaApify(url, uploadDate);
+      if (apifyResult) return apifyResult;
+    }
   }
 
-  // 동영상 ID 없음 → 채널 이름 정도만 반환
+  // 동영상 ID 없음 → 채널 이름만 반환
   if (!videoId) {
     try {
       const oe = await fetch(
@@ -234,7 +285,7 @@ async function fetchYouTube(url: string, uploadDate?: string): Promise<Stats> {
     } catch (e) { console.warn("[YouTube] Data API 실패:", (e as any).message); }
   }
 
-  // 4. HTML 파싱 (ytInitialPlayerResponse) — API key 불필요
+  // 4. HTML 파싱 (ytInitialPlayerResponse) — API key 불필요, 캠페인 광고 영상과 동일한 방식
   const scraped = await scrapeYouTubeVideo(videoId);
 
   // 5. oEmbed — 제목 폴백
@@ -281,30 +332,32 @@ async function fetchInstagram(url: string): Promise<Stats> {
   if (process.env.APIFY_API_TOKEN) {
     try {
       const run = await apify.actor("apify/instagram-scraper").call(
-        { addParentData: false, directUrls: [url], resultsType: "details", resultsLimit: 1 },
-        { waitSecs: 120 }
+        {
+          directUrls: [url],
+          resultsType: "posts",   // "details" 보다 가볍고 빠름
+          resultsLimit: 1,
+          addParentData: false,
+        },
+        { waitSecs: 120, memory: 512 }  // 메모리 512MB 명시 → 한도 초과 방지
       );
       const { items } = await apify.dataset(run.defaultDatasetId).listItems();
       if (items?.length) {
         const item: any = items[0];
-        const caption = item.caption || item.text || "";
+        const caption = item.caption || item.text || item.alt || "";
+        console.log(`[Instagram] Apify ✅ likes=${item.likesCount} views=${item.videoViewCount}`);
         return {
-          views:        item.videoViewCount || item.videoPlayCount || 0,
-          likes:        typeof item.likesCount === "number" ? item.likesCount : 0,
-          comments:     item.commentsCount  || 0,
+          views:        item.videoViewCount || item.videoPlayCount || item.playsCount || 0,
+          likes:        typeof item.likesCount === "number" ? item.likesCount : (item.likes ?? 0),
+          comments:     item.commentsCount  || item.comments || 0,
           title:        caption ? caption.substring(0, 80) + (caption.length > 80 ? "…" : "") : "-",
           date:         item.timestamp ? new Date(item.timestamp).toISOString().split("T")[0] : undefined,
-          thumbnailUrl: item.displayUrl    || item.thumbnailUrl,
+          thumbnailUrl: item.displayUrl || item.thumbnailUrl || item.imageUrl,
           description:  caption || undefined,
           platform:     "Instagram",
         };
       }
     } catch (e: any) {
-      if (e?.statusCode === 402 || e?.type === "actor-memory-limit-exceeded") {
-        console.warn("[Instagram] Apify 메모리 한도 초과 → oEmbed 폴백");
-      } else {
-        console.warn("[Instagram] Apify 실패:", e?.message, "→ oEmbed 폴백");
-      }
+      console.warn("[Instagram] Apify 실패:", e?.message, "→ oEmbed 폴백");
     }
   }
 
