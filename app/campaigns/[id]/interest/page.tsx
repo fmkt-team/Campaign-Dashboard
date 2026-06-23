@@ -1915,14 +1915,13 @@ export default function InterestPage() {
           for (const r of actualDataRows) {
             if (r.every(c => !c.trim())) continue;
             const text = textColIdx >= 0 ? (r[textColIdx]?.trim() || "") : "";
-            // 텍스트가 없어도 신청 건수에는 포함 (이름 또는 날짜 중 하나라도 있으면 유효 신청)
+            if (!text) continue;
             const rawDate = dateColIdx >= 0 ? (r[dateColIdx] || "") : "";
             let date = extractDate(rawDate);
             if (!date) {
               date = campaign?.startDate ? campaign.startDate.split("T")[0] : new Date().toISOString().split("T")[0];
             }
             const name = nameColIdx >= 0 ? (r[nameColIdx]?.trim() || "") : "";
-            if (!text && !name && !date) continue;
             parsed.push({ name, text, date });
           }
 
