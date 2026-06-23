@@ -29,7 +29,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true, data: result.data, hyperlinks: result.hyperlinks });
     }
 
-    const result = await fetchSpreadsheetData(sheetUrl, "A1:AZ2000");
+    const result = await fetchSpreadsheetData(sheetUrl, "A1:AZ5000");
     if (!result.success || !result.data) {
       return NextResponse.json({ success: false, error: result.error }, { status: 500 });
     }
