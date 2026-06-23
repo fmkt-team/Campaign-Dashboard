@@ -1688,55 +1688,86 @@ export default function AwarenessPage() {
       });
       console.groupEnd();
 
-      // URL이 있는 행만 저장 — 비어있거나 "-" 이거나 http 아닌 값은 완전 제외
+      // 지원 플랫폼 + http URL 있는 행만 저장
+      const SUPPORTED = ["YouTube", "Instagram", "X", "Naver Blog", "TikTok"];
       const validRows = rows.filter(row => {
         const u = (row.url || "").trim();
-        return u && u !== "-" && u.startsWith("http");
+        if (!u || u === "-" || !u.startsWith("http")) return false;
+        // 인식된 플랫폼이 있거나, URL 자체가 소셜 도메인이면 포함
+        if (row.platform && row.platform !== "-" && SUPPORTED.includes(row.platform)) return true;
+        return /youtube\.com|youtu\.be|instagram\.com|twitter\.com|x\.com|blog\.naver\.com|tiktok\.com/i.test(u);
       });
 
-      // 제외된 행 진단
-      const skippedRows = rows.filter(row => {
-        const u = (row.url || "").trim();
-        return !u || u === "-" || !u.startsWith("http");
-      });
+      const skippedRows = rows.filter(row => !validRows.includes(row));
       if (skippedRows.length > 0) {
-        console.warn("[바이럴 매핑] URL 없어 제외된 행:", skippedRows.map(r => `${r.creator || r.date || "?"}`).join(", "));
+        console.warn("[바이럴 매핑] 제외된 행:", skippedRows.map(r => `${r.creator || r.date || "?"}`).join(", "));
         const names = skippedRows.slice(0, 5).map(r => r.creator || r.date || "?").join(", ");
         const extra = skippedRows.length > 5 ? ` 외 ${skippedRows.length - 5}건` : "";
-        setSyncStatus(`⚠️ URL 없는 ${skippedRows.length}개 항목 제외: ${names}${extra}`);
-        await new Promise(r => setTimeout(r, 2500));
+        setSyncStatus(`⚠️ ${skippedRows.length}개 항목 제외(URL 없음/미지원): ${names}${extra}`);
+        await new Promise(r => setTimeout(r, 2000));
       }
 
-      setSyncStatus(`URL 성과 데이터 실시간 수집 중... (총 ${validRows.length}건)`);
-      // Apify 동시 실행 방지: 순차 처리 (Instagram은 병렬 실행 시 메모리 한도 초과)
+      // ── Instagram: 배치 한 번에 처리 (Apify 콜드스타트 1회) ────
+      const instagramRows = validRows.filter(r => /instagram\.com/.test(r.url));
+      const batchStats: Record<string, any> = {};
+      if (instagramRows.length > 0) {
+        setSyncStatus(`Instagram ${instagramRows.length}건 일괄 수집 중...`);
+        try {
+          const bRes = await fetch("/api/fetch-sns-batch", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items: instagramRows.map((r, i) => ({ url: r.url, uploadDate: r.date || undefined, index: i })) }),
+          }).then(r => r.json());
+          for (const result of (bRes.results || [])) {
+            if (result.success && result.stats) batchStats[result.url] = result.stats;
+          }
+          console.log(`[Instagram 배치] 성공: ${Object.keys(batchStats).length}/${instagramRows.length}건`);
+        } catch (e) { console.warn("[Instagram 배치] 실패:", e); }
+      }
+
+      // ── 나머지 플랫폼 개별 처리 ─────────────────────────────────
+      setSyncStatus(`성과 데이터 수집 중... (총 ${validRows.length}건)`);
       const enriched: typeof validRows = [];
       for (let ri = 0; ri < validRows.length; ri++) {
         const row = validRows[ri];
-        if (ri % 3 === 0) setSyncStatus(`URL 성과 데이터 수집 중... (${ri + 1}/${validRows.length}건)`);
-        if (!row.url) { enriched.push(row); continue; }
+        if (ri % 3 === 0) setSyncStatus(`성과 데이터 수집 중... (${ri + 1}/${validRows.length}건)`);
+
+        // Instagram은 배치 결과 사용
+        if (/instagram\.com/.test(row.url) && batchStats[row.url]) {
+          const s = batchStats[row.url];
+          row.views = processNumber(s.views); row.likes = processNumber(s.likes); row.comments = processNumber(s.comments);
+          if (s.title && s.title !== "-") row.title = s.title;
+          if (s.thumbnailUrl) row.thumbnailUrl = s.thumbnailUrl;
+          if (s.date) row.date = s.date;
+          enriched.push(row); continue;
+        }
+
+        // Instagram인데 배치 실패 → oEmbed 폴백
+        if (/instagram\.com/.test(row.url)) {
+          try {
+            const oe = await fetch(`https://api.instagram.com/oembed?url=${encodeURIComponent(row.url)}&format=json`, { signal: AbortSignal.timeout(6000) });
+            if (oe.ok) {
+              const d = await oe.json();
+              if (d && !d.error) {
+                if (!row.title || row.title === "-") row.title = d.title || (d.author_name ? `@${d.author_name}` : "-");
+                if (!row.thumbnailUrl && d.thumbnail_url) row.thumbnailUrl = d.thumbnail_url;
+              }
+            }
+          } catch {}
+          enriched.push(row); continue;
+        }
+
+        // YouTube / Twitter / NaverBlog 등 개별 처리
         try {
           const res = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: row.url, uploadDate: row.date || undefined }) });
           const data = await res.json();
           if (data.success && data.stats) {
-            row.views = data.stats.views !== undefined ? processNumber(data.stats.views) : 0;
-            row.likes = data.stats.likes !== undefined ? processNumber(data.stats.likes) : 0;
-            row.comments = data.stats.comments !== undefined ? processNumber(data.stats.comments) : 0;
+            row.views = processNumber(data.stats.views); row.likes = processNumber(data.stats.likes); row.comments = processNumber(data.stats.comments);
             if (data.stats.title && data.stats.title !== "-") row.title = data.stats.title;
             if (data.stats.thumbnailUrl) row.thumbnailUrl = data.stats.thumbnailUrl;
             if (data.stats.date) row.date = data.stats.date;
           }
         } catch {}
-        // fetch-og fallback: sns-stats 실패 시 최소한 제목/썸네일 확보
-        if (!row.title || row.title === "-" || !row.thumbnailUrl) {
-          try {
-            const ogRes = await fetch(`/api/fetch-og?url=${encodeURIComponent(row.url)}`);
-            const og = await ogRes.json();
-            if (og.title && !isGenericTitle(og.title) && (!row.title || row.title === "-")) row.title = og.title;
-            if (og.thumbnailUrl && !row.thumbnailUrl) row.thumbnailUrl = og.thumbnailUrl;
-            if (!row.date && og.date) row.date = og.date;
-          } catch {}
-        }
-        // YouTube URL이지만 제목을 못 가져온 경우 oEmbed 직접 시도
+        // YouTube oEmbed 폴백
         if ((!row.title || row.title === "-") && row.url) {
           const ytId = row.url.match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/video\/)([a-zA-Z0-9_-]{6,20})/)?.[1];
           if (ytId) {
