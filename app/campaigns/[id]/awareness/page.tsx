@@ -3300,8 +3300,8 @@ export default function AwarenessPage() {
                                 <div className="w-14 h-14 bg-gray-100 rounded-md shrink-0 border border-gray-100 flex items-center justify-center text-[10px] text-gray-300">No Img</div>
                               )}
                               <div className="flex flex-col gap-1 overflow-hidden">
-                                <div className="font-bold text-xs truncate max-w-[130px]" title={row.title !== "-" ? row.title : "제목 없음"}>
-                                  {row.title !== "-" ? row.title : "제목 없음"}
+                                <div className="font-bold text-xs truncate max-w-[130px]" title={row.title && row.title !== "-" ? row.title : (row.creator && row.creator !== "-" ? row.creator : "제목 없음")}>
+                                  {row.title && row.title !== "-" ? row.title : (row.creator && row.creator !== "-" ? <span className="text-gray-400">{row.creator}</span> : "제목 없음")}
                                 </div>
                                 {row.url ? <a href={row.url} target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline truncate">🔗 컨텐츠 보러가기</a> : null}
                               </div>
