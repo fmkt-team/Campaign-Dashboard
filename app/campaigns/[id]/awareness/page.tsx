@@ -1176,7 +1176,9 @@ export default function AwarenessPage() {
   const [syncStatus, setSyncStatus] = useState("");
 
   // 자동 재동기화용 localStorage 키 (campaignId 기반)
-  const DIGITAL_SHEET_LS_KEY = `awareness-digital-url-${campaignId}`;
+  const DIGITAL_SHEET_LS_KEY  = `awareness-digital-url-${campaignId}`;
+  const VIRAL_SHEET_LS_KEY    = `awareness-viral-url-${campaignId}`;
+  const VIRAL_MAPPING_LS_KEY  = `awareness-viral-mapping-${campaignId}`;
 
   // ── 바이럴 매핑 ──────────────────────────────────────────────
   const [previewData,       setPreviewData]       = useState<any[][] | null>(null);
@@ -1316,9 +1318,21 @@ export default function AwarenessPage() {
         })();
       }
 
-      // 3) 바이럴 컨텐츠 성과 — URL 접속 통계 일괄 업데이트
-      if (viralContents.length > 0) {
-        (async () => {
+      // 3) 바이럴 컨텐츠 — 저장된 시트 URL+매핑 있으면 전체 재동기화, 없으면 stats 업데이트만
+      (async () => {
+        let savedViralUrl = ""; let savedViralMapping = "";
+        try {
+          savedViralUrl     = localStorage.getItem(VIRAL_SHEET_LS_KEY)   ?? "";
+          savedViralMapping = localStorage.getItem(VIRAL_MAPPING_LS_KEY) ?? "";
+        } catch {}
+
+        if (savedViralUrl && savedViralMapping) {
+          // 전체 재동기화: 시트에서 최신 데이터를 가져와 Convex를 덮어씀
+          setSyncStatus("✨ 바이럴 시트에서 데이터 새로고침 중...");
+          await autoResyncViral();
+          setSyncStatus("");
+        } else if (viralContents.length > 0) {
+          // 폴백: 기존 Convex 행의 stats만 업데이트
           for (const row of viralContents) {
             if (!row.url) continue;
             try {
@@ -1342,7 +1356,6 @@ export default function AwarenessPage() {
                   },
                 });
               } else if (!row.title || row.title === "-" || !row.thumbnailUrl) {
-                // fetch-og fallback: 제목/썸네일 없는 경우
                 try {
                   const ogRes = await fetch(`/api/fetch-og?url=${encodeURIComponent(row.url)}`);
                   const og = await ogRes.json();
@@ -1350,15 +1363,13 @@ export default function AwarenessPage() {
                   if (og.title && !isGenericTitle(og.title) && (!row.title || row.title === "-")) updates.title = og.title;
                   if (og.thumbnailUrl && !row.thumbnailUrl) updates.thumbnailUrl = og.thumbnailUrl;
                   if (!row.date && og.date) updates.date = og.date;
-                  if (Object.keys(updates).length > 0) {
-                    await updateViralRow({ viralId: row._id, updates });
-                  }
+                  if (Object.keys(updates).length > 0) await updateViralRow({ viralId: row._id, updates });
                 } catch {}
               }
             } catch {}
           }
-        })();
-      }
+        }
+      })();
 
       if (!savedUrl && youtubeVideos.length === 0 && viralContents.length === 0) {
         setSyncStatus("✨ 데이터 새로고침 중...");
@@ -1470,6 +1481,101 @@ export default function AwarenessPage() {
     finally { setIsGuessingCols(false); }
   };
 
+  // ── 바이럴 자동 재동기화 (저장된 URL + 매핑으로 모달 없이 실행) ──
+  const autoResyncViral = async () => {
+    let savedUrl = ""; let savedMappingJson = "";
+    try {
+      savedUrl = localStorage.getItem(VIRAL_SHEET_LS_KEY) ?? "";
+      savedMappingJson = localStorage.getItem(VIRAL_MAPPING_LS_KEY) ?? "";
+    } catch {}
+    if (!savedUrl || !savedMappingJson) return;
+    let savedMapping: Record<string, string>; let savedHeaderRowIdx = 0;
+    try {
+      const parsed = JSON.parse(savedMappingJson);
+      savedMapping = parsed.mapping ?? {};
+      savedHeaderRowIdx = parsed.headerRowIdx ?? 0;
+    } catch { return; }
+    if (!Object.keys(savedMapping).length) return;
+
+    try {
+      const res = await fetch("/api/fetch-raw-sheet", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: savedUrl, type: "viral" }),
+      }).then(r => r.json());
+      if (!res.success || !res.data) return;
+      const rawData: any[][] = res.data;
+      const rawHyperlinks: (string | null)[][] = res.hyperlinks ?? [];
+
+      let lDate = "", lPlat = "-", lCreator = "-";
+      const KNOWN_DOMAINS = /^(youtu\.be|www\.youtube\.com|youtube\.com|studio\.youtube\.com|instagram\.com|www\.instagram\.com|tiktok\.com|www\.tiktok\.com|blog\.naver\.com|m\.blog\.naver\.com|twitter\.com|x\.com)\//i;
+      const rows = rawData.slice(savedHeaderRowIdx + 1)
+        .map((cols, i) => ({ cols, absRowIdx: savedHeaderRowIdx + 1 + i }))
+        .filter(({ cols }) => Object.values(savedMapping).some(ci => { const v = cols[parseInt(ci)]; return v !== undefined && v !== ""; }))
+        .map(({ cols, absRowIdx }) => {
+          let date = savedMapping["date"] ? processDate(cols[parseInt(savedMapping["date"])]) : "";
+          if (!date) date = lDate; else lDate = date;
+          let platform = savedMapping["platform"] ? String(cols[parseInt(savedMapping["platform"])] || "").trim() : "";
+          if (!platform || platform === "-") platform = lPlat; else lPlat = platform;
+          let rawUrl = "";
+          if (savedMapping["url"]) {
+            const uColIdx = parseInt(savedMapping["url"]);
+            rawUrl = rawHyperlinks?.[absRowIdx]?.[uColIdx] || String(cols[uColIdx] || "").trim();
+          }
+          if (!rawUrl && savedMapping["date"] && rawHyperlinks) {
+            rawUrl = rawHyperlinks[absRowIdx]?.[parseInt(savedMapping["date"])] ?? "";
+          }
+          if (!rawUrl) rawUrl = scanRowForSocialUrl(cols, rawHyperlinks?.[absRowIdx] ?? []);
+          if (!platform || platform === "-") {
+            if (rawUrl.includes("youtube.com") || rawUrl.includes("youtu.be")) platform = "YouTube";
+            else if (rawUrl.includes("instagram.com")) platform = "Instagram";
+            else if (rawUrl.includes("blog.naver.com") || rawUrl.includes("naver.com")) platform = "Naver Blog";
+            else if (rawUrl.includes("tiktok.com")) platform = "TikTok";
+            else if (rawUrl.includes("twitter.com") || rawUrl.includes("x.com")) platform = "X";
+          }
+          let creator = savedMapping["creator"] ? String(cols[parseInt(savedMapping["creator"])] || "").trim() : "";
+          if (!creator || creator === "-") creator = lCreator; else lCreator = creator;
+          return { date, platform: platform || "-", creator: creator || "-", title: "-", views: 0, likes: 0, comments: 0, url: rawUrl, thumbnailUrl: undefined as string | undefined };
+        });
+      rows.forEach(row => {
+        const u = (row.url || "").trim();
+        if (!u || u === "-") return;
+        if (!u.startsWith("http") && !u.startsWith("//")) { if (KNOWN_DOMAINS.test(u)) row.url = "https://" + u; }
+        else if (u.startsWith("//")) { row.url = "https:" + u; }
+      });
+      const validRows = rows.filter(row => { const u = (row.url || "").trim(); return u && u !== "-" && u.startsWith("http"); });
+      if (!validRows.length) return;
+
+      const enriched: typeof validRows = [];
+      for (const row of validRows) {
+        try {
+          const sRes = await fetch("/api/fetch-sns-stats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: row.url, uploadDate: row.date || undefined }) });
+          const sData = await sRes.json();
+          if (sData.success && sData.stats) {
+            const s = sData.stats;
+            row.views = s.views > 0 ? s.views : 0;
+            row.likes = s.likes > 0 ? s.likes : 0;
+            row.comments = s.comments > 0 ? s.comments : 0;
+            if (s.title && s.title !== "-") row.title = s.title;
+            if (s.thumbnailUrl) row.thumbnailUrl = s.thumbnailUrl;
+            if (s.date) row.date = s.date;
+          }
+        } catch {}
+        if (!row.title || row.title === "-" || !row.thumbnailUrl) {
+          try {
+            const ogRes = await fetch(`/api/fetch-og?url=${encodeURIComponent(row.url)}`);
+            const og = await ogRes.json();
+            if (og.title && !isGenericTitle(og.title) && (!row.title || row.title === "-")) row.title = og.title;
+            if (og.thumbnailUrl && !row.thumbnailUrl) row.thumbnailUrl = og.thumbnailUrl;
+          } catch {}
+        }
+        enriched.push(row);
+      }
+      await syncViralContents({ campaignId, rows: enriched as any[] });
+    } catch (e) {
+      console.warn("[autoResyncViral] 실패:", (e as any).message);
+    }
+  };
+
   // ── 구글 시트 동기화 ─────────────────────────────────────────
   // /api/fetch-raw-sheet → raw 2D 배열 반환 (AI 매체 분석용)
   // /api/fetch-sheet    → parseGanttSheetData 결과 (타임라인 전용) — 여기서는 사용하지 않음
@@ -1479,6 +1585,9 @@ export default function AwarenessPage() {
     if (type === "digital" && campaign) {
       try { localStorage.setItem(DIGITAL_SHEET_LS_KEY, sheetUrl); } catch {}
       updateCampaign({ id: campaign._id, digitalSheetUrl: sheetUrl }).catch(() => {});
+    }
+    if (type === "viral") {
+      try { localStorage.setItem(VIRAL_SHEET_LS_KEY, sheetUrl); } catch {}
     }
     setIsSyncing(true);
     try {
@@ -1642,6 +1751,10 @@ export default function AwarenessPage() {
 
       setSyncStatus("저장 중...");
       await syncViralContents({ campaignId, rows: enriched.filter(r => r !== null) as any[] });
+      // 다음 자동 재동기화를 위해 매핑 저장
+      try {
+        localStorage.setItem(VIRAL_MAPPING_LS_KEY, JSON.stringify({ mapping, headerRowIdx }));
+      } catch {}
     } catch (e: any) { alert("동기화 실패: " + e.message); }
     finally { setIsSyncing(false); setPreviewData(null); setMapping({}); }
   };
@@ -3201,7 +3314,26 @@ export default function AwarenessPage() {
                       {isSyncing ? <RefreshCw className="w-4 h-4 animate-spin" /> : "가져오기"}
                     </Button>
                   </div>
-                  <p className="text-[10px] text-gray-400">* AI가 컬럼을 자동 감지하고 매핑 미리보기를 생성합니다.</p>
+                  {(() => {
+                    let saved = "";
+                    try { saved = localStorage.getItem(VIRAL_SHEET_LS_KEY) ?? ""; } catch {}
+                    if (!saved) return null;
+                    const short = saved.length > 60 ? saved.substring(0, 60) + "…" : saved;
+                    return (
+                      <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded px-2 py-1.5">
+                        <span className="text-[10px] text-blue-600 flex-1 truncate">저장된 URL: {short}</span>
+                        <button
+                          className="text-[10px] text-blue-700 underline whitespace-nowrap"
+                          onClick={() => { setSheetUrl(saved); }}
+                        >불러오기</button>
+                        <button
+                          className="text-[10px] text-red-400 underline whitespace-nowrap"
+                          onClick={() => { try { localStorage.removeItem(VIRAL_SHEET_LS_KEY); localStorage.removeItem(VIRAL_MAPPING_LS_KEY); } catch {} }}
+                        >삭제</button>
+                      </div>
+                    );
+                  })()}
+                  <p className="text-[10px] text-gray-400">* AI가 컬럼을 자동 감지하고 매핑 미리보기를 생성합니다. 한 번 동기화하면 새로고침 시 자동으로 최신 데이터를 가져옵니다.</p>
                 </div>
               ) : (
                 <input type="file" accept=".xlsx,.xls,.csv" ref={fileInputRef}
