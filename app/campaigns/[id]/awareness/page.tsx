@@ -82,14 +82,28 @@ function isGenericTitle(t: string) {
 }
 
 // 행 내 모든 컬럼에서 소셜 URL 스캔 (하이퍼링크 → 텍스트 순)
-const SOCIAL_URL_RE = /https?:\/\/(www\.)?(youtu\.be|youtube\.com|studio\.youtube\.com|instagram\.com|twitter\.com|x\.com|tiktok\.com|blog\.naver\.com|m\.blog\.naver\.com)/i;
+// 프로토콜 없는 URL(youtu.be/xxx, www.youtube.com/...) 도 감지
+const SOCIAL_DOMAIN_RE = /(youtu\.be|youtube\.com|studio\.youtube\.com|instagram\.com|twitter\.com|x\.com|tiktok\.com|blog\.naver\.com|m\.blog\.naver\.com)/i;
+const SOCIAL_URL_RE    = /https?:\/\/(www\.)?(youtu\.be|youtube\.com|studio\.youtube\.com|instagram\.com|twitter\.com|x\.com|tiktok\.com|blog\.naver\.com|m\.blog\.naver\.com)/i;
 function scanRowForSocialUrl(cols: any[], hlRow: (string | null)[]): string {
+  // 1) 하이퍼링크 우선
   for (const hl of hlRow) {
-    if (hl && SOCIAL_URL_RE.test(hl)) return hl;
+    if (hl && SOCIAL_DOMAIN_RE.test(hl)) {
+      if (hl.startsWith("http")) return hl;
+      if (hl.startsWith("//"))  return "https:" + hl;
+      return "https://" + hl;
+    }
   }
+  // 2) 셀 텍스트 값 (프로토콜 없는 URL 포함)
   for (const cellVal of cols) {
     const s = String(cellVal || "").trim();
-    if (s.startsWith("http") && SOCIAL_URL_RE.test(s)) return s;
+    if (!s) continue;
+    if (SOCIAL_URL_RE.test(s)) return s;
+    // 프로토콜 없는 경우: "youtu.be/xxx", "youtube.com/watch?v=xxx"
+    if (SOCIAL_DOMAIN_RE.test(s) && !s.includes(" ") && (s.includes("/") || s.includes("."))) {
+      if (s.startsWith("//")) return "https:" + s;
+      return "https://" + s;
+    }
   }
   return "";
 }
@@ -1550,6 +1564,14 @@ export default function AwarenessPage() {
         }
       });
 
+      // 진단 로그: 각 행의 URL 추출 결과
+      console.group("[바이럴 매핑] URL 추출 결과");
+      rows.forEach((row, i) => {
+        const u = (row.url || "").trim();
+        console.log(`  행${i + 1} [${row.creator || "-"}] [${row.platform || "-"}] url="${u || "(없음)"}"`);
+      });
+      console.groupEnd();
+
       // URL이 있는 행만 저장 — 비어있거나 "-" 이거나 http 아닌 값은 완전 제외
       const validRows = rows.filter(row => {
         const u = (row.url || "").trim();
@@ -1562,6 +1584,7 @@ export default function AwarenessPage() {
         return !u || u === "-" || !u.startsWith("http");
       });
       if (skippedRows.length > 0) {
+        console.warn("[바이럴 매핑] URL 없어 제외된 행:", skippedRows.map(r => `${r.creator || r.date || "?"}`).join(", "));
         const names = skippedRows.slice(0, 5).map(r => r.creator || r.date || "?").join(", ");
         const extra = skippedRows.length > 5 ? ` 외 ${skippedRows.length - 5}건` : "";
         setSyncStatus(`⚠️ URL 없는 ${skippedRows.length}개 항목 제외: ${names}${extra}`);
