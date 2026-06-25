@@ -2840,6 +2840,13 @@ export default function AwarenessPage() {
                     상세 데이터
                   </h3>
                   <div className="flex gap-2 items-center">
+                    {uniqueAgendas.length > 0 && (
+                      <select value={filterAgenda} onChange={e => setFilterAgenda(e.target.value)}
+                        className="bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none font-semibold w-[120px]">
+                        <option value="all">전체 소재</option>
+                        {uniqueAgendas.map(agenda => <option key={agenda} value={agenda}>{agenda}</option>)}
+                      </select>
+                    )}
                     <select value={filterMedium} onChange={e => { setFilterMedium(e.target.value); setFilterMediumDetail("none"); }}
                       className="bg-gray-50 border border-gray-200 text-gray-700 text-xs rounded p-1.5 outline-none font-semibold w-[120px]">
                       <option value="none">-</option>
